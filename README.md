@@ -162,7 +162,7 @@ Counts work on motions: `5j` scrolls five steps, `3J` skips three pages. Marks a
 | `Esc`, `q` | Back to the library (`Esc` first cancels a half-typed command) |
 | `Ctrl+Q` | Quit |
 
-**Command prompt** (press `:` in the reader)
+**Command prompt** (press `:` in the library or reader)
 
 The floating prompt shows matching commands and short descriptions. Use `↑`/`↓` to select, `Tab` or
 `Shift+Tab` to complete, `Enter` to run the draft, and `Esc` to cancel. Unknown commands remain editable
@@ -175,6 +175,8 @@ and show the parser's error message when run.
 | `:zoom 150` | Zoom to 150% of the fit size (`:zoom` resets) |
 | `:continuous on`, `:continuous off` | Stack pages vertically or return to single-page reading |
 | `:webcomics on`, `:webcomics off` | Force gapless pages or restore the normal reading mode |
+| `:remember-zoom on`, `:remember-zoom off` | Keep custom zoom and pinch scale across all books |
+| `:theme [name]` | Set color theme by name, or cycle to the next theme |
 | `:q` | Back to the library |
 | `:qa` | Quit |
 

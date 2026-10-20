@@ -46,7 +46,7 @@ use yomu::{
     pagecache, search,
     selection::Selection,
     util::{format_size, now_secs},
-    vim::{self, Action, Amount, Dir},
+    vim::{self, Action, Amount, Dir, Vim},
 };
 
 actions!(
@@ -285,6 +285,8 @@ struct Yomu {
     overlay: Option<Overlay>,
     settings_tab: SettingsTab,
     command_selection: usize,
+    library_vim: Vim,
+    theme_before_preview: Option<String>,
     overlay_closed_at: Option<Instant>,
     /// Books picked for bulk actions in the library.
     selection: Selection,
@@ -382,6 +384,8 @@ impl Yomu {
             overlay: None,
             settings_tab: SettingsTab::Appearance,
             command_selection: 0,
+            library_vim: Vim::new(),
+            theme_before_preview: None,
             overlay_closed_at: None,
             selection: Selection::new(),
             search_query: String::new(),
@@ -613,6 +617,10 @@ impl Yomu {
 
     /// A short message at the top of the reader (zoom level, fit mode, errors).
     fn show_hud(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        if self.reader.is_none() {
+            self.show_toast(message, cx);
+            return;
+        }
         self.hud_seq += 1;
         let seq = self.hud_seq;
         self.hud = Some(message.into());
@@ -1048,7 +1056,84 @@ impl Yomu {
         self.library.settings_mut().theme_name = name.to_string();
         self.colors = UiColors::from_app(cx);
         self.colors.widget_opacity = self.library.settings().opacity;
+        self.theme_before_preview = None;
         self.save_library();
+        cx.notify();
+    }
+
+    fn preview_theme(&mut self, name: &str, cx: &mut Context<Self>) {
+        let config = self
+            .custom_themes
+            .get(name)
+            .cloned()
+            .or_else(|| built_in_theme(name));
+        let Some(config) = config else {
+            return;
+        };
+        KitTheme::update(cx, |theme| theme.apply_config(&config));
+        Self::apply_corner_rounding(self.library.settings().corner_rounding, cx);
+        self.colors = UiColors::from_app(cx);
+        self.colors.widget_opacity = self.library.settings().opacity;
+        cx.notify();
+    }
+
+    fn restore_theme_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some(prev) = self.theme_before_preview.take() {
+            if self.library.settings().theme_name != prev {
+                self.preview_theme(&prev, cx);
+            }
+        }
+    }
+
+    fn sync_theme_preview(&mut self, draft: &str, cx: &mut Context<Self>) {
+        let trimmed = draft.trim_start();
+        let words = trimmed.split_whitespace();
+        let first_word = words.into_iter().next().unwrap_or_default();
+        if matches!(first_word, "theme" | "colorscheme" | "colo" | "colors") {
+            if self.theme_before_preview.is_none() {
+                self.theme_before_preview = Some(self.library.settings().theme_name.clone());
+            }
+            let suggestions = command_suggestions(draft, &self.custom_themes);
+            if let Some((_, label, _)) = suggestions.get(self.command_selection) {
+                self.preview_theme(label, cx);
+            }
+        } else {
+            self.restore_theme_preview(cx);
+        }
+    }
+
+    fn in_cmdline(&self) -> bool {
+        if let Some(reader) = &self.reader {
+            reader.vim.in_cmdline()
+        } else {
+            self.library_vim.in_cmdline()
+        }
+    }
+
+    fn cmdline_text(&self) -> Option<&str> {
+        if let Some(reader) = &self.reader {
+            reader.vim.cmdline_text()
+        } else {
+            self.library_vim.cmdline_text()
+        }
+    }
+
+    fn replace_cmdline(&mut self, text: String) {
+        if let Some(reader) = self.reader.as_mut() {
+            reader.vim.replace_cmdline(text);
+        } else {
+            self.library_vim.replace_cmdline(text);
+        }
+    }
+
+    fn cancel_cmdline(&mut self, cx: &mut Context<Self>) {
+        if let Some(reader) = self.reader.as_mut() {
+            reader.vim.cancel_cmdline();
+        } else {
+            self.library_vim.cancel_cmdline();
+        }
+        self.command_selection = 0;
+        self.restore_theme_preview(cx);
         cx.notify();
     }
 
@@ -1869,6 +1954,12 @@ impl Yomu {
                 )
             }
         };
+        if self.library.settings().remember_zoom {
+            if let Some(reader) = self.reader.as_ref() {
+                self.library.settings_mut().zoom = reader.zoom;
+                self.save_library_debounced(cx);
+            }
+        }
         self.show_hud(message, cx);
     }
 
@@ -1888,7 +1979,42 @@ impl Yomu {
             self.show_hud(mode.label(), cx);
         }
         self.library.settings_mut().fit = mode;
+        if self.library.settings().remember_zoom {
+            self.library.settings_mut().zoom = 1.0;
+        }
         self.save_library();
+        cx.notify();
+    }
+
+    fn set_remember_zoom(&mut self, value: Option<bool>, cx: &mut Context<Self>) {
+        let next = value.unwrap_or(!self.library.settings().remember_zoom);
+        self.library.settings_mut().remember_zoom = next;
+        if next {
+            if let Some(reader) = self.reader.as_ref() {
+                self.library.settings_mut().zoom = reader.zoom;
+            }
+        }
+        self.save_library();
+        self.show_hud(
+            if next {
+                "remember zoom on"
+            } else {
+                "remember zoom off"
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    fn reset_zoom(&mut self, cx: &mut Context<Self>) {
+        self.library.settings_mut().zoom = 1.0;
+        if let Some(reader) = self.reader.as_mut() {
+            reader.zoom = 1.0;
+            reader.cancel_transition();
+            reader.arrive = Some(Arrive::Start);
+        }
+        self.save_library();
+        self.show_hud("zoom reset (100%)", cx);
         cx.notify();
     }
 
@@ -1915,6 +2041,9 @@ impl Yomu {
             reader.arrive = Some(Arrive::Start);
             reader.cancel_transition();
         }
+        if self.library.settings().remember_zoom {
+            self.library.settings_mut().zoom = 1.0;
+        }
         self.save_library();
         let webcomics = self.library.settings().webcomics;
         self.show_hud(
@@ -1940,6 +2069,9 @@ impl Yomu {
             reader.scroll_target = (0.0, 0.0);
             reader.arrive = Some(Arrive::Start);
             reader.cancel_transition();
+        }
+        if self.library.settings().remember_zoom {
+            self.library.settings_mut().zoom = 1.0;
         }
         self.save_library();
         self.show_hud(
@@ -2096,10 +2228,12 @@ impl Yomu {
         if self.library_pinch_accum > 0.35 {
             self.library_pinch_accum = 0.0;
             let next = match current {
+                ThumbnailSize::ExtraSmall => Some(ThumbnailSize::Small),
                 ThumbnailSize::Small => Some(ThumbnailSize::Medium),
                 ThumbnailSize::Medium => Some(ThumbnailSize::Large),
                 ThumbnailSize::Large => Some(ThumbnailSize::ExtraLarge),
-                ThumbnailSize::ExtraLarge => None,
+                ThumbnailSize::ExtraLarge => Some(ThumbnailSize::Huge),
+                ThumbnailSize::Huge => None,
             };
             if let Some(new_size) = next {
                 self.library.settings_mut().thumbnail_size = new_size;
@@ -2110,10 +2244,12 @@ impl Yomu {
         } else if self.library_pinch_accum < -0.35 {
             self.library_pinch_accum = 0.0;
             let prev = match current {
+                ThumbnailSize::Huge => Some(ThumbnailSize::ExtraLarge),
                 ThumbnailSize::ExtraLarge => Some(ThumbnailSize::Large),
                 ThumbnailSize::Large => Some(ThumbnailSize::Medium),
                 ThumbnailSize::Medium => Some(ThumbnailSize::Small),
-                ThumbnailSize::Small => None,
+                ThumbnailSize::Small => Some(ThumbnailSize::ExtraSmall),
+                ThumbnailSize::ExtraSmall => None,
             };
             if let Some(new_size) = prev {
                 self.library.settings_mut().thumbnail_size = new_size;
@@ -2222,7 +2358,7 @@ impl Yomu {
             mods.shift,
         );
 
-        // An open menu or dialog gets every key; nothing leaks through to the reader.
+        // An open menu or dialog gets every key; nothing leaks through.
         if self.overlay.is_some() {
             if matches!(self.overlay, Some(Overlay::Series(_))) {
                 if token == "escape" {
@@ -2233,7 +2369,73 @@ impl Yomu {
             self.on_overlay_key(&token, window, cx);
             return;
         }
+
+        // Active command line prompt (works in both reader and library)
+        if self.in_cmdline() {
+            let draft = self.cmdline_text().map(str::to_owned).unwrap_or_default();
+            if matches!(token.as_str(), "up" | "down" | "tab" | "S-tab") {
+                let suggestions = command_suggestions(&draft, &self.custom_themes);
+                if !suggestions.is_empty() {
+                    let count = suggestions.len();
+                    let backwards = token == "up" || token == "S-tab";
+                    self.command_selection = if backwards {
+                        self.command_selection.wrapping_add(count).wrapping_sub(1) % count
+                    } else {
+                        (self.command_selection + 1) % count
+                    };
+                    if token == "tab" || token == "S-tab" {
+                        self.replace_cmdline(suggestions[self.command_selection].0.clone());
+                        self.command_selection = 0;
+                    }
+                    self.sync_theme_preview(&draft, cx);
+                }
+                cx.notify();
+                return;
+            }
+
+            if token == "escape" {
+                self.cancel_cmdline(cx);
+                return;
+            }
+
+            if token == "enter" {
+                let suggestions = command_suggestions(&draft, &self.custom_themes);
+                if !suggestions.is_empty() && self.command_selection < suggestions.len() {
+                    self.replace_cmdline(suggestions[self.command_selection].0.clone());
+                }
+            }
+
+            let vp = viewport_of(window);
+            let actions = if let Some(reader) = self.reader.as_mut() {
+                reader.vim.feed(&token)
+            } else {
+                self.library_vim.feed(&token)
+            };
+            self.command_selection = 0;
+            if let Some(new_draft) = self.cmdline_text().map(str::to_owned) {
+                self.sync_theme_preview(&new_draft, cx);
+            } else {
+                let trimmed = draft.trim_start();
+                let words = trimmed.split_whitespace();
+                let first_word = words.into_iter().next().unwrap_or_default();
+                if !matches!(first_word, "theme" | "colorscheme" | "colo" | "colors") {
+                    self.restore_theme_preview(cx);
+                }
+            }
+            cx.notify();
+            for action in actions {
+                self.apply(action, vp, window, cx);
+            }
+            return;
+        }
+
         let Some(reader) = self.reader.as_mut() else {
+            if token == ":" && !self.search_active {
+                self.library_vim.feed(":");
+                self.command_selection = 0;
+                cx.notify();
+                return;
+            }
             self.on_library_key(
                 &token,
                 keystroke.key_char.as_deref(),
@@ -2245,33 +2447,7 @@ impl Yomu {
             return;
         };
 
-        if let Some(draft) = reader.vim.cmdline_text().map(str::to_owned)
-            && matches!(token.as_str(), "up" | "down" | "tab" | "S-tab")
-        {
-            let suggestions = command_suggestions(&draft);
-            if !suggestions.is_empty() {
-                let count = suggestions.len();
-                let backwards = token == "up" || token == "S-tab";
-                self.command_selection = if backwards {
-                    self.command_selection.wrapping_add(count).wrapping_sub(1) % count
-                } else {
-                    (self.command_selection + 1) % count
-                };
-                if token == "tab" || token == "S-tab" {
-                    reader
-                        .vim
-                        .replace_cmdline(suggestions[self.command_selection].0.clone());
-                    self.command_selection = 0;
-                }
-            }
-            cx.notify();
-            return;
-        }
-
-        if reader.show_help
-            && !reader.vim.in_cmdline()
-            && matches!(token.as_str(), "escape" | "?" | "q")
-        {
+        if reader.show_help && matches!(token.as_str(), "escape" | "?" | "q") {
             reader.show_help = false;
             cx.notify();
             return;
@@ -2307,6 +2483,9 @@ impl Yomu {
             Action::Fit(mode) => self.set_fit(mode, cx),
             Action::CycleFit => {
                 if let Some(next) = self.reader.as_ref().map(|r| r.fit.next()) {
+                    self.set_fit(next, cx);
+                } else {
+                    let next = self.library.settings().fit.next();
                     self.set_fit(next, cx);
                 }
             }
@@ -2352,6 +2531,7 @@ impl Yomu {
             Action::SetAnimations(value) => self.set_animations(value, cx),
             Action::SetContinuous(value) => self.set_continuous(value, cx),
             Action::SetWebcomics(value) => self.set_webcomics(value, cx),
+            Action::SetRememberZoom(value) => self.set_remember_zoom(value, cx),
             Action::ToggleInfo => {
                 if let Some(reader) = self.reader.as_mut() {
                     reader.show_info = !reader.show_info;
@@ -2362,14 +2542,65 @@ impl Yomu {
                 if let Some(reader) = self.reader.as_mut() {
                     reader.show_help = !reader.show_help;
                     cx.notify();
+                } else {
+                    self.settings_tab = SettingsTab::Keyboard;
+                    self.open_settings(cx);
                 }
             }
             Action::ToggleFullscreen => window.toggle_fullscreen(),
             Action::OpenSettings => self.open_settings_window(window, cx),
-            Action::CloseBook => self.close_book(window, cx),
+            Action::CloseBook => {
+                if self.reader.is_some() {
+                    self.close_book(window, cx);
+                } else if self.open_group.is_some() {
+                    self.exit_group(cx);
+                } else if !self.selection.is_empty() {
+                    self.selection.clear();
+                    cx.notify();
+                }
+            }
             Action::QuitApp => {
                 self.save_library();
                 cx.quit();
+            }
+            Action::SetTheme(name) => {
+                let name = name.trim();
+                if name.is_empty() {
+                    self.cycle_theme(1, cx);
+                    self.show_toast(format!("Theme: {}", self.library.settings().theme_name), cx);
+                } else {
+                    let mut matched = self
+                        .custom_themes
+                        .keys()
+                        .find(|k| k.eq_ignore_ascii_case(name))
+                        .cloned();
+                    if matched.is_none() {
+                        matched = BUILT_IN_THEMES
+                            .keys()
+                            .find(|k| k.eq_ignore_ascii_case(name))
+                            .cloned();
+                    }
+                    if matched.is_none() {
+                        let lower = name.to_lowercase();
+                        matched = self
+                            .custom_themes
+                            .keys()
+                            .find(|k| k.to_lowercase().contains(&lower))
+                            .or_else(|| {
+                                BUILT_IN_THEMES
+                                    .keys()
+                                    .find(|k| k.to_lowercase().contains(&lower))
+                            })
+                            .cloned();
+                    }
+                    if let Some(theme_name) = matched {
+                        self.apply_theme(&theme_name, cx);
+                        self.show_toast(format!("Theme: {theme_name}"), cx);
+                    } else {
+                        self.show_toast(format!("Theme “{name}” is unavailable"), cx);
+                    }
+                }
+                self.theme_before_preview = None;
             }
             Action::Message(text) => self.show_hud(text, cx),
         }
@@ -2455,21 +2686,21 @@ impl Yomu {
                 }
             }
 
-            // The current page needs enough pixels for the current zoom; its neighbours only
-            // for zoom 1, since a page turn keeps the fit mode but you start unzoomed there.
+            // When zoom is retained, neighbours are pre-fetched at the reader's active zoom
+            // so turning the page stays sharp without a secondary re-decode.
             let long_side = |display: (f32, f32)| display.0.max(display.1) * vp.scale;
             let (current_tier, neighbour_tier) = match reader.current().map(Reader::orig_of) {
-                Some(orig) => (
-                    layout::tier_for(long_side(layout::display_size(
+                Some(orig) => {
+                    let tier = layout::tier_for(long_side(layout::display_size(
                         reader.fit,
                         reader.zoom,
                         orig,
                         &vp,
-                    ))),
-                    layout::tier_for(long_side(layout::display_size(reader.fit, 1.0, orig, &vp))),
-                ),
+                    )));
+                    (tier, tier)
+                }
                 None => {
-                    let tier = layout::tier_for(vp.width.max(vp.height) * vp.scale);
+                    let tier = layout::tier_for(vp.width.max(vp.height) * vp.scale * reader.zoom);
                     (tier, tier)
                 }
             };
@@ -3181,6 +3412,8 @@ impl Yomu {
         let continuous = settings.continuous;
         let webcomics = settings.webcomics;
         let fit = settings.fit;
+        let remember_zoom = settings.remember_zoom;
+        let zoom_val = settings.zoom;
         let animate = settings.animate;
         let grouped = settings.group_series;
         let thumb_size = settings.thumbnail_size;
@@ -3387,9 +3620,11 @@ impl Yomu {
                 );
 
                 const BORDER_OPTIONS: &[(BorderSize, &str)] = &[
+                    (BorderSize::None, "None (0px)"),
                     (BorderSize::Thin, "Thin (1px)"),
                     (BorderSize::Medium, "Medium (2px)"),
                     (BorderSize::Thick, "Thick (3px)"),
+                    (BorderSize::ExtraThick, "Extra Thick (4px)"),
                 ];
                 let border_dropdown = Button::new("settings-border-size")
                     .label(border_size.label())
@@ -3430,8 +3665,11 @@ impl Yomu {
 
                 const ROUNDING_OPTIONS: &[(CornerRounding, &str)] = &[
                     (CornerRounding::Sharp, "Sharp (0px)"),
+                    (CornerRounding::Subtle, "Subtle (4px)"),
                     (CornerRounding::Medium, "Medium (8px)"),
                     (CornerRounding::Soft, "Soft (14px)"),
+                    (CornerRounding::Round, "Round (20px)"),
+                    (CornerRounding::ExtraSoft, "Extra Soft (28px)"),
                 ];
                 let rounding_dropdown = Button::new("settings-corner-rounding")
                     .label(corner_rounding.label())
@@ -3501,10 +3739,12 @@ impl Yomu {
             }
             SettingsTab::Library => {
                 const THUMB_OPTIONS: &[(ThumbnailSize, &str)] = &[
+                    (ThumbnailSize::ExtraSmall, "Extra Small (150px)"),
                     (ThumbnailSize::Small, "Small (180px)"),
                     (ThumbnailSize::Medium, "Medium (210px)"),
                     (ThumbnailSize::Large, "Large (240px)"),
                     (ThumbnailSize::ExtraLarge, "Extra Large (280px)"),
+                    (ThumbnailSize::Huge, "Huge (340px)"),
                 ];
                 let thumb_dropdown = Button::new("settings-thumbnail-size")
                     .label(thumb_size.label())
@@ -3575,6 +3815,19 @@ impl Yomu {
                     (FitMode::Height, "Fit Height"),
                     (FitMode::Original, "Original Size"),
                 ];
+                let is_custom_zoom = remember_zoom && (zoom_val - 1.0).abs() > 0.01;
+                let fit_subtitle = if is_custom_zoom {
+                    format!(
+                        "Baseline mode: {} (custom zoom active: {}%)",
+                        fit.label(),
+                        (zoom_val * 100.0).round() as i32
+                    )
+                } else if remember_zoom {
+                    format!("Baseline layout mode: {}", fit.label())
+                } else {
+                    "Layout mode used when opening any book (resets to 100%)".to_string()
+                };
+
                 let fit_dropdown = Button::new("settings-fit")
                     .label(fit.label())
                     .dropdown_caret(true)
@@ -3590,7 +3843,7 @@ impl Yomu {
                         move |mut menu, _window, _cx| {
                             for &(mode, opt_label) in FIT_OPTIONS {
                                 let yomu = yomu.clone();
-                                let is_current = mode == fit;
+                                let is_current = mode == fit && !is_custom_zoom;
                                 menu = menu.item(dropdown_item(
                                     opt_label,
                                     is_current,
@@ -3604,11 +3857,53 @@ impl Yomu {
                             menu
                         }
                     });
+
+                let mut fit_trailing = div().flex().items_center().gap_2();
+                if is_custom_zoom {
+                    let yomu = yomu.clone();
+                    fit_trailing = fit_trailing.child(
+                        Button::new("settings-reset-zoom")
+                            .label("Reset 100%")
+                            .rounded(ButtonRounded::Medium)
+                            .small()
+                            .ghost()
+                            .cursor_pointer()
+                            .on_click(move |_, _window, cx| {
+                                yomu.update(cx, |this, cx| {
+                                    this.reset_zoom(cx);
+                                });
+                            }),
+                    );
+                }
+                fit_trailing = fit_trailing.child(fit_dropdown);
+
                 let fit_row = adw_row(
                     IconName::Maximize2,
                     "Default Page Fit",
-                    Some("How pages scale to fit the window viewport".into()),
-                    fit_dropdown.into_any_element(),
+                    Some(fit_subtitle),
+                    fit_trailing.into_any_element(),
+                    false,
+                );
+
+                let zoom_switch = Switch::new("settings-remember-zoom")
+                    .checked(remember_zoom)
+                    .small()
+                    .cursor_pointer()
+                    .on_click({
+                        let yomu = yomu.clone();
+                        move |&checked, _window, cx| {
+                            yomu.update(cx, |this, cx| {
+                                this.set_remember_zoom(Some(checked), cx);
+                            });
+                        }
+                    });
+                let zoom_row = adw_row(
+                    IconName::ZoomIn,
+                    "Remember Zoom Level",
+                    Some(
+                        "Retain custom zoom and pinch magnification across all books instead of resetting on open".into(),
+                    ),
+                    zoom_switch.into_any_element(),
                     false,
                 );
                 let anim_switch = Switch::new("settings-animations")
@@ -3672,7 +3967,7 @@ impl Yomu {
                 );
                 adw_group(
                     "READING BEHAVIOR",
-                    vec![fit_row, anim_row, cont_row, webc_row],
+                    vec![fit_row, zoom_row, anim_row, cont_row, webc_row],
                 )
                 .into_any_element()
             }
@@ -4731,107 +5026,8 @@ impl Yomu {
             )
         });
 
-        let vim_status = if let Some(input) = reader.vim.cmdline_text() {
-            let suggestions = command_suggestions(input);
-            let border_px = self.border_px();
-            let rounding_lg = self.radius_lg_px();
-            let rounding_md = self.radius_px();
-            let mut prompt = div()
-                .w(px(560.))
-                .max_w_full()
-                .flex()
-                .flex_col()
-                .rounded(px(rounding_lg))
-                .when(border_px > 0.0, |this| {
-                    this.border(px(border_px)).border_color(self.colors.accent)
-                })
-                .bg(self.colors.surface)
-                .shadow_lg()
-                .text_sm();
-            if !suggestions.is_empty() {
-                let mut rows = div().flex().flex_col().p_1().bg(self.colors.surface);
-                for (index, (completion, label, description)) in suggestions.iter().enumerate() {
-                    let selected = index == self.command_selection;
-                    let completion = completion.clone();
-                    rows = rows.child(
-                        div()
-                            .id(SharedString::from(format!("command-suggestion-{index}")))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_4()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(rounding_md))
-                            .cursor_pointer()
-                            .when(border_px > 0.0 || selected, |this| {
-                                this.border(px(border_px.max(1.0)))
-                                    .border_color(if selected {
-                                        with_alpha(self.colors.accent, 0.70)
-                                    } else {
-                                        with_alpha(self.colors.accent, 0.0)
-                                    })
-                            })
-                            .when(selected, |row| row.bg(with_alpha(self.colors.accent, 0.20)))
-                            .hover(|row| row.bg(with_alpha(self.colors.accent, 0.15)))
-                            .child(div().text_color(self.colors.accent).child(label.clone()))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_right()
-                                    .text_color(self.colors.muted)
-                                    .child(*description),
-                            )
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                if let Some(reader) = this.reader.as_mut() {
-                                    reader.vim.replace_cmdline(completion.clone());
-                                }
-                                this.command_selection = 0;
-                                cx.notify();
-                            })),
-                    );
-                }
-                prompt = prompt.child(rows);
-            }
-            prompt = prompt.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_t_1()
-                    .border_color(self.colors.border)
-                    .bg(self.colors.surface)
-                    .px_3()
-                    .py_2()
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(self.colors.accent)
-                            .child(":"),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_color(self.colors.foreground)
-                            .child(format!("{input}▏")),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(self.colors.muted)
-                            .child("↑↓ select · Tab complete · Enter run · Esc cancel"),
-                    ),
-            );
-            Some(
-                div()
-                    .absolute()
-                    .bottom_6()
-                    .left_0()
-                    .right_0()
-                    .flex()
-                    .justify_center()
-                    .child(self.animate_popup("reader-command-prompt", prompt)),
-            )
+        let vim_status = if reader.vim.in_cmdline() {
+            None
         } else {
             reader.vim.status().map(|text| {
                 pill(
@@ -4839,6 +5035,7 @@ impl Yomu {
                     text,
                     self.colors,
                 )
+                .into_any_element()
             })
         };
 
@@ -4931,6 +5128,310 @@ impl Yomu {
         }
         caught
     }
+
+    fn render_command_box(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let input = self.cmdline_text()?;
+        let suggestions = command_suggestions(input, &self.custom_themes);
+        let border_px = self.border_px();
+        let rounding_lg = self.radius_lg_px();
+        let rounding_md = self.radius_px();
+        let inner_radius = if border_px > 0.0 {
+            (rounding_lg - border_px).max(0.0)
+        } else {
+            rounding_lg
+        };
+
+        let mut prompt = div()
+            .id("command-box-panel")
+            .w(px(560.))
+            .max_w(px(700.))
+            .flex()
+            .flex_col()
+            .rounded(px(rounding_lg))
+            .overflow_hidden()
+            .when(border_px > 0.0, |this| {
+                this.border(px(border_px)).border_color(self.colors.accent)
+            })
+            .bg(self.colors.surface)
+            .shadow_xl()
+            .text_sm()
+            .text_color(self.colors.foreground)
+            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                cx.stop_propagation()
+            })
+            .on_mouse_down(MouseButton::Right, |_: &MouseDownEvent, _, cx| {
+                cx.stop_propagation()
+            });
+
+        // Top child: Command input row
+        let mut input_row = div()
+            .id("command-box-input")
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_4()
+            .py_3()
+            .rounded_t(px(inner_radius))
+            .when(suggestions.is_empty(), |this| {
+                this.rounded_b(px(inner_radius))
+            })
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(self.colors.accent)
+                    .text_base()
+                    .child(":"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(self.colors.foreground)
+                    .child(format!("{input}▏")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(self.colors.muted)
+                    .child("↑↓ select · Tab complete · Enter run · Esc cancel"),
+            );
+
+        if !suggestions.is_empty() {
+            input_row = input_row.border_b_1().border_color(self.colors.border);
+        }
+        prompt = prompt.child(input_row);
+
+        // Bottom child: Completion suggestions (if any)
+        if !suggestions.is_empty() {
+            let mut rows = div()
+                .id("command-box-suggestions")
+                .flex()
+                .flex_col()
+                .p_1()
+                .rounded_b(px(inner_radius))
+                .max_h(px(320.))
+                .overflow_y_scroll();
+
+            let item_radius = rounding_md.min(inner_radius);
+            for (index, (completion, label, description)) in suggestions.iter().enumerate() {
+                let selected = index == self.command_selection;
+                let completion = completion.clone();
+                rows = rows.child(
+                    div()
+                        .id(SharedString::from(format!("command-suggestion-{index}")))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_4()
+                        .px_3()
+                        .py(px(6.))
+                        .rounded(px(item_radius))
+                        .cursor_pointer()
+                        .when(border_px > 0.0 || selected, |this| {
+                            this.border(px(border_px.max(1.0)))
+                                .border_color(if selected {
+                                    with_alpha(self.colors.accent, 0.70)
+                                } else {
+                                    with_alpha(self.colors.accent, 0.0)
+                                })
+                        })
+                        .when(selected, |row| row.bg(with_alpha(self.colors.accent, 0.20)))
+                        .hover(|row| row.bg(with_alpha(self.colors.accent, 0.15)))
+                        .child(
+                            div()
+                                .font_weight(if selected {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::NORMAL
+                                })
+                                .text_color(if selected {
+                                    self.colors.accent
+                                } else {
+                                    self.colors.foreground
+                                })
+                                .child(label.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_right()
+                                .text_xs()
+                                .text_color(self.colors.muted)
+                                .truncate()
+                                .child(*description),
+                        )
+                        .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+                            if this.command_selection != index {
+                                this.command_selection = index;
+                                if let Some(draft) = this.cmdline_text().map(str::to_owned) {
+                                    this.sync_theme_preview(&draft, cx);
+                                }
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            let is_complete = !completion.ends_with(' ');
+                            this.replace_cmdline(completion.clone());
+                            if is_complete {
+                                let vp = viewport_of(window);
+                                let actions = if let Some(reader) = this.reader.as_mut() {
+                                    reader.vim.feed("enter")
+                                } else {
+                                    this.library_vim.feed("enter")
+                                };
+                                this.command_selection = 0;
+                                this.theme_before_preview = None;
+                                for action in actions {
+                                    this.apply(action, vp, window, cx);
+                                }
+                            } else {
+                                this.command_selection = 0;
+                                if let Some(draft) = this.cmdline_text().map(str::to_owned) {
+                                    this.sync_theme_preview(&draft, cx);
+                                }
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+            prompt = prompt.child(rows);
+        }
+
+        let scrim = div()
+            .id("command-box-scrim")
+            .occlude()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(with_alpha(overlay_shade(self.colors), 0.40))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| this.cancel_cmdline(cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| this.cancel_cmdline(cx)),
+            )
+            .child(self.animate_popup("command-prompt-popup", prompt));
+
+        Some(deferred(scrim).with_priority(3).into_any_element())
+    }
+}
+
+/// Suggestions for the reader's vim `:` command box:
+/// returns (completed command text, display label, short explanation).
+fn command_suggestions(
+    input: &str,
+    custom_themes: &HashMap<String, Rc<ThemeConfig>>,
+) -> Vec<(String, String, &'static str)> {
+    const COMMANDS: &[(&str, &str)] = &[
+        ("fit", "Choose page fit mode"),
+        ("zoom", "Set zoom percentage or reset"),
+        ("animate", "Toggle page animations"),
+        ("continuous", "Toggle continuous scrolling"),
+        ("webcomics", "Toggle gapless webcomics mode"),
+        ("remember-zoom", "Toggle retaining zoom across books"),
+        ("theme", "Change color theme"),
+        ("goto", "Jump to a page number"),
+        ("mark", "Set a letter mark"),
+        ("settings", "Open Settings"),
+        ("info", "Toggle page information"),
+        ("help", "Show keyboard help"),
+        ("fullscreen", "Toggle fullscreen"),
+        ("q", "Return to the library"),
+        ("qa", "Quit yomu"),
+    ];
+    const FITS: &[(&str, &str)] = &[
+        ("page", "Fit the whole page"),
+        ("width", "Fit the page width"),
+        ("height", "Fit the page height"),
+        ("original", "Show at original size"),
+    ];
+    const TOGGLES: &[(&str, &str)] = &[("on", "Enable"), ("off", "Disable")];
+    const ZOOM: &[(&str, &str)] = &[
+        ("reset", "Reset zoom"),
+        ("150", "Set zoom to 150% (edit the number as needed)"),
+    ];
+
+    let trimmed = input.trim_start();
+    let mut words = trimmed.split_whitespace();
+    let command = words.next().unwrap_or_default();
+    let has_separator = trimmed.ends_with(char::is_whitespace);
+    if let Some((_, _)) = COMMANDS.iter().find(|(name, _)| *name == command)
+        && (has_separator || input.contains(' '))
+    {
+        if command == "theme" {
+            let partial = trimmed
+                .strip_prefix(command)
+                .unwrap_or("")
+                .trim_start()
+                .to_lowercase();
+            let mut themes: Vec<(String, &'static str)> = Vec::new();
+            for (name, config) in &*BUILT_IN_THEMES {
+                let desc = match config.mode {
+                    gpui_kit::component::ThemeMode::Light => "Light theme",
+                    gpui_kit::component::ThemeMode::Dark => "Dark theme",
+                };
+                themes.push((name.clone(), desc));
+            }
+            for (name, config) in custom_themes {
+                if !BUILT_IN_THEMES.contains_key(name) {
+                    let desc = match config.mode {
+                        gpui_kit::component::ThemeMode::Light => "Custom light theme",
+                        gpui_kit::component::ThemeMode::Dark => "Custom dark theme",
+                    };
+                    themes.push((name.clone(), desc));
+                }
+            }
+            themes.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+            return themes
+                .into_iter()
+                .filter(|(name, _)| {
+                    partial.is_empty()
+                        || name.to_lowercase().starts_with(&partial)
+                        || name.to_lowercase().contains(&partial)
+                })
+                .map(|(name, description)| (format!("{command} {name}"), name, description))
+                .collect();
+        }
+
+        let args = if command == "fit" {
+            FITS
+        } else if matches!(
+            command,
+            "animate" | "continuous" | "webcomics" | "remember-zoom"
+        ) {
+            TOGGLES
+        } else if command == "zoom" {
+            ZOOM
+        } else {
+            &[]
+        };
+        let partial = words.next().unwrap_or_default();
+        return args
+            .iter()
+            .filter(|(value, _)| value.starts_with(partial))
+            .map(|(value, description)| {
+                (
+                    format!("{command} {value}"),
+                    (*value).to_string(),
+                    *description,
+                )
+            })
+            .collect();
+    }
+
+    let prefix = if has_separator { "" } else { command };
+    COMMANDS
+        .iter()
+        .filter(|(name, _)| name.starts_with(prefix))
+        .take(8)
+        .map(|(name, description)| (format!("{name} "), (*name).to_string(), *description))
+        .collect()
 }
 
 impl Render for Yomu {
@@ -4988,6 +5489,7 @@ impl Render for Yomu {
 
         let root_bg = self.colors.background;
         let overlay = self.render_overlay(cx);
+        let cmd_box = self.render_command_box(cx);
 
         div()
             .key_context(if reading { "Reader" } else { "Library" })
@@ -5021,6 +5523,7 @@ impl Render for Yomu {
             }))
             .child(content)
             .children(overlay)
+            .children(cmd_box)
     }
 }
 
@@ -5104,77 +5607,10 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
                 ":webcomics [on|off]",
                 "Toggle gapless webcomics strip mode.",
             ),
+            (":theme [name]", "Change color theme or cycle themes."),
         ],
     ),
 ];
-
-/// (completed command text, display text, short explanation)
-fn command_suggestions(input: &str) -> Vec<(String, String, &'static str)> {
-    const COMMANDS: &[(&str, &str)] = &[
-        ("fit", "Choose page fit mode"),
-        ("zoom", "Set zoom percentage or reset"),
-        ("animate", "Toggle page animations"),
-        ("continuous", "Toggle continuous scrolling"),
-        ("webcomics", "Toggle gapless webcomics mode"),
-        ("goto", "Jump to a page number"),
-        ("mark", "Set a letter mark"),
-        ("settings", "Open Settings"),
-        ("info", "Toggle page information"),
-        ("help", "Show keyboard help"),
-        ("fullscreen", "Toggle fullscreen"),
-        ("q", "Return to the library"),
-        ("qa", "Quit yomu"),
-    ];
-    const FITS: &[(&str, &str)] = &[
-        ("page", "Fit the whole page"),
-        ("width", "Fit the page width"),
-        ("height", "Fit the page height"),
-        ("original", "Show at original size"),
-    ];
-    const TOGGLES: &[(&str, &str)] = &[("on", "Enable"), ("off", "Disable")];
-    const ZOOM: &[(&str, &str)] = &[
-        ("reset", "Reset zoom"),
-        ("150", "Set zoom to 150% (edit the number as needed)"),
-    ];
-
-    let trimmed = input.trim_start();
-    let mut words = trimmed.split_whitespace();
-    let command = words.next().unwrap_or_default();
-    let has_separator = trimmed.ends_with(char::is_whitespace);
-    if let Some((_, _)) = COMMANDS.iter().find(|(name, _)| *name == command)
-        && (has_separator || input.contains(' '))
-    {
-        let args = if command == "fit" {
-            FITS
-        } else if matches!(command, "animate" | "continuous" | "webcomics") {
-            TOGGLES
-        } else if command == "zoom" {
-            ZOOM
-        } else {
-            &[]
-        };
-        let partial = words.next().unwrap_or_default();
-        return args
-            .iter()
-            .filter(|(value, _)| value.starts_with(partial))
-            .map(|(value, description)| {
-                (
-                    format!("{command} {value}"),
-                    (*value).to_string(),
-                    *description,
-                )
-            })
-            .collect();
-    }
-
-    let prefix = if has_separator { "" } else { command };
-    COMMANDS
-        .iter()
-        .filter(|(name, _)| name.starts_with(prefix))
-        .take(7)
-        .map(|(name, description)| (format!("{name} "), (*name).to_string(), *description))
-        .collect()
-}
 
 fn help_overlay(colors: UiColors, border_px: f32, rounding_xl: f32) -> AnyElement {
     let mut panel = div()

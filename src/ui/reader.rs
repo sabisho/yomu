@@ -144,6 +144,11 @@ pub struct Reader {
 
 impl Reader {
     pub fn new(book: &Book, settings: &Settings) -> Self {
+        let zoom = if settings.remember_zoom {
+            layout::clamp_zoom(settings.zoom)
+        } else {
+            1.0
+        };
         Self {
             book_id: book.id.clone(),
             path: book.path.clone(),
@@ -153,7 +158,7 @@ impl Reader {
             page: book.current_page.min(book.page_count.saturating_sub(1)),
             total: book.page_count,
             fit: settings.fit,
-            zoom: 1.0,
+            zoom,
             off: (0.0, 0.0),
             scroll_target: (0.0, 0.0),
             arrive: Some(Arrive::Start),

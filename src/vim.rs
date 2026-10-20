@@ -51,12 +51,16 @@ pub enum Action {
     SetContinuous(Option<bool>),
     /// `None` toggles gapless webcomics mode.
     SetWebcomics(Option<bool>),
+    /// `None` toggles whether custom zoom is retained across books and sessions.
+    SetRememberZoom(Option<bool>),
     ToggleInfo,
     ToggleHelp,
     ToggleFullscreen,
     OpenSettings,
     CloseBook,
     QuitApp,
+    /// Set or cycle the UI theme. An empty string cycles to the next theme.
+    SetTheme(String),
     /// Something to tell the user (for example a bad command).
     Message(String),
 }
@@ -377,6 +381,19 @@ pub fn parse_command(line: &str) -> Vec<Action> {
         ("webcomics" | "webcomic", Some("off" | "false" | "0" | "no")) => {
             vec![Action::SetWebcomics(Some(false))]
         }
+        ("remember-zoom" | "rememberzoom" | "retain-zoom", None) => {
+            vec![Action::SetRememberZoom(None)]
+        }
+        ("remember-zoom" | "rememberzoom" | "retain-zoom", Some("on" | "true" | "1" | "yes")) => {
+            vec![Action::SetRememberZoom(Some(true))]
+        }
+        ("remember-zoom" | "rememberzoom" | "retain-zoom", Some("off" | "false" | "0" | "no")) => {
+            vec![Action::SetRememberZoom(Some(false))]
+        }
+        ("theme" | "colorscheme" | "colo" | "colors", _) => {
+            let theme_name = line.strip_prefix(cmd).unwrap_or("").trim().to_string();
+            vec![Action::SetTheme(theme_name)]
+        }
         ("mark", Some(key)) => match single_char(key) {
             Some(c) if c.is_alphabetic() => vec![Action::SetMark(c)],
             _ => bad(),
@@ -571,6 +588,18 @@ mod tests {
         assert_eq!(parse_command("$"), vec![Action::LastPage]);
         assert_eq!(parse_command("mark b"), vec![Action::SetMark('b')]);
         assert_eq!(parse_command("settings"), vec![Action::OpenSettings]);
+        assert_eq!(
+            parse_command("theme Catppuccin Mocha"),
+            vec![Action::SetTheme("Catppuccin Mocha".to_string())]
+        );
+        assert_eq!(
+            parse_command("colorscheme Gruvbox Dark"),
+            vec![Action::SetTheme("Gruvbox Dark".to_string())]
+        );
+        assert_eq!(
+            parse_command("theme"),
+            vec![Action::SetTheme(String::new())]
+        );
         assert_eq!(parse_command("animate"), vec![Action::SetAnimations(None)]);
         assert_eq!(
             parse_command("animate off"),

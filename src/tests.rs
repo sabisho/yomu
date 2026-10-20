@@ -2626,6 +2626,242 @@ fn built_in_themes_cycle_and_persist(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn theme_command_changes_theme_and_suggests_all_themes(cx: &mut TestAppContext) {
+    let fx = fixture("theme-command");
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    view.update_in(cx, |this, window, cx| {
+        let suggestions = command_suggestions("theme ", &this.custom_themes);
+        assert!(suggestions.len() >= 6);
+        let labels: Vec<String> = suggestions.iter().map(|s| s.1.clone()).collect();
+        assert!(labels.contains(&"Catppuccin Mocha".to_string()));
+        assert!(labels.contains(&"Catppuccin Latte".to_string()));
+        assert!(labels.contains(&"Gruvbox Dark".to_string()));
+        assert!(labels.contains(&"Gruvbox Light".to_string()));
+
+        // Filtering works
+        let filtered = command_suggestions("theme gruv", &this.custom_themes);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().any(|s| s.1 == "Gruvbox Dark"));
+        assert!(filtered.iter().any(|s| s.1 == "Gruvbox Light"));
+
+        // Running theme command applies theme
+        let vp = viewport_of(window);
+        this.apply(Action::SetTheme("Gruvbox Dark".to_string()), vp, window, cx);
+        assert_eq!(this.library.settings().theme_name, "Gruvbox Dark");
+
+        // Empty theme command cycles theme
+        this.apply(Action::SetTheme(String::new()), vp, window, cx);
+        assert_ne!(this.library.settings().theme_name, "Gruvbox Dark");
+    });
+}
+
+#[gpui_kit::test]
+fn extended_thumbnail_border_and_rounding_options(cx: &mut TestAppContext) {
+    let fx = fixture("options-test");
+    let (view, cx) = launch(&fx, cx);
+
+    view.update_in(cx, |this, _, cx| {
+        // Thumbnail sizes
+        this.set_thumbnail_size(ThumbnailSize::ExtraSmall, cx);
+        assert_eq!(
+            this.library.settings().thumbnail_size,
+            ThumbnailSize::ExtraSmall
+        );
+        assert_eq!(ThumbnailSize::ExtraSmall.card_width(), 150.0);
+        this.set_thumbnail_size(ThumbnailSize::Huge, cx);
+        assert_eq!(this.library.settings().thumbnail_size, ThumbnailSize::Huge);
+        assert_eq!(ThumbnailSize::Huge.card_width(), 340.0);
+
+        // Border sizes
+        this.set_border_size(BorderSize::None, cx);
+        assert_eq!(this.library.settings().border_size, BorderSize::None);
+        assert_eq!(this.border_px(), 0.0);
+        this.set_border_size(BorderSize::ExtraThick, cx);
+        assert_eq!(this.library.settings().border_size, BorderSize::ExtraThick);
+        assert_eq!(this.border_px(), 4.0);
+
+        // Corner rounding
+        this.set_corner_rounding(CornerRounding::Subtle, cx);
+        assert_eq!(
+            this.library.settings().corner_rounding,
+            CornerRounding::Subtle
+        );
+        assert_eq!(this.radius_px(), 3.0);
+        assert_eq!(this.radius_lg_px(), 4.0);
+
+        this.set_corner_rounding(CornerRounding::Round, cx);
+        assert_eq!(
+            this.library.settings().corner_rounding,
+            CornerRounding::Round
+        );
+        assert_eq!(this.radius_px(), 16.0);
+        assert_eq!(this.radius_lg_px(), 20.0);
+
+        this.set_corner_rounding(CornerRounding::ExtraSoft, cx);
+        assert_eq!(
+            this.library.settings().corner_rounding,
+            CornerRounding::ExtraSoft
+        );
+        assert_eq!(this.radius_px(), 22.0);
+        assert_eq!(this.radius_lg_px(), 28.0);
+    });
+}
+
+#[gpui_kit::test]
+fn library_view_command_box_and_theme_preview(cx: &mut TestAppContext) {
+    let fx = fixture("cmdbox-test");
+    let (view, cx) = launch(&fx, cx);
+
+    // Initial state: in library view, not in cmdline
+    view.update_in(cx, |this, _, _| {
+        assert!(this.reader.is_none());
+        assert!(!this.in_cmdline());
+        assert_eq!(this.cmdline_text(), None);
+    });
+
+    // Press ':' to open command box in library
+    cx.simulate_keystrokes(":");
+    view.update_in(cx, |this, _, _| {
+        assert!(this.in_cmdline());
+        assert_eq!(this.cmdline_text(), Some(""));
+    });
+
+    // Type "theme "
+    cx.simulate_keystrokes("t h e m e space");
+    view.update_in(cx, |this, _, _| {
+        assert!(this.in_cmdline());
+        assert_eq!(this.cmdline_text(), Some("theme "));
+    });
+
+    // Initial theme before preview
+    let initial_theme = view.read_with(cx, |this, _| this.library.settings().theme_name.clone());
+
+    // Cycle completions with Down: should trigger live preview
+    cx.simulate_keystrokes("down");
+    view.update_in(cx, |this, _, _| {
+        assert!(this.theme_before_preview.is_some());
+        assert_eq!(
+            this.theme_before_preview.as_deref(),
+            Some(initial_theme.as_str())
+        );
+    });
+
+    // Press escape to cancel: should restore theme and exit cmdline
+    cx.simulate_keystrokes("escape");
+    view.update_in(cx, |this, _, _| {
+        assert!(!this.in_cmdline());
+        assert_eq!(this.theme_before_preview, None);
+        assert_eq!(this.library.settings().theme_name, initial_theme);
+    });
+
+    // Press ':' again and run a theme command to completion
+    cx.simulate_keystrokes(":");
+    view.update_in(cx, |this, _, _| {
+        assert!(this.in_cmdline());
+    });
+    // Replace cmdline with ":theme Gruvbox Light" and press enter
+    view.update_in(cx, |this, _, _| {
+        this.replace_cmdline("theme Gruvbox Light".to_string());
+    });
+    cx.simulate_keystrokes("enter");
+    view.update_in(cx, |this, _, _| {
+        assert!(!this.in_cmdline());
+        assert_eq!(this.library.settings().theme_name, "Gruvbox Light");
+        assert_eq!(this.theme_before_preview, None);
+    });
+}
+
+#[gpui_kit::test]
+fn command_box_rendering_and_cancellation(cx: &mut TestAppContext) {
+    let fx = fixture("cmdbox-render");
+    let (view, cx) = launch(&fx, cx);
+
+    view.update_in(cx, |this, _, cx| {
+        assert!(this.render_command_box(cx).is_none());
+        this.library_vim.feed(":");
+        this.replace_cmdline("theme ".to_string());
+        assert!(this.render_command_box(cx).is_some());
+        this.cancel_cmdline(cx);
+        assert!(this.render_command_box(cx).is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn reader_retains_zoom_across_books_and_sessions_by_default(cx: &mut TestAppContext) {
+    let fx = fixture("zoom-retain");
+    let (view, cx) = launch(&fx, cx);
+
+    // Default setting: remember_zoom is true, default zoom is 1.0
+    view.update_in(cx, |this, _, _| {
+        assert!(this.library.settings().remember_zoom);
+        assert_eq!(this.library.settings().zoom, 1.0);
+    });
+
+    // Open first book
+    open_book_by_index(&fx, &view, cx, 0);
+    view.update_in(cx, |this, _, _| {
+        assert_eq!(this.reader.as_ref().unwrap().zoom, 1.0);
+    });
+
+    // Change zoom in first book to 1.5
+    view.update_in(cx, |this, window, cx| {
+        let vp = viewport_of(window);
+        this.zoom_to(1.5, (100.0, 100.0), vp, cx);
+        assert_eq!(this.reader.as_ref().unwrap().zoom, 1.5);
+        assert_eq!(this.library.settings().zoom, 1.5);
+    });
+
+    // Close first book
+    view.update_in(cx, |this, window, cx| {
+        this.close_book(window, cx);
+        assert!(this.reader.is_none());
+    });
+
+    // Open second book: should retain zoom of 1.5!
+    open_book_by_index(&fx, &view, cx, 1);
+    view.update_in(cx, |this, _, _| {
+        assert_eq!(this.reader.as_ref().unwrap().zoom, 1.5);
+    });
+
+    // Turn page in second book: zoom remains 1.5
+    view.update_in(cx, |this, _, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+        assert_eq!(this.reader.as_ref().unwrap().zoom, 1.5);
+    });
+
+    // Reset zoom via reset_zoom
+    view.update_in(cx, |this, _, cx| {
+        this.reset_zoom(cx);
+        assert_eq!(this.reader.as_ref().unwrap().zoom, 1.0);
+        assert_eq!(this.library.settings().zoom, 1.0);
+    });
+
+    // Now disable remember_zoom
+    view.update_in(cx, |this, _, cx| {
+        this.set_remember_zoom(Some(false), cx);
+        assert!(!this.library.settings().remember_zoom);
+    });
+
+    // Zoom in again while remember_zoom is false
+    view.update_in(cx, |this, window, cx| {
+        let vp = viewport_of(window);
+        this.zoom_to(2.0, (100.0, 100.0), vp, cx);
+        assert_eq!(this.reader.as_ref().unwrap().zoom, 2.0);
+    });
+
+    // Close and open third book: should reset to 1.0 because remember_zoom is false
+    view.update_in(cx, |this, window, cx| {
+        this.close_book(window, cx);
+    });
+    open_book_by_index(&fx, &view, cx, 2);
+    view.update_in(cx, |this, _, _| {
+        assert_eq!(this.reader.as_ref().unwrap().zoom, 1.0);
+    });
+}
+
+#[gpui_kit::test]
 #[ignore = "prints timings"]
 fn perf_frames_during_a_slide(cx: &mut TestAppContext) {
     let fx = fixture("perf");

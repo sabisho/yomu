@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     archive::{self, SourceKind},
     imaging,
-    layout::FitMode,
+    layout::{self, FitMode},
     util::{fnv1a, natural_cmp, now_secs},
 };
 
@@ -201,72 +201,91 @@ pub const LIBRARY_VERSION: u32 = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThumbnailSize {
+    #[serde(alias = "extra-small", alias = "xsmall")]
+    ExtraSmall,
     Small,
     #[default]
     Medium,
     Large,
+    #[serde(alias = "extra-large", alias = "xlarge")]
     ExtraLarge,
+    #[serde(alias = "huge", alias = "extra-huge", alias = "xhuge")]
+    Huge,
 }
 
 impl ThumbnailSize {
-    pub const ALL: [ThumbnailSize; 4] = [
+    pub const ALL: [ThumbnailSize; 6] = [
+        ThumbnailSize::ExtraSmall,
         ThumbnailSize::Small,
         ThumbnailSize::Medium,
         ThumbnailSize::Large,
         ThumbnailSize::ExtraLarge,
+        ThumbnailSize::Huge,
     ];
 
     pub fn label(&self) -> &'static str {
         match self {
+            ThumbnailSize::ExtraSmall => "Extra Small (150px)",
             ThumbnailSize::Small => "Small (180px)",
             ThumbnailSize::Medium => "Medium (210px)",
             ThumbnailSize::Large => "Large (240px)",
             ThumbnailSize::ExtraLarge => "Extra Large (280px)",
+            ThumbnailSize::Huge => "Huge (340px)",
         }
     }
 
     pub fn card_width(&self) -> f32 {
         match self {
+            ThumbnailSize::ExtraSmall => 150.0,
             ThumbnailSize::Small => 180.0,
             ThumbnailSize::Medium => 210.0,
             ThumbnailSize::Large => 240.0,
             ThumbnailSize::ExtraLarge => 280.0,
+            ThumbnailSize::Huge => 340.0,
         }
     }
 
     pub fn card_height(&self) -> f32 {
         match self {
+            ThumbnailSize::ExtraSmall => 225.0,
             ThumbnailSize::Small => 270.0,
             ThumbnailSize::Medium => 315.0,
             ThumbnailSize::Large => 360.0,
             ThumbnailSize::ExtraLarge => 420.0,
+            ThumbnailSize::Huge => 510.0,
         }
     }
 
     pub fn pixel_dimensions(&self) -> (u32, u32) {
         match self {
+            ThumbnailSize::ExtraSmall => (300, 450),
             ThumbnailSize::Small => (360, 540),
             ThumbnailSize::Medium => (420, 630),
             ThumbnailSize::Large => (480, 720),
             ThumbnailSize::ExtraLarge => (560, 840),
+            ThumbnailSize::Huge => (680, 1020),
         }
     }
 
     pub fn dir_name(&self) -> &'static str {
         match self {
+            ThumbnailSize::ExtraSmall => "xsmall",
             ThumbnailSize::Small => "small",
             ThumbnailSize::Medium => "medium",
             ThumbnailSize::Large => "large",
             ThumbnailSize::ExtraLarge => "xlarge",
+            ThumbnailSize::Huge => "huge",
         }
     }
 
     pub fn next(&self) -> Self {
         match self {
+            ThumbnailSize::ExtraSmall => ThumbnailSize::Small,
             ThumbnailSize::Small => ThumbnailSize::Medium,
             ThumbnailSize::Medium => ThumbnailSize::Large,
             ThumbnailSize::Large => ThumbnailSize::ExtraLarge,
-            ThumbnailSize::ExtraLarge => ThumbnailSize::Small,
+            ThumbnailSize::ExtraLarge => ThumbnailSize::Huge,
+            ThumbnailSize::Huge => ThumbnailSize::ExtraSmall,
         }
     }
 }
@@ -274,28 +293,41 @@ impl ThumbnailSize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum BorderSize {
+    None,
     #[default]
     Thin,
     Medium,
     Thick,
+    #[serde(alias = "heavy")]
+    ExtraThick,
 }
 
 impl BorderSize {
-    pub const ALL: [BorderSize; 3] = [BorderSize::Thin, BorderSize::Medium, BorderSize::Thick];
+    pub const ALL: [BorderSize; 5] = [
+        BorderSize::None,
+        BorderSize::Thin,
+        BorderSize::Medium,
+        BorderSize::Thick,
+        BorderSize::ExtraThick,
+    ];
 
     pub fn label(&self) -> &'static str {
         match self {
+            BorderSize::None => "None (0px)",
             BorderSize::Thin => "Thin (1px)",
             BorderSize::Medium => "Medium (2px)",
             BorderSize::Thick => "Thick (3px)",
+            BorderSize::ExtraThick => "Extra Thick (4px)",
         }
     }
 
     pub fn pixels(&self) -> f32 {
         match self {
+            BorderSize::None => 0.0,
             BorderSize::Thin => 1.0,
             BorderSize::Medium => 2.0,
             BorderSize::Thick => 3.0,
+            BorderSize::ExtraThick => 4.0,
         }
     }
 }
@@ -304,23 +336,32 @@ impl BorderSize {
 #[serde(rename_all = "kebab-case")]
 pub enum CornerRounding {
     Sharp,
+    Subtle,
     #[default]
     Medium,
     Soft,
+    Round,
+    ExtraSoft,
 }
 
 impl CornerRounding {
-    pub const ALL: [CornerRounding; 3] = [
+    pub const ALL: [CornerRounding; 6] = [
         CornerRounding::Sharp,
+        CornerRounding::Subtle,
         CornerRounding::Medium,
         CornerRounding::Soft,
+        CornerRounding::Round,
+        CornerRounding::ExtraSoft,
     ];
 
     pub fn label(&self) -> &'static str {
         match self {
             CornerRounding::Sharp => "Sharp (0px)",
+            CornerRounding::Subtle => "Subtle (4px)",
             CornerRounding::Medium => "Medium (8px)",
             CornerRounding::Soft => "Soft (14px)",
+            CornerRounding::Round => "Round (20px)",
+            CornerRounding::ExtraSoft => "Extra Soft (28px)",
         }
     }
 
@@ -328,8 +369,11 @@ impl CornerRounding {
     pub fn radius_pixels(&self) -> f32 {
         match self {
             CornerRounding::Sharp => 0.0,
+            CornerRounding::Subtle => 3.0,
             CornerRounding::Medium => 6.0,
             CornerRounding::Soft => 12.0,
+            CornerRounding::Round => 16.0,
+            CornerRounding::ExtraSoft => 22.0,
         }
     }
 
@@ -337,8 +381,11 @@ impl CornerRounding {
     pub fn radius_lg_pixels(&self) -> f32 {
         match self {
             CornerRounding::Sharp => 0.0,
+            CornerRounding::Subtle => 4.0,
             CornerRounding::Medium => 8.0,
             CornerRounding::Soft => 14.0,
+            CornerRounding::Round => 20.0,
+            CornerRounding::ExtraSoft => 28.0,
         }
     }
 
@@ -346,8 +393,11 @@ impl CornerRounding {
     pub fn radius_xl_pixels(&self) -> f32 {
         match self {
             CornerRounding::Sharp => 0.0,
+            CornerRounding::Subtle => 6.0,
             CornerRounding::Medium => 12.0,
             CornerRounding::Soft => 20.0,
+            CornerRounding::Round => 28.0,
+            CornerRounding::ExtraSoft => 36.0,
         }
     }
 }
@@ -358,6 +408,10 @@ pub struct Settings {
     /// Name of the GPUI Kit theme selected in Appearance settings.
     pub theme_name: String,
     pub fit: FitMode,
+    /// Retain custom zoom and pinch magnification across all books and sessions.
+    pub remember_zoom: bool,
+    /// Stored zoom magnification multiplier on top of the fit mode.
+    pub zoom: f32,
     /// Slide between pages and glide when scrolling. Reduced-motion preferences of the desktop
     /// switch this off regardless of the stored value.
     pub animate: bool,
@@ -386,6 +440,8 @@ impl Default for Settings {
         Self {
             theme_name: "Catppuccin Mocha".to_string(),
             fit: FitMode::Page,
+            remember_zoom: true,
+            zoom: 1.0,
             animate: true,
             continuous: false,
             webcomics: false,
@@ -455,6 +511,12 @@ impl Settings {
             .and_then(|v| serde_json::from_value::<FitMode>(v.clone()).ok())
         {
             settings.fit = fit;
+        }
+        if let Some(remember_zoom) = object.get("remember_zoom").and_then(|v| v.as_bool()) {
+            settings.remember_zoom = remember_zoom;
+        }
+        if let Some(zoom) = object.get("zoom").and_then(|v| v.as_f64()) {
+            settings.zoom = (zoom as f32).clamp(layout::ZOOM_MIN, layout::ZOOM_MAX);
         }
         if let Some(opacity) = object.get("opacity").and_then(|v| v.as_f64()) {
             settings.set_opacity(opacity as f32);
@@ -1158,11 +1220,19 @@ mod tests {
         assert_eq!(loaded.settings().corner_rounding, CornerRounding::Soft);
 
         // Lenient loading with missing or deprecated fields defaults to Thin / Medium
-        let json = r#"{"books":[],"settings":{"border_size":"none"}}"#;
+        let json = r#"{"books":[],"settings":{"border_size":"bogus"}}"#;
         fs::write(dirs.library_file(), json).unwrap();
         let loaded = Library::load(&dirs).unwrap();
         assert_eq!(loaded.settings().border_size, BorderSize::Thin);
         assert_eq!(loaded.settings().corner_rounding, CornerRounding::Medium);
+
+        // Extended options like none and round persist and deserialize
+        let json = r#"{"books":[],"settings":{"border_size":"none","corner_rounding":"round","thumbnail_size":"huge"}}"#;
+        fs::write(dirs.library_file(), json).unwrap();
+        let loaded = Library::load(&dirs).unwrap();
+        assert_eq!(loaded.settings().border_size, BorderSize::None);
+        assert_eq!(loaded.settings().corner_rounding, CornerRounding::Round);
+        assert_eq!(loaded.settings().thumbnail_size, ThumbnailSize::Huge);
     }
 
     #[test]
@@ -1190,5 +1260,22 @@ mod tests {
             Library::load(&dirs).unwrap().settings().theme_name,
             "Catppuccin Mocha"
         );
+    }
+
+    #[test]
+    fn remember_zoom_and_zoom_persistence() {
+        let tmp = temp_dir("zoom-persist");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let mut lib = Library::default();
+        assert!(lib.settings().remember_zoom);
+        assert_eq!(lib.settings().zoom, 1.0);
+
+        lib.settings_mut().remember_zoom = false;
+        lib.settings_mut().zoom = 1.75;
+        lib.save(&dirs).unwrap();
+
+        let loaded = Library::load(&dirs).unwrap();
+        assert!(!loaded.settings().remember_zoom);
+        assert_eq!(loaded.settings().zoom, 1.75);
     }
 }
