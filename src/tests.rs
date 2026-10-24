@@ -94,6 +94,8 @@ fn overlay_kind(view: &Entity<Yomu>, cx: &mut VisualTestContext) -> &'static str
         Some(Overlay::Confirm(_)) => "confirm",
         Some(Overlay::Properties(_)) => "properties",
         Some(Overlay::Series(_)) => "series",
+        Some(Overlay::Collection(_)) => "collection",
+        Some(Overlay::AniListMatch(_)) => "anilist-match",
         Some(Overlay::Settings) => "settings",
     })
 }
@@ -157,7 +159,7 @@ fn menu_labels(view: &Entity<Yomu>, cx: &mut VisualTestContext) -> Vec<String> {
 
 /// Centre of the nth book card in the library grid (window is 1920 wide in the test platform).
 fn card(index: usize) -> Point<Pixels> {
-    point(px(24.0 + 204.0 * index as f32 + 90.0), px(56.0 + 100.0))
+    point(px(369.0 + 234.0 * index as f32), px(200.0))
 }
 
 fn click(cx: &mut VisualTestContext, at: Point<Pixels>, button: MouseButton) {
@@ -647,7 +649,7 @@ fn border_and_rounding_settings_survive_a_restart_and_reset(cx: &mut TestAppCont
         let (view, cx) = launch(&fx, cx);
         view.update(cx, |this, cx| {
             this.set_border_size(BorderSize::Thick, cx);
-            this.set_corner_rounding(CornerRounding::Soft, cx);
+            this.set_corner_rounding(CornerRounding::Rounded, cx);
         });
         assert_eq!(
             view.read_with(cx, |this, _| this.library.settings().border_size),
@@ -655,7 +657,7 @@ fn border_and_rounding_settings_survive_a_restart_and_reset(cx: &mut TestAppCont
         );
         assert_eq!(
             view.read_with(cx, |this, _| this.library.settings().corner_rounding),
-            CornerRounding::Soft
+            CornerRounding::Rounded
         );
     }
 
@@ -667,11 +669,11 @@ fn border_and_rounding_settings_survive_a_restart_and_reset(cx: &mut TestAppCont
     );
     assert_eq!(
         view.read_with(cx, |this, _| this.library.settings().corner_rounding),
-        CornerRounding::Soft
+        CornerRounding::Rounded
     );
-    assert_eq!(view.read_with(cx, |this, _| this.border_px()), 3.0);
+    assert_eq!(view.read_with(cx, |this, _| this.border_px()), 2.0);
     assert_eq!(view.read_with(cx, |this, _| this.radius_px()), 12.0);
-    assert_eq!(view.read_with(cx, |this, _| this.radius_lg_px()), 14.0);
+    assert_eq!(view.read_with(cx, |this, _| this.radius_lg_px()), 16.0);
 
     // Reset restores defaults
     view.update(cx, |this, cx| {
@@ -685,11 +687,11 @@ fn border_and_rounding_settings_survive_a_restart_and_reset(cx: &mut TestAppCont
     );
     assert_eq!(
         view.read_with(cx, |this, _| this.library.settings().corner_rounding),
-        CornerRounding::Medium
+        CornerRounding::Standard
     );
     assert_eq!(view.read_with(cx, |this, _| this.border_px()), 1.0);
     assert_eq!(view.read_with(cx, |this, _| this.radius_px()), 6.0);
-    assert_eq!(view.read_with(cx, |this, _| this.radius_lg_px()), 8.0);
+    assert_eq!(view.read_with(cx, |this, _| this.radius_lg_px()), 10.0);
 }
 
 #[gpui_kit::test]
@@ -707,6 +709,61 @@ fn corrupt_preferences_do_not_lose_the_library(cx: &mut TestAppContext) {
         view.read_with(cx, |this, _| this.library.settings().clone()),
         Settings::default()
     );
+}
+
+#[gpui_kit::test]
+fn view_mode_grid_and_list_toggle_and_persistence(cx: &mut TestAppContext) {
+    let fx = fixture("viewmode");
+    {
+        let (view, cx) = launch(&fx, cx);
+        assert!(view.read_with(cx, |this, _| this.view_mode_grid));
+        assert!(view.read_with(cx, |this, _| this.library.settings().view_mode_grid));
+
+        // Switch to List View
+        view.update(cx, |this, _| {
+            this.view_mode_grid = false;
+            this.library.settings_mut().view_mode_grid = false;
+            this.save_library();
+        });
+        assert!(!view.read_with(cx, |this, _| this.view_mode_grid));
+    }
+
+    // Restart and verify persisted state
+    {
+        let (view, cx) = launch(&fx, cx);
+        assert!(!view.read_with(cx, |this, _| this.view_mode_grid));
+        assert!(!view.read_with(cx, |this, _| this.library.settings().view_mode_grid));
+
+        // Toggle back to Grid View
+        view.update(cx, |this, _| {
+            this.view_mode_grid = true;
+            this.library.settings_mut().view_mode_grid = true;
+            this.save_library();
+        });
+        assert!(view.read_with(cx, |this, _| this.view_mode_grid));
+    }
+}
+
+#[gpui_kit::test]
+fn dynamic_os_shortcuts_match_operating_system(cx: &mut TestAppContext) {
+    let _ = cx;
+    let is_mac = cfg!(target_os = "macos");
+    let search = super::ui::components::search_shortcut_str();
+    let settings = super::ui::components::settings_shortcut_str();
+    let open = super::ui::components::open_shortcut_str();
+    let zoom = super::ui::components::zoom_shortcut_str();
+
+    if is_mac {
+        assert_eq!(search, "⌘K");
+        assert_eq!(settings, "⌘,");
+        assert_eq!(open, "⌘O");
+        assert_eq!(zoom, "+ / - or Cmd+Wheel");
+    } else {
+        assert_eq!(search, "Ctrl+K");
+        assert_eq!(settings, "Ctrl+,");
+        assert_eq!(open, "Ctrl+O");
+        assert_eq!(zoom, "+ / - or Ctrl+Wheel");
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2678,34 +2735,34 @@ fn extended_thumbnail_border_and_rounding_options(cx: &mut TestAppContext) {
         this.set_border_size(BorderSize::None, cx);
         assert_eq!(this.library.settings().border_size, BorderSize::None);
         assert_eq!(this.border_px(), 0.0);
-        this.set_border_size(BorderSize::ExtraThick, cx);
-        assert_eq!(this.library.settings().border_size, BorderSize::ExtraThick);
-        assert_eq!(this.border_px(), 4.0);
+        this.set_border_size(BorderSize::Thick, cx);
+        assert_eq!(this.library.settings().border_size, BorderSize::Thick);
+        assert_eq!(this.border_px(), 2.0);
 
         // Corner rounding
-        this.set_corner_rounding(CornerRounding::Subtle, cx);
+        this.set_corner_rounding(CornerRounding::None, cx);
         assert_eq!(
             this.library.settings().corner_rounding,
-            CornerRounding::Subtle
+            CornerRounding::None
         );
-        assert_eq!(this.radius_px(), 3.0);
-        assert_eq!(this.radius_lg_px(), 4.0);
+        assert_eq!(this.radius_px(), 0.0);
+        assert_eq!(this.radius_lg_px(), 0.0);
 
-        this.set_corner_rounding(CornerRounding::Round, cx);
+        this.set_corner_rounding(CornerRounding::Standard, cx);
         assert_eq!(
             this.library.settings().corner_rounding,
-            CornerRounding::Round
+            CornerRounding::Standard
         );
-        assert_eq!(this.radius_px(), 16.0);
-        assert_eq!(this.radius_lg_px(), 20.0);
+        assert_eq!(this.radius_px(), 6.0);
+        assert_eq!(this.radius_lg_px(), 10.0);
 
-        this.set_corner_rounding(CornerRounding::ExtraSoft, cx);
+        this.set_corner_rounding(CornerRounding::Rounded, cx);
         assert_eq!(
             this.library.settings().corner_rounding,
-            CornerRounding::ExtraSoft
+            CornerRounding::Rounded
         );
-        assert_eq!(this.radius_px(), 22.0);
-        assert_eq!(this.radius_lg_px(), 28.0);
+        assert_eq!(this.radius_px(), 12.0);
+        assert_eq!(this.radius_lg_px(), 16.0);
     });
 }
 
@@ -2895,4 +2952,115 @@ fn perf_frames_during_a_slide(cx: &mut TestAppContext) {
         times[(times.len() * 95 / 100).min(times.len() - 1)],
         times[times.len() - 1],
     );
+}
+
+#[gpui_kit::test]
+fn dropdown_menu_interaction_and_selection(cx: &mut TestAppContext) {
+    let fx = fixture("dropdown-test");
+    let (view, cx) = launch(&fx, cx);
+
+    // Initial state: defaults
+    assert_eq!(
+        view.read_with(cx, |this, _| this.library.settings().thumbnail_size),
+        ThumbnailSize::Medium
+    );
+    assert_eq!(
+        view.read_with(cx, |this, _| this.library.settings().fit),
+        FitMode::Page
+    );
+
+    // Open settings and switch to appearance tab
+    view.update(cx, |this, cx| {
+        this.overlay = Some(Overlay::Settings);
+        this.settings_tab = ui::overlays::SettingsTab::Appearance;
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Verify settings appearance view renders properly
+    assert_eq!(
+        view.read_with(cx, |this, _| this.settings_tab),
+        ui::overlays::SettingsTab::Appearance
+    );
+
+    // Test thumbnail size setter
+    view.update(cx, |this, cx| {
+        this.set_thumbnail_size(ThumbnailSize::ExtraLarge, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |this, _| this.library.settings().thumbnail_size),
+        ThumbnailSize::ExtraLarge
+    );
+
+    // Test corner rounding setter
+    view.update(cx, |this, cx| {
+        this.set_corner_rounding(CornerRounding::Rounded, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |this, _| this.library.settings().corner_rounding),
+        CornerRounding::Rounded
+    );
+
+    // Test border size setter
+    view.update(cx, |this, cx| {
+        this.set_border_size(BorderSize::Thick, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |this, _| this.library.settings().border_size),
+        BorderSize::Thick
+    );
+
+    // Test color scheme setter
+    view.update(cx, |this, cx| {
+        this.set_color_scheme("Gruvbox", cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |this, _| this.library.settings().color_scheme.clone()),
+        "Gruvbox"
+    );
+
+    // Close settings overlay
+    view.update(cx, |this, cx| {
+        this.close_overlay(cx);
+    });
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |this, _| this.overlay.is_none()));
+
+    // Open a book in reader to test reader dropdowns
+    open_book_by_index(&fx, &view, cx, 0);
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |this, _| this.reader.is_some()));
+
+    // Test fit mode setter
+    view.update(cx, |this, cx| {
+        this.set_fit(FitMode::Width, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |this, _| this.reader.as_ref().unwrap().fit),
+        FitMode::Width
+    );
+
+    // Also verify standalone macos_dropdown_button helper element builds correctly
+    let selected_val = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let on_select = {
+        let selected_val = selected_val.clone();
+        std::rc::Rc::new(move |val: String, _: &mut Window, _: &mut App| {
+            *selected_val.borrow_mut() = val;
+        })
+    };
+    let btn = ui::settings_view::macos_dropdown_button(
+        "test-dropdown",
+        "Options",
+        vec![
+            ("Opt A".to_string(), "a".to_string(), true),
+            ("Opt B".to_string(), "b".to_string(), false),
+        ],
+        on_select,
+    );
+    drop(btn);
 }

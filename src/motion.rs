@@ -176,7 +176,9 @@ impl InertialScroll {
 }
 
 /// Stillness duration (fingers lifted off touchpad) before initiating inertia if no release event arrived.
-pub const INERTIA_STILLNESS_THRESHOLD: Duration = Duration::from_millis(18);
+/// Set to 35ms to ensure normal touchpad packet intervals (10-25ms) never prematurely trigger inertia
+/// during active multi-touch gestures, eliminating stuttering on high-refresh displays.
+pub const INERTIA_STILLNESS_THRESHOLD: Duration = Duration::from_millis(35);
 /// Maximum interval after touch stillness where release momentum is still valid.
 /// If more than this time has passed, the fingers were brought to a stop before lifting.
 pub const INERTIA_MAX_RELEASE_GAP: Duration = Duration::from_millis(100);

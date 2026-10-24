@@ -41,6 +41,10 @@ impl DataDirs {
         Ok(Self { root })
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn library_file(&self) -> PathBuf {
         self.root.join("library.json")
     }
@@ -296,28 +300,18 @@ pub enum BorderSize {
     None,
     #[default]
     Thin,
-    Medium,
+    #[serde(alias = "medium", alias = "extra-thick", alias = "heavy")]
     Thick,
-    #[serde(alias = "heavy")]
-    ExtraThick,
 }
 
 impl BorderSize {
-    pub const ALL: [BorderSize; 5] = [
-        BorderSize::None,
-        BorderSize::Thin,
-        BorderSize::Medium,
-        BorderSize::Thick,
-        BorderSize::ExtraThick,
-    ];
+    pub const ALL: [BorderSize; 3] = [BorderSize::None, BorderSize::Thin, BorderSize::Thick];
 
     pub fn label(&self) -> &'static str {
         match self {
-            BorderSize::None => "None (0px)",
-            BorderSize::Thin => "Thin (1px)",
-            BorderSize::Medium => "Medium (2px)",
-            BorderSize::Thick => "Thick (3px)",
-            BorderSize::ExtraThick => "Extra Thick (4px)",
+            BorderSize::None => "None",
+            BorderSize::Thin => "Thin",
+            BorderSize::Thick => "Thick",
         }
     }
 
@@ -325,9 +319,7 @@ impl BorderSize {
         match self {
             BorderSize::None => 0.0,
             BorderSize::Thin => 1.0,
-            BorderSize::Medium => 2.0,
-            BorderSize::Thick => 3.0,
-            BorderSize::ExtraThick => 4.0,
+            BorderSize::Thick => 2.0,
         }
     }
 }
@@ -335,71 +327,86 @@ impl BorderSize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum CornerRounding {
-    Sharp,
-    Subtle,
+    #[serde(alias = "sharp")]
+    None,
     #[default]
-    Medium,
-    Soft,
-    Round,
-    ExtraSoft,
+    #[serde(alias = "medium", alias = "subtle")]
+    Standard,
+    #[serde(alias = "round", alias = "soft", alias = "extra-soft")]
+    Rounded,
 }
 
 impl CornerRounding {
-    pub const ALL: [CornerRounding; 6] = [
-        CornerRounding::Sharp,
-        CornerRounding::Subtle,
-        CornerRounding::Medium,
-        CornerRounding::Soft,
-        CornerRounding::Round,
-        CornerRounding::ExtraSoft,
+    pub const ALL: [CornerRounding; 3] = [
+        CornerRounding::None,
+        CornerRounding::Standard,
+        CornerRounding::Rounded,
     ];
 
     pub fn label(&self) -> &'static str {
         match self {
-            CornerRounding::Sharp => "Sharp (0px)",
-            CornerRounding::Subtle => "Subtle (4px)",
-            CornerRounding::Medium => "Medium (8px)",
-            CornerRounding::Soft => "Soft (14px)",
-            CornerRounding::Round => "Round (20px)",
-            CornerRounding::ExtraSoft => "Extra Soft (28px)",
+            CornerRounding::None => "None",
+            CornerRounding::Standard => "Standard",
+            CornerRounding::Rounded => "Rounded",
         }
     }
 
     /// Base radius for general elements (GPUI Kit `theme.radius`).
     pub fn radius_pixels(&self) -> f32 {
         match self {
-            CornerRounding::Sharp => 0.0,
-            CornerRounding::Subtle => 3.0,
-            CornerRounding::Medium => 6.0,
-            CornerRounding::Soft => 12.0,
-            CornerRounding::Round => 16.0,
-            CornerRounding::ExtraSoft => 22.0,
+            CornerRounding::None => 0.0,
+            CornerRounding::Standard => 6.0,
+            CornerRounding::Rounded => 12.0,
         }
     }
 
     /// Radius for cards and dialogs (GPUI Kit `theme.radius_lg`).
     pub fn radius_lg_pixels(&self) -> f32 {
         match self {
-            CornerRounding::Sharp => 0.0,
-            CornerRounding::Subtle => 4.0,
-            CornerRounding::Medium => 8.0,
-            CornerRounding::Soft => 14.0,
-            CornerRounding::Round => 20.0,
-            CornerRounding::ExtraSoft => 28.0,
+            CornerRounding::None => 0.0,
+            CornerRounding::Standard => 10.0,
+            CornerRounding::Rounded => 16.0,
         }
     }
 
     /// Radius for large card containers and modal dialogs.
     pub fn radius_xl_pixels(&self) -> f32 {
         match self {
-            CornerRounding::Sharp => 0.0,
-            CornerRounding::Subtle => 6.0,
-            CornerRounding::Medium => 12.0,
-            CornerRounding::Soft => 20.0,
-            CornerRounding::Round => 28.0,
-            CornerRounding::ExtraSoft => 36.0,
+            CornerRounding::None => 0.0,
+            CornerRounding::Standard => 14.0,
+            CornerRounding::Rounded => 24.0,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeModePreference {
+    System,
+    Light,
+    #[default]
+    Dark,
+}
+
+impl ThemeModePreference {
+    pub const ALL: [ThemeModePreference; 3] = [
+        ThemeModePreference::System,
+        ThemeModePreference::Light,
+        ThemeModePreference::Dark,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::System => "Auto",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn default_color_scheme() -> String {
+    "Catppuccin".to_string()
 }
 
 /// Preferences that carry over from book to book and between launches.
@@ -407,6 +414,12 @@ impl CornerRounding {
 pub struct Settings {
     /// Name of the GPUI Kit theme selected in Appearance settings.
     pub theme_name: String,
+    /// Theme appearance preference: System (Auto), Light, or Dark.
+    #[serde(default)]
+    pub theme_mode: ThemeModePreference,
+    /// Color scheme family: Catppuccin, Gruvbox, Tokyo Night, Noctalia Dynamic, etc.
+    #[serde(default = "default_color_scheme")]
+    pub color_scheme: String,
     pub fit: FitMode,
     /// Retain custom zoom and pinch magnification across all books and sessions.
     pub remember_zoom: bool,
@@ -430,6 +443,8 @@ pub struct Settings {
     /// Corner rounding across cards, dialogs, and controls.
     #[serde(default)]
     pub corner_rounding: CornerRounding,
+    /// View mode for library cards: true for grid view (default), false for list view.
+    pub view_mode_grid: bool,
     /// Opacity of the window background, `OPACITY_MIN..=OPACITY_MAX`. Raised widget surfaces use
     /// a small opacity lift to stay distinct; page images, covers, and text remain opaque.
     pub opacity: f32,
@@ -439,6 +454,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme_name: "Catppuccin Mocha".to_string(),
+            theme_mode: ThemeModePreference::Dark,
+            color_scheme: "Catppuccin".to_string(),
             fit: FitMode::Page,
             remember_zoom: true,
             zoom: 1.0,
@@ -448,7 +465,8 @@ impl Default for Settings {
             group_series: false,
             thumbnail_size: ThumbnailSize::Medium,
             border_size: BorderSize::Thin,
-            corner_rounding: CornerRounding::Medium,
+            corner_rounding: CornerRounding::Standard,
+            view_mode_grid: true,
             opacity: OPACITY_MAX,
         }
     }
@@ -466,6 +484,15 @@ impl Settings {
         let Some(object) = value.as_object() else {
             return settings;
         };
+        if let Some(mode) = object
+            .get("theme_mode")
+            .and_then(|v| serde_json::from_value::<ThemeModePreference>(v.clone()).ok())
+        {
+            settings.theme_mode = mode;
+        }
+        if let Some(scheme) = object.get("color_scheme").and_then(|v| v.as_str()) {
+            settings.color_scheme = scheme.to_string();
+        }
         if let Some(theme_name) = object.get("theme_name").and_then(|v| v.as_str())
             && !theme_name.trim().is_empty()
         {
@@ -475,6 +502,15 @@ impl Settings {
                 other => other,
             };
             settings.theme_name = name.to_string();
+            if object.get("color_scheme").is_none() {
+                if name.starts_with("Catppuccin") {
+                    settings.color_scheme = "Catppuccin".to_string();
+                } else if name.starts_with("Gruvbox") {
+                    settings.color_scheme = "Gruvbox".to_string();
+                } else {
+                    settings.color_scheme = name.to_string();
+                }
+            }
         }
         if let Some(animate) = object.get("animate").and_then(|v| v.as_bool()) {
             settings.animate = animate;
@@ -505,6 +541,9 @@ impl Settings {
             .and_then(|v| serde_json::from_value::<CornerRounding>(v.clone()).ok())
         {
             settings.corner_rounding = corner_rounding;
+        }
+        if let Some(view_mode_grid) = object.get("view_mode_grid").and_then(|v| v.as_bool()) {
+            settings.view_mode_grid = view_mode_grid;
         }
         if let Some(fit) = object
             .get("fit")
@@ -542,6 +581,10 @@ pub struct Library {
     books: Vec<Book>,
     #[serde(default, deserialize_with = "lenient_settings")]
     settings: Settings,
+    #[serde(default)]
+    pub collections: Vec<crate::collections::Collection>,
+    #[serde(default)]
+    pub favorites: HashSet<String>,
 }
 
 impl Default for Library {
@@ -550,6 +593,8 @@ impl Default for Library {
             version: LIBRARY_VERSION,
             books: Vec::new(),
             settings: Settings::default(),
+            collections: Vec::new(),
+            favorites: HashSet::new(),
         }
     }
 }
@@ -642,6 +687,59 @@ impl Library {
             );
         }
         let _ = fs::remove_file(dirs.root.join("covers").join(format!("{id}.jpg")));
+    }
+
+    pub fn is_favorite(&self, id: &str) -> bool {
+        self.favorites.contains(id)
+    }
+
+    pub fn toggle_favorite(&mut self, id: &str) -> bool {
+        if self.favorites.contains(id) {
+            self.favorites.remove(id);
+            false
+        } else {
+            self.favorites.insert(id.to_string());
+            true
+        }
+    }
+
+    pub fn collections(&self) -> &[crate::collections::Collection] {
+        &self.collections
+    }
+
+    pub fn collections_mut(&mut self) -> &mut Vec<crate::collections::Collection> {
+        &mut self.collections
+    }
+
+    pub fn add_collection(&mut self, name: &str) -> String {
+        let id = format!("col_{}", fnv1a(name.as_bytes()));
+        if !self.collections.iter().any(|c| c.id == id) {
+            self.collections
+                .push(crate::collections::Collection::new(id.clone(), name));
+        }
+        id
+    }
+
+    pub fn delete_collection(&mut self, id: &str) {
+        self.collections.retain(|c| c.id != id);
+    }
+
+    pub fn rename_collection(&mut self, id: &str, new_name: &str) {
+        if let Some(col) = self.collections.iter_mut().find(|c| c.id == id) {
+            col.name = new_name.to_string();
+        }
+    }
+
+    pub fn add_book_to_collection(&mut self, collection_id: &str, book_id: &str) {
+        if let Some(col) = self.collections.iter_mut().find(|c| c.id == collection_id) {
+            col.add(book_id);
+        }
+    }
+
+    pub fn remove_book_from_collection(&mut self, collection_id: &str, book_id: &str) {
+        if let Some(col) = self.collections.iter_mut().find(|c| c.id == collection_id) {
+            col.remove(book_id);
+        }
     }
 
     /// Clear all cached covers for all sizes.
@@ -1212,26 +1310,26 @@ mod tests {
         let dirs = DataDirs::at(tmp.join("data")).unwrap();
         let mut lib = Library::default();
         lib.settings_mut().border_size = BorderSize::Thick;
-        lib.settings_mut().corner_rounding = CornerRounding::Soft;
+        lib.settings_mut().corner_rounding = CornerRounding::Rounded;
         lib.save(&dirs).unwrap();
 
         let loaded = Library::load(&dirs).unwrap();
         assert_eq!(loaded.settings().border_size, BorderSize::Thick);
-        assert_eq!(loaded.settings().corner_rounding, CornerRounding::Soft);
+        assert_eq!(loaded.settings().corner_rounding, CornerRounding::Rounded);
 
-        // Lenient loading with missing or deprecated fields defaults to Thin / Medium
+        // Lenient loading with missing or deprecated fields defaults to Thin / Standard
         let json = r#"{"books":[],"settings":{"border_size":"bogus"}}"#;
         fs::write(dirs.library_file(), json).unwrap();
         let loaded = Library::load(&dirs).unwrap();
         assert_eq!(loaded.settings().border_size, BorderSize::Thin);
-        assert_eq!(loaded.settings().corner_rounding, CornerRounding::Medium);
+        assert_eq!(loaded.settings().corner_rounding, CornerRounding::Standard);
 
         // Extended options like none and round persist and deserialize
         let json = r#"{"books":[],"settings":{"border_size":"none","corner_rounding":"round","thumbnail_size":"huge"}}"#;
         fs::write(dirs.library_file(), json).unwrap();
         let loaded = Library::load(&dirs).unwrap();
         assert_eq!(loaded.settings().border_size, BorderSize::None);
-        assert_eq!(loaded.settings().corner_rounding, CornerRounding::Round);
+        assert_eq!(loaded.settings().corner_rounding, CornerRounding::Rounded);
         assert_eq!(loaded.settings().thumbnail_size, ThumbnailSize::Huge);
     }
 

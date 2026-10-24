@@ -18,7 +18,10 @@ GPUI Kit window / Yomu (src/main.rs)
 
 | Module | Responsibility | Important boundaries |
 |---|---|---|
-| `main.rs` | GPUI Kit app/window, library and reader views, key/mouse dispatch, overlays/dialogs, rendering, background-task coordination | UI integration layer; it is large, so prefer extracting pure logic into the core modules when adding reusable behavior. The library toolbar is transparent with centered search and a top-right action menu; command suggestions are also presented here, while command parsing remains in `vim.rs`. |
+| `main.rs` | GPUI Kit app/window, state router (`MainView`), key/mouse dispatch, overlays/dialogs, rendering two-pane shell and reader, background-task coordination | UI integration layer; routes between persistent two-pane shell (`render_two_pane_shell`) and immersive reader (`render_reader`). Navigation history (`nav_history`) supports back/forward navigation. |
+| `ui/` | Modular GPUI Kit view components conforming to macOS HIG design board | Submodules: `sidebar` (navigation & window controls), `toolbar` (history, search badge, view modes, import), `continue_reading` (hero & queue), `details` (manga detail sheet & sync status), `collections_view` (smart & user collections), `anilist_search` (GraphQL search screen), `settings_view` (7-tab preferences), `components` (stat badges, tags, ratings). |
+| `anilist.rs` | AniList GraphQL client, metadata search, progress sync, rate limiter, and local offline cache | Connects to official AniList GraphQL API (`https://graphql.anilist.co`). Rate limited to 90 req/min. Persists offline queue and media cache in `anilist.json`. Zero fictional data. |
+| `collections.rs` | Custom user collections model and smart collection query primitives | Decoupled from book disk storage. Deleting a collection only deletes list groupings, never user comic files. |
 | `archive.rs` | Enumerate and read CBZ/ZIP pages or images in folders | Filters supported image names, ignores hidden/resource-fork files, natural-sorts names, limits archive page inflation. Source types are `Archive` and `Folder`. |
 | `imaging.rs` | Decode supported images, scale for display, create JPEG covers | No gpui dependency. Decoded pixel buffers are BGRA for gpui; original dimensions are retained for layout. Has dimension guardrails. |
 | `library.rs` | Book model/status/progress, settings, JSON load/save, imports, generated covers | `DataDirs` resolves storage. `Library` owns persisted data; comic files remain at their original paths. Format version 3. Continuous mode and webcomics are lenient settings defaulting off; folder grouping defaults on while honoring explicit saved values. Each book's optional series name defaults to unassigned when loading older data. |
@@ -42,6 +45,37 @@ GPUI Kit window / Yomu (src/main.rs)
 The UI gets the selected `Book`, enumerates its pages with `archive::list_pages`, clamps/restores its saved zero-based page index, and requests bytes and image processing in background work. `imaging::decode_fit_bgra` returns pixels scaled to an appropriate device-pixel tier chosen using layout/zoom. gpui image objects are then used by rendering. Page index updates and progress persistence happen on navigation; direction changes which control means forward/backward but does not change the index model.
 
 `pagecache` determines what should be loaded and retained. A cache change should preserve the current page, bound decoded buffers, and account for image dimensions/bytes. The policy's adaptive budget (1.0 GiB default, scaling up to 3.0 GiB depending on available host RAM) is a decoded image budget, not a hard bound on all process memory: GPU textures, source bytes, allocator overhead, and transient decode buffers can add to RSS.
+
+### Two-Pane Shell & View Navigation
+
+The app layout follows the approved macOS Human Interface Guidelines design specification (`Screenshots/macOS_redign_design_board.png`):
+- **Persistent Sidebar (`src/ui/sidebar.rs`)**: 240px fixed width featuring macOS traffic-light window controls (Close, Minimize, Zoom), primary navigation categories (`ContinueReading`, `AllManga`, `Collections`, `History`, `Downloads`), AniList status categories (`Reading`, `Plan to Read`, `Completed`, `Paused`, `Dropped`), and bottom profile & settings trigger.
+- **Top Toolbar (`src/ui/toolbar.rs`)**: 52px fixed height with history back/forward buttons (`< >`), centered search field with interactive `⌘K` badge, layout grid/list toggle, and primary `+ Import` action button.
+- **State Router (`MainView`)**: The active screen is driven by `self.active_view` in `Yomu`, with full browser-like history tracking via `nav_history` and `nav_history_idx`. Views include Continue Reading, All Manga, Manga Details, Collections, Downloads, History, AniList Category, AniList Search, and Settings.
+- **Manga Details View (`src/ui/details.rs`)**: Replaces the former slide-over drawer with a rich dedicated screen featuring high-resolution cover display, interactive star rating, genre pill tags, collapsible synopsis, underline tab navigation, 4x2 metadata matrix, and bottom sync tracking card.
+
+### AniList Tracking & Discovery Subsystem
+
+The AniList integration (`src/anilist.rs`) communicates with the official GraphQL endpoint at `https://graphql.anilist.co`:
+- **Search & Discovery**: Submits GraphQL queries with sanitized titles, returning official metadata, synonyms, genres, studio/author staff credits, and cover media.
+- **Rate Limiting & Safety**: Strictly enforces a sliding window rate limiter capped at 90 requests per minute to comply with API quotas.
+- **Offline Sync Queue**: Progress updates made while offline or unauthenticated are queued in `QueuedSyncItem` buffers and synchronized automatically when network availability is restored.
+- **Local Persistence**: User authentication tokens, matched book mappings, synced progress, and media metadata are persisted locally in `anilist.json` in the user's data directory.
+
+### Collections & Custom Groups
+
+Custom user collections (`src/collections.rs`) provide flexible organizational taxonomies:
+- 4 built-in smart collections: *Favorites*, *Plan to Read*, *Completed*, *Recently Added*.
+- User custom collections with custom names, creation timestamps, and book ID memberships.
+- Complete isolation from underlying comic storage: adding, renaming, or deleting collections never touches or removes the comic files on disk.
+
+### Immersive Reader
+
+When opening a book, the reader enters an edge-to-edge reading mode:
+- The persistent sidebar auto-hides completely to maximize reading surface area.
+- Top navigation bar auto-hides, exposing fit mode toggles, reading direction selectors, chapter/page titles, and back-to-library navigation.
+- Lateral hover chevrons appear on left and right window margins for mouse-driven page turns.
+- A floating translucent bottom pill displays precise reading progress with page slider and scrub preview.
 
 ### Persistence
 

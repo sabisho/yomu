@@ -12,12 +12,15 @@ pub struct BookMenu {
     pub selected: Option<usize>,
 }
 
+#[allow(dead_code)]
 pub enum ConfirmAction {
     Book(BookAction, String),
     RemoveSelected,
     ResetSettings,
     ClearThumbnailCache,
     ClearAllData,
+    DeleteCollection(String),
+    DisconnectAniList,
 }
 
 pub struct ConfirmDialog {
@@ -35,6 +38,21 @@ pub struct PropertiesDialog {
 pub struct SeriesDialog {
     pub book_ids: Vec<String>,
     pub input: Entity<InputState>,
+    pub anilist_input: Entity<InputState>,
+}
+
+pub struct CollectionDialog {
+    pub is_new: bool,
+    pub collection_id: Option<String>,
+    pub input: Entity<InputState>,
+}
+
+#[allow(dead_code)]
+pub struct AniListMatchDialog {
+    pub book_id: String,
+    pub input: Entity<InputState>,
+    pub results: Vec<yomu::anilist::AniListMedia>,
+    pub is_searching: bool,
 }
 
 #[derive(Default)]
@@ -43,44 +61,67 @@ pub struct LibraryMenu {
 }
 
 /// At most one menu or dialog is open at a time; it sits on top of whatever view is showing.
+#[allow(dead_code)]
 pub enum Overlay {
     Menu(BookMenu),
     LibraryMenu(LibraryMenu),
     Confirm(ConfirmDialog),
     Properties(PropertiesDialog),
     Series(SeriesDialog),
+    Collection(CollectionDialog),
+    AniListMatch(AniListMatchDialog),
     Settings,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum SettingsTab {
     #[default]
+    General,
     Appearance,
-    Library,
     Reader,
-    Storage,
-    Keyboard,
+    Library,
+    AniList,
+    Shortcuts,
+    Advanced,
 }
 
 impl SettingsTab {
+    #[allow(dead_code)]
     pub fn from_index(idx: usize) -> Self {
         match idx {
-            0 => Self::Appearance,
-            1 => Self::Library,
+            0 => Self::General,
+            1 => Self::Appearance,
             2 => Self::Reader,
-            3 => Self::Storage,
-            4 => Self::Keyboard,
-            _ => Self::Appearance,
+            3 => Self::Library,
+            4 => Self::AniList,
+            5 => Self::Shortcuts,
+            6 => Self::Advanced,
+            _ => Self::General,
         }
     }
 
+    #[allow(dead_code)]
     pub fn to_index(self) -> usize {
         match self {
-            Self::Appearance => 0,
-            Self::Library => 1,
+            Self::General => 0,
+            Self::Appearance => 1,
             Self::Reader => 2,
-            Self::Storage => 3,
-            Self::Keyboard => 4,
+            Self::Library => 3,
+            Self::AniList => 4,
+            Self::Shortcuts => 5,
+            Self::Advanced => 6,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Appearance => "Appearance",
+            Self::Reader => "Reader",
+            Self::Library => "Library",
+            Self::AniList => "AniList",
+            Self::Shortcuts => "Shortcuts",
+            Self::Advanced => "Advanced",
         }
     }
 }

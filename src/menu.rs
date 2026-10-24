@@ -145,6 +145,24 @@ pub fn selection_menu(count: usize) -> Vec<Entry> {
     ]
 }
 
+/// The menu for right-clicking a series or directory folder group.
+pub fn group_menu(_name: &str, count: usize) -> Vec<Entry> {
+    vec![
+        item(BookAction::Open, "Open Series", true),
+        item(BookAction::SetSeries, "Set Series / AniList…", true),
+        Entry::Separator,
+        item(BookAction::MarkRead, "Mark All as Read", true),
+        item(BookAction::MarkUnread, "Mark All as Unread", true),
+        Entry::Separator,
+        Entry::Item(Item {
+            action: BookAction::RemoveSelected,
+            label: format!("Remove {} from Library", plural_books(count)),
+            enabled: true,
+            danger: true,
+        }),
+    ]
+}
+
 /// Move the highlight to the next (or previous) enabled item, wrapping around. With no current
 /// selection, going forward picks the first item and going back picks the last.
 pub fn step(entries: &[Entry], current: Option<usize>, forward: bool) -> Option<usize> {

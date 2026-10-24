@@ -14,7 +14,7 @@ use gpui_kit::App;
 use gpui_kit::component::ColorTokens;
 use gpui_kit::component::{Theme as KitTheme, ThemeConfig};
 use serde::Deserialize;
-use yomu::library::DataDirs;
+use yomu::library::{DataDirs, ThemeModePreference};
 
 pub const DEFAULT_THEME_NAME: &str = "Catppuccin Mocha";
 
@@ -303,11 +303,80 @@ pub fn built_in_theme_names(_cx: &App) -> HashSet<String> {
     BUILT_IN_THEMES.keys().cloned().collect()
 }
 
+#[allow(dead_code)]
 pub fn load_custom_themes(path: &Path, cx: &App) -> Result<HashMap<String, Rc<ThemeConfig>>> {
     let contents =
         fs::read_to_string(path).map_err(|error| anyhow!("reading {}: {error}", path.display()))?;
     let built_in_names = built_in_theme_names(cx);
     parse_custom_themes(&contents, &built_in_names)
+}
+
+pub fn resolve_theme_name(
+    color_scheme: &str,
+    mode: ThemeModePreference,
+    system_dark: bool,
+    custom_themes: &HashMap<String, Rc<ThemeConfig>>,
+) -> String {
+    let effective_dark = match mode {
+        ThemeModePreference::System => system_dark,
+        ThemeModePreference::Dark => true,
+        ThemeModePreference::Light => false,
+    };
+
+    match color_scheme {
+        "Catppuccin" => {
+            if effective_dark {
+                "Catppuccin Mocha".to_string()
+            } else {
+                "Catppuccin Latte".to_string()
+            }
+        }
+        "Gruvbox" => {
+            if effective_dark {
+                "Gruvbox Dark".to_string()
+            } else {
+                "Gruvbox Light".to_string()
+            }
+        }
+        other => {
+            // Check if there is an exact custom theme match
+            if custom_themes.contains_key(other) {
+                return other.to_string();
+            }
+            // Check for explicit Dark/Light suffix in custom themes
+            let variant = if effective_dark {
+                format!("{other} Dark")
+            } else {
+                format!("{other} Light")
+            };
+            if custom_themes.contains_key(&variant) {
+                return variant;
+            }
+            // Fallback to built-in themes if an exact name was supplied
+            if BUILT_IN_THEMES.contains_key(other) {
+                return other.to_string();
+            }
+            DEFAULT_THEME_NAME.to_string()
+        }
+    }
+}
+
+pub fn available_color_schemes(custom_themes: &HashMap<String, Rc<ThemeConfig>>) -> Vec<String> {
+    let mut schemes = vec!["Catppuccin".to_string(), "Gruvbox".to_string()];
+    for name in custom_themes.keys() {
+        let base_name = name
+            .strip_suffix(" Dark")
+            .or_else(|| name.strip_suffix(" Light"))
+            .unwrap_or(name.as_str());
+        if !schemes.iter().any(|s| s == base_name) {
+            schemes.push(base_name.to_string());
+        }
+    }
+    schemes
+}
+
+pub fn is_standalone_scheme(color_scheme: &str) -> bool {
+    color_scheme != "Catppuccin" && color_scheme != "Gruvbox"
 }
 
 #[cfg(test)]
@@ -349,5 +418,113 @@ mod tests {
                 "Theme {name} missing foreground color"
             );
         }
+    }
+
+    #[test]
+    fn test_resolve_theme_name() {
+        let custom_themes = HashMap::new();
+        // Catppuccin
+        assert_eq!(
+            resolve_theme_name(
+                "Catppuccin",
+                ThemeModePreference::Dark,
+                false,
+                &custom_themes
+            ),
+            "Catppuccin Mocha"
+        );
+        assert_eq!(
+            resolve_theme_name(
+                "Catppuccin",
+                ThemeModePreference::Light,
+                true,
+                &custom_themes
+            ),
+            "Catppuccin Latte"
+        );
+        assert_eq!(
+            resolve_theme_name(
+                "Catppuccin",
+                ThemeModePreference::System,
+                true,
+                &custom_themes
+            ),
+            "Catppuccin Mocha"
+        );
+        assert_eq!(
+            resolve_theme_name(
+                "Catppuccin",
+                ThemeModePreference::System,
+                false,
+                &custom_themes
+            ),
+            "Catppuccin Latte"
+        );
+
+        // Gruvbox
+        assert_eq!(
+            resolve_theme_name("Gruvbox", ThemeModePreference::Dark, false, &custom_themes),
+            "Gruvbox Dark"
+        );
+        assert_eq!(
+            resolve_theme_name("Gruvbox", ThemeModePreference::Light, true, &custom_themes),
+            "Gruvbox Light"
+        );
+        assert_eq!(
+            resolve_theme_name("Gruvbox", ThemeModePreference::System, true, &custom_themes),
+            "Gruvbox Dark"
+        );
+        assert_eq!(
+            resolve_theme_name(
+                "Gruvbox",
+                ThemeModePreference::System,
+                false,
+                &custom_themes
+            ),
+            "Gruvbox Light"
+        );
+
+        // Standalone Custom Theme like Noctalia Dynamic
+        let mut custom = HashMap::new();
+        let dummy_cfg: Rc<ThemeConfig> = Rc::new(
+            serde_json::from_value(serde_json::json!({
+                "name": "Noctalia Dynamic",
+                "mode": "dark"
+            }))
+            .unwrap(),
+        );
+        custom.insert("Noctalia Dynamic".to_string(), dummy_cfg);
+
+        assert_eq!(
+            resolve_theme_name(
+                "Noctalia Dynamic",
+                ThemeModePreference::System,
+                false,
+                &custom
+            ),
+            "Noctalia Dynamic"
+        );
+        assert_eq!(
+            resolve_theme_name(
+                "Noctalia Dynamic",
+                ThemeModePreference::Light,
+                false,
+                &custom
+            ),
+            "Noctalia Dynamic"
+        );
+        assert_eq!(
+            resolve_theme_name(
+                "Noctalia Dynamic",
+                ThemeModePreference::Dark,
+                false,
+                &custom
+            ),
+            "Noctalia Dynamic"
+        );
+
+        assert!(is_standalone_scheme("Noctalia Dynamic"));
+        assert!(!is_standalone_scheme("Catppuccin"));
+        assert!(!is_standalone_scheme("Gruvbox"));
     }
 }

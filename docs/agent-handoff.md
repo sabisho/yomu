@@ -224,6 +224,49 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - **Library Thumbnail Zoom:** Smoothly accumulates pinch deltas (`library_pinch_accum`) across gestures; crossing threshold `|accum| > 0.35` steps thumbnail size up or down (`Small` <-> `Medium` <-> `Large` <-> `ExtraLarge`), notifies user with toast, and persists preference. Resets accumulator on gesture start/end.
   - Added full test coverage in `src/archive.rs`, `src/library.rs`, `src/menu.rs`, and `src/tests.rs`.
 
+### 16. macOS HIG Settings, Native GPUI Kit Dropdown Menus, and Inertial Scrolling
+- **Native GPUI Kit Dropdown Menus (`gpui_kit::component::menu::DropdownMenu`):**
+  - Replaced custom `deferred(...)` / `anchored(...)` global overlay state and modal scrim intercepts with native `gpui-kit` / `gpui-component` dropdown menu integration via `.dropdown_caret(true)` and `.dropdown_menu(...)`.
+  - Integrated `PopupMenu` with `check_side(Side::Left)` and `PopupMenuItem::new(...).checked(...)` to match native macOS popover styling and checkmark placement without custom overlays or screen-coordinate passing.
+  - Converted Settings Appearance dropdowns (Color Scheme, Thumbnail Size, Corner Rounding, Border Thickness), Reader Settings (Reading Direction), and Reader Bottom Bar controls (Fit Mode, Reading Direction) to native popovers.
+  - Eliminated scrim event collision bugs where opening dropdowns inside modal dialogs immediately dismissed the menu or failed to register selections.
+- **Inertial Scrolling Across All Views (`src/main.rs`, `src/motion.rs`):**
+  - Restored `UiScrollController` and `KineticScroll` physics across all application views: `AllManga`, `ContinueReading`, `Collections`, `MangaDetails`, `AniListSearch`, `AniListCategory`, `Sidebar`, and `Settings`.
+  - Mouse-wheel notches trigger smooth inertial glides; touchpad flicks trigger kinetic deceleration with touch-down catch-interruption.
+- **macOS Window Controls & UI Consistency:**
+  - Removed redundant secondary back buttons; integrated seamless unified top navigation with titlebar traffic light controls.
+  - Aligned titlebar branding horizontally alongside macOS traffic lights.
+  - Standardized rounded box corners (`CornerRounding`) across UI components, eliminating inconsistent pill shapes and ensuring cursor styles (`cursor_pointer`) on all interactive switches and buttons.
+- **Dynamic Responsive Grid Layout (`compute_responsive_grid`):**
+  - Replaced rigid fixed card widths with dynamic responsive column calculation based on available content viewport width and selected `ThumbnailSize`.
+  - Cards stretch and scale proportionally to evenly span from left padding to right padding with zero wasted margin space on the right.
+  - In narrow views (<560px, e.g. when sidebar collapses), dynamically scales cards to fit 2 full columns without dropping to 1 card.
+- **Unified Single Sidebar Toggle Button:**
+  - Removed duplicate sidebar collapse button in the sidebar header; retained the single canonical toggle button in the toolbar (`toolbar-sidebar-toggle`) adhering to macOS HIG.
+- **Monochrome Settings Panel Navigation:**
+  - Removed colored background badge blocks from the Settings sidebar; unified tab styling with the main sidebar navigation using monochrome icons (`colors.muted` inactive, `colors.accent_foreground` active).
+- **Auto-Hiding Reader Controls on Hover (mpv-style):**
+  - Integrated native GPUI Kit `.group(...)` and `.group_hover(...)` zones for the reader top bar and navigation chevrons.
+  - Controls default to `opacity(0.0)` for an unobstructed, immersive comic reading experience and smoothly reveal on hover over their top or side zones.
+
+### 17. OS-Aware Shortcut Keybindings, Functional List View, Separated Icon-Pair Switches, and Native Tooltips
+- **Dynamic OS Keybindings (`src/ui/components.rs`, `src/ui/toolbar.rs`, `src/ui/settings_view.rs`, `src/ui/anilist_search.rs`):**
+  - Added OS shortcut string helpers (`search_shortcut_str`, `settings_shortcut_str`, `open_shortcut_str`, `zoom_shortcut_str`).
+  - Displays macOS symbols (`⌘K`, `⌘,`, `⌘O`, `Cmd+Wheel`) strictly on macOS; displays native Linux/Windows equivalents (`Ctrl+K`, `Ctrl+,`, `Ctrl+O`, `Ctrl+Wheel`) on Linux and Windows.
+  - Updated search bar badges, shortcuts settings table, import tooltips, and sidebar settings hints to dynamically adapt to the running host OS.
+- **Functional List View with Persistence (`src/main.rs`, `src/library.rs`):**
+  - Added `view_mode_grid: bool` to `Settings` (persisted in `library.json`, defaults to `true`).
+  - Implemented `render_book_list_row`: 64px row displaying thumbnail cover, title, series badge, progress status, mini progress bar, and completion badges.
+  - Implemented `render_folder_list_row`: 64px series folder row with cover, folder icon, volume count badge, and chevron navigation.
+  - Seamlessly supported across `AllManga`, `History`, and `AniListCategory` views, maintaining selection and context-menu interactions in both grid and list modes.
+- **Separated Icon-Pair Switches in Toolbar (`src/ui/toolbar.rs`):**
+  - Separated folder grouping from view mode with a 10px spacing gap.
+  - Grouping Switch: icon pair `Folder` (series folders) vs `BookOpen` (individual volumes) with no text.
+  - View Mode Switch: icon pair `LayoutGrid` (grid view) vs `List` (list view) with no text.
+  - Interactive segmented controls with active accent fill, hover states, and native GPUI Kit tooltips.
+- **Native GPUI Kit Tooltips Throughout the Entire UI:**
+  - Integrated `gpui_kit::component::tooltip::Tooltip` across window traffic lights (close, minimize, zoom), toolbar controls (sidebar toggle, navigation back/forward, grouping toggles, view mode toggles, import button), manga details actions (back to library, continue reading, link AniList, more options), settings traffic light, and reader navigation chevrons.
+
 ## Build and verification
 
 On the configured NixOS system, use `devenv shell` (or `nix develop`) before launching. Useful commands:

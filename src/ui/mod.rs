@@ -1,6 +1,13 @@
-//! UI submodules for yomu.
+//! UI submodules for Yomu.
 
+pub mod anilist_search;
+pub mod collections_view;
 pub mod components;
+pub mod continue_reading;
+pub mod details;
 pub mod overlays;
 pub mod reader;
+pub mod settings_view;
+pub mod sidebar;
 pub mod theme;
+pub mod toolbar;

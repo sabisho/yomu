@@ -13,23 +13,17 @@ use std::{
 
 use anyhow::Result;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
-use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::progress::Progress;
-use gpui_kit::component::switch::Switch;
-use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
-use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{Theme as KitTheme, ThemeConfig};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Icon, Side as MenuSide, Sizable, Theme as KitTheme, ThemeConfig};
 #[allow(unused_imports)]
 use gpui_kit::popup::{PopupAnchor, PopupConstraintAdjustment, PopupGravity, PopupOptions};
 #[allow(unused_imports)]
 use gpui_kit::{
     Anchor, Animation, AnimationExt, AnyElement, AnyWindowHandle, App, Bounds, ClickEvent, Context,
-    Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyBinding, KeyDownEvent,
+    ElementId, Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyBinding, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, PathPromptOptions,
     PinchEvent, Pixels, Point, RenderImage, Rgba, ScrollDelta, ScrollHandle, ScrollWheelEvent,
     SharedString, Styled, Subscription, TitlebarOptions, TouchPhase, Window,
@@ -40,10 +34,13 @@ use image::Frame;
 use yomu::{
     archive, imaging,
     layout::{self, Arrive, FitMode, Viewport},
-    library::{self, Book, BorderSize, CornerRounding, DataDirs, Library, Settings, ThumbnailSize},
+    library::{
+        self, Book, BorderSize, CornerRounding, DataDirs, Library, Settings, ThemeModePreference,
+        ThumbnailSize,
+    },
     menu::{self, BookAction, Entry, Item},
-    motion::{self, KineticScroll},
-    pagecache, search,
+    motion::{self, InertialScroll, KineticScroll},
+    pagecache,
     selection::Selection,
     util::{format_size, now_secs},
     vim::{self, Action, Amount, Dir, Vim},
@@ -91,8 +88,10 @@ const AUTOSAVE_MAX_DELAY: Duration = Duration::from_millis(2000);
 
 /// Clicks this soon after a menu or dialog closes are ignored, so double-clicking a menu item
 /// cannot also click the book underneath it.
+#[allow(dead_code)]
 const CLICK_GUARD: Duration = Duration::from_millis(300);
 /// Clicks that caught / stopped an active inertial scroll glide are suppressed from opening cards.
+#[allow(dead_code)]
 const SCROLL_CATCH_GUARD: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy)]
@@ -103,6 +102,7 @@ enum Side {
 
 struct LibraryGroup<'a> {
     key: String,
+    #[allow(dead_code)]
     name: String,
     first_seen: usize,
     books: Vec<&'a Book>,
@@ -113,10 +113,10 @@ enum ImportEvent {
     Finished(library::ImportReport),
 }
 
-fn directory_groups(books: &[Book]) -> Vec<LibraryGroup<'_>> {
-    let mut buckets: std::collections::BTreeMap<String, (String, usize, Vec<&Book>)> =
+fn directory_groups<'a>(books: impl IntoIterator<Item = &'a Book>) -> Vec<LibraryGroup<'a>> {
+    let mut buckets: std::collections::BTreeMap<String, (String, usize, Vec<&'a Book>)> =
         std::collections::BTreeMap::new();
-    for (index, book) in books.iter().enumerate() {
+    for (index, book) in books.into_iter().enumerate() {
         let manual_series = book
             .series
             .as_deref()
@@ -193,11 +193,31 @@ impl UiScrollController {
     /// Process a scroll wheel event on this scrollable container.
     pub fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, reduce_motion: bool) {
         let discrete = matches!(event.delta, ScrollDelta::Lines(_));
-        if discrete
-            || event.touch_phase == TouchPhase::Started
-            || event.touch_phase == TouchPhase::Cancelled
-        {
+        if event.touch_phase == TouchPhase::Started || event.touch_phase == TouchPhase::Cancelled {
             self.kinetic.reset();
+            return;
+        }
+
+        // Discrete mouse wheel notch smoothing:
+        // When using physical mouse wheel notches, convert discrete jumps into a smooth inertia impulse.
+        if discrete {
+            if reduce_motion {
+                self.kinetic.reset();
+                return;
+            }
+            let delta = event.delta.pixel_delta(px(16.0));
+            let dy = f32::from(delta.y);
+            let impulse_vy = dy * 450.0;
+            let current_vy = self
+                .kinetic
+                .inertia
+                .as_ref()
+                .map(|i| i.velocity.1)
+                .unwrap_or(0.0);
+            let combined_vy = (current_vy * 0.4 + impulse_vy).clamp(-3000.0, 3000.0);
+            self.kinetic.inertia = Some(InertialScroll {
+                velocity: (0.0, combined_vy),
+            });
             return;
         }
 
@@ -260,7 +280,9 @@ struct Yomu {
     library: Library,
     colors: UiColors,
     custom_themes: HashMap<String, Rc<ThemeConfig>>,
+    #[allow(dead_code)]
     custom_theme_path: PathBuf,
+    #[allow(dead_code)]
     theme_status: Option<String>,
     reader: Option<Reader>,
     /// Images that are no longer shown. Their GPU textures are freed on the next render,
@@ -273,6 +295,7 @@ struct Yomu {
     importing: bool,
     importing_title: Option<String>,
     imported_count: usize,
+    system_dark: bool,
     /// The desktop asks for reduced motion (see `motion::detect_reduced_motion`).
     reduce_motion: bool,
     /// When the previous animated frame was drawn; `None` while nothing is animating.
@@ -300,13 +323,41 @@ struct Yomu {
     library_scroll: UiScrollController,
     group_scroll: UiScrollController,
     shortcuts_scroll: UiScrollController,
+    continue_reading_scroll: UiScrollController,
+    collections_scroll: UiScrollController,
+    details_scroll: UiScrollController,
+    settings_scroll: UiScrollController,
+    sidebar_scroll: UiScrollController,
+    anilist_search_scroll: UiScrollController,
+    anilist_category_scroll: UiScrollController,
     scroll_caught_at: Option<Instant>,
+    #[allow(dead_code)]
     library_pinch_accum: f32,
     cursor_pos: Option<(f32, f32)>,
     save_seq: u64,
     last_saved_seq: Arc<Mutex<u64>>,
     save_pending: bool,
     save_pending_since: Option<Instant>,
+    // Two-pane redesign fields:
+    active_section: ui::sidebar::SidebarSection,
+    active_view: ui::sidebar::MainView,
+    selected_book_id: Option<String>,
+    details_tab_index: usize,
+    details_synopsis_expanded: bool,
+    anilist_data: yomu::anilist::AniListData,
+    anilist_client: yomu::anilist::AniListClient,
+    anilist_search_results: Vec<yomu::anilist::AniListMedia>,
+    #[allow(dead_code)]
+    anilist_search_filter: String,
+    anilist_search_input: Option<Entity<InputState>>,
+    anilist_is_searching: bool,
+    anilist_search_error: Option<String>,
+    anilist_username_input: Option<Entity<InputState>>,
+    nav_history: Vec<ui::sidebar::MainView>,
+    nav_history_idx: usize,
+    view_mode_grid: bool,
+    selected_collection_id: Option<String>,
+    sidebar_collapsed: bool,
 }
 
 impl Yomu {
@@ -341,7 +392,11 @@ impl Yomu {
             Ok(themes) => custom_themes = themes,
             Err(error) => theme_status = Some(format!("Custom theme file: {error:#}")),
         }
-        let selected_theme = library.settings().theme_name.as_str();
+        let system_dark = true;
+        let scheme = library.settings().color_scheme.clone();
+        let mode = library.settings().theme_mode;
+        let resolved = ui::theme::resolve_theme_name(&scheme, mode, system_dark, &custom_themes);
+        let selected_theme = resolved.as_str();
         let selected_config = custom_themes
             .get(selected_theme)
             .cloned()
@@ -359,6 +414,11 @@ impl Yomu {
         Self::apply_corner_rounding(library.settings().corner_rounding, cx);
         let mut colors = UiColors::from_app(cx);
         colors.widget_opacity = library.settings().opacity;
+        let view_mode_grid = library.settings().view_mode_grid;
+        let anilist_data =
+            yomu::anilist::AniListData::load_or_default(&dirs.root().join("anilist.json"));
+        let anilist_client = yomu::anilist::AniListClient::new();
+        let anilist_username_input = None;
         let state = Self {
             focus_handle: cx.focus_handle(),
             dirs,
@@ -376,6 +436,7 @@ impl Yomu {
             importing: false,
             importing_title: None,
             imported_count: 0,
+            system_dark,
             reduce_motion: false,
             last_frame: None,
             dt_smoothed: None,
@@ -396,6 +457,13 @@ impl Yomu {
             library_scroll: UiScrollController::new(),
             group_scroll: UiScrollController::new(),
             shortcuts_scroll: UiScrollController::new(),
+            continue_reading_scroll: UiScrollController::new(),
+            collections_scroll: UiScrollController::new(),
+            details_scroll: UiScrollController::new(),
+            settings_scroll: UiScrollController::new(),
+            sidebar_scroll: UiScrollController::new(),
+            anilist_search_scroll: UiScrollController::new(),
+            anilist_category_scroll: UiScrollController::new(),
             scroll_caught_at: None,
             library_pinch_accum: 0.0,
             cursor_pos: None,
@@ -403,6 +471,24 @@ impl Yomu {
             last_saved_seq: Arc::new(Mutex::new(0)),
             save_pending: false,
             save_pending_since: None,
+            active_section: ui::sidebar::SidebarSection::AllManga,
+            active_view: ui::sidebar::MainView::AllManga,
+            selected_book_id: None,
+            details_tab_index: 0,
+            details_synopsis_expanded: false,
+            anilist_data,
+            anilist_client,
+            anilist_search_results: Vec::new(),
+            anilist_search_filter: "All".to_string(),
+            anilist_search_input: None,
+            anilist_is_searching: false,
+            anilist_search_error: None,
+            anilist_username_input,
+            nav_history: vec![ui::sidebar::MainView::AllManga],
+            nav_history_idx: 0,
+            view_mode_grid,
+            selected_collection_id: None,
+            sidebar_collapsed: false,
         };
 
         #[cfg(not(test))]
@@ -416,11 +502,12 @@ impl Yomu {
                 .background_executor()
                 .spawn(async { motion::detect_reduced_motion() })
                 .await;
-            this.update(cx, |this, cx| {
-                this.reduce_motion = reduce;
-                cx.notify();
-            })
-            .ok();
+            let _ = this
+                .update(cx, |this, cx| {
+                    this.reduce_motion = reduce;
+                    cx.notify();
+                })
+                .ok();
         })
         .detach();
 
@@ -564,14 +651,15 @@ impl Yomu {
             self.save_pending = true;
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(AUTOSAVE_DEBOUNCE).await;
-                this.update(cx, |this, cx| {
-                    if this.save_pending {
-                        this.save_pending = false;
-                        this.save_pending_since = None;
-                        this.flush_save_background(cx);
-                    }
-                })
-                .ok();
+                let _ = this
+                    .update(cx, |this, cx| {
+                        if this.save_pending {
+                            this.save_pending = false;
+                            this.save_pending_since = None;
+                            this.flush_save_background(cx);
+                        }
+                    })
+                    .ok();
             })
             .detach();
         }
@@ -604,13 +692,14 @@ impl Yomu {
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(5)).await;
-            this.update(cx, |this, cx| {
-                if this.toast_seq == seq {
-                    this.toast = None;
-                    cx.notify();
-                }
-            })
-            .ok();
+            let _ = this
+                .update(cx, |this, cx| {
+                    if this.toast_seq == seq {
+                        this.toast = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
         })
         .detach();
     }
@@ -629,13 +718,14 @@ impl Yomu {
             cx.background_executor()
                 .timer(Duration::from_secs(HUD_SECS))
                 .await;
-            this.update(cx, |this, cx| {
-                if this.hud_seq == seq {
-                    this.hud = None;
-                    cx.notify();
-                }
-            })
-            .ok();
+            let _ = this
+                .update(cx, |this, cx| {
+                    if this.hud_seq == seq {
+                        this.hud = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
         })
         .detach();
     }
@@ -664,12 +754,12 @@ impl Yomu {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn overlay_recently_closed(&self) -> bool {
         self.overlay_closed_at
             .is_some_and(|closed| closed.elapsed() < CLICK_GUARD)
     }
 
-    #[cfg(test)]
     fn open_book_menu(&mut self, id: &str, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(book) = self.library.get(id) else {
             return;
@@ -720,12 +810,26 @@ impl Yomu {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
             });
+        let existing_anilist = books
+            .iter()
+            .find_map(|book| {
+                self.anilist_data
+                    .matches
+                    .get(&book.id)
+                    .map(|id| id.to_string())
+            })
+            .unwrap_or_default();
         let value = existing.or(common_parent).unwrap_or_default();
         self.dismiss();
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(value)
                 .placeholder("Type a series name…")
+        });
+        let anilist_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(existing_anilist)
+                .placeholder("AniList ID or URL (e.g. 101517)…")
         });
         let focus_handle = input.read(cx).focus_handle(cx);
         window.focus(&focus_handle, cx);
@@ -735,7 +839,17 @@ impl Yomu {
             }
         })
         .detach();
-        self.overlay = Some(Overlay::Series(SeriesDialog { book_ids, input }));
+        cx.subscribe(&anilist_input, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.save_series_dialog(cx);
+            }
+        })
+        .detach();
+        self.overlay = Some(Overlay::Series(SeriesDialog {
+            book_ids,
+            input,
+            anilist_input,
+        }));
         cx.notify();
     }
 
@@ -747,16 +861,58 @@ impl Yomu {
         let count = dialog.book_ids.len();
         let value = dialog.input.read(cx).value().to_string();
         let series = (!value.trim().is_empty()).then_some(value);
+        let anilist_str = dialog.anilist_input.read(cx).value().to_string();
+        let parsed_id = yomu::anilist::parse_anilist_id(&anilist_str);
+
         self.library.set_series(&dialog.book_ids, series.clone());
         self.prune_open_group();
         self.save_library();
-        let message = match (series, count) {
+        let message = match (&series, count) {
             (Some(name), 1) => format!("Added to series “{name}”"),
             (Some(name), _) => format!("Assigned {count} books to “{name}”"),
             (None, 1) => "Removed from series".to_string(),
             (None, _) => format!("Removed {count} books from their series"),
         };
         self.show_toast(message, cx);
+
+        if let Some(id) = parsed_id {
+            let client = self.anilist_client.clone();
+            let book_ids = dialog.book_ids.clone();
+            let path = self.dirs.root().join("anilist.json");
+            let had_series = series.is_some();
+            cx.spawn(async move |this, cx| {
+                let res = cx
+                    .background_executor()
+                    .spawn(async move { client.fetch_media_by_id(id) })
+                    .await;
+                let _ = this.update(cx, |this, cx| match res {
+                    Ok(media) => {
+                        let pref_title = media.title.preferred().to_string();
+                        for bid in &book_ids {
+                            this.anilist_data.matches.insert(bid.clone(), media.id);
+                        }
+                        this.anilist_data.cache.insert(media.id, media);
+                        let _ = this.anilist_data.save(&path);
+
+                        if !had_series {
+                            this.library.set_series(&book_ids, Some(pref_title.clone()));
+                            this.save_library();
+                        }
+                        for bid in &book_ids {
+                            this.sync_book_progress_to_anilist(bid, cx);
+                        }
+                        this.show_toast(format!("Linked series to AniList: {pref_title}"), cx);
+                        cx.notify();
+                    }
+                    Err(err) => {
+                        this.show_toast(format!("AniList lookup note: {err}"), cx);
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        cx.notify();
     }
 
     fn menu_hover(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -778,14 +934,59 @@ impl Yomu {
     ) {
         // Bulk actions work on the selection, not on the book that was right-clicked.
         match action {
+            BookAction::Open => {
+                if let Some(group_key) = id.strip_prefix("group:") {
+                    self.enter_group(group_key.to_string(), cx);
+                    self.dismiss();
+                    return;
+                }
+            }
             BookAction::SetSeries => {
-                let ids = if self.selection.contains(id) && self.selection.len() > 1 {
+                let ids = if id.starts_with("group:")
+                    || (self.selection.contains(id) && self.selection.len() > 1)
+                {
                     self.selected_ids()
                 } else {
                     vec![id.to_string()]
                 };
                 self.open_series_dialog(ids, window, cx);
                 return;
+            }
+            BookAction::MarkRead => {
+                if id.starts_with("group:")
+                    || (self.selection.contains(id) && self.selection.len() > 1)
+                {
+                    let ids = self.selected_ids();
+                    for bid in &ids {
+                        if let Some(book) = self.library.get_mut(bid) {
+                            book.mark_read();
+                        }
+                        self.sync_book_progress_to_anilist(bid, cx);
+                    }
+                    self.save_library();
+                    self.selection.clear();
+                    self.dismiss();
+                    self.show_toast(format!("Marked {} books as read", ids.len()), cx);
+                    return;
+                }
+            }
+            BookAction::MarkUnread => {
+                if id.starts_with("group:")
+                    || (self.selection.contains(id) && self.selection.len() > 1)
+                {
+                    let ids = self.selected_ids();
+                    for bid in &ids {
+                        if let Some(book) = self.library.get_mut(bid) {
+                            book.reset_progress();
+                        }
+                        self.sync_book_progress_to_anilist(bid, cx);
+                    }
+                    self.save_library();
+                    self.selection.clear();
+                    self.dismiss();
+                    self.show_toast(format!("Marked {} books as unread", ids.len()), cx);
+                    return;
+                }
             }
             BookAction::RemoveSelected => {
                 self.request_remove_selected(cx);
@@ -843,6 +1044,7 @@ impl Yomu {
                     book.mark_read();
                 }
                 self.save_library();
+                self.sync_book_progress_to_anilist(id, cx);
                 self.show_toast(format!("Marked “{title}” as read"), cx);
             }
             BookAction::MarkUnread | BookAction::ResetProgress => {
@@ -850,6 +1052,7 @@ impl Yomu {
                     book.reset_progress();
                 }
                 self.save_library();
+                self.sync_book_progress_to_anilist(id, cx);
                 let message = if action == BookAction::ResetProgress {
                     format!("Progress reset for “{title}”")
                 } else {
@@ -888,6 +1091,18 @@ impl Yomu {
             ConfirmAction::ResetSettings => self.reset_settings(cx),
             ConfirmAction::ClearThumbnailCache => self.clear_thumbnail_cache(cx),
             ConfirmAction::ClearAllData => self.clear_all_data(cx),
+            ConfirmAction::DeleteCollection(id) => {
+                self.library.delete_collection(&id);
+                self.save_library();
+                self.show_toast("Collection deleted", cx);
+            }
+            ConfirmAction::DisconnectAniList => {
+                self.anilist_data.disconnect();
+                let _ = self
+                    .anilist_data
+                    .save(&self.dirs.root().join("anilist.json"));
+                self.show_toast("AniList disconnected", cx);
+            }
         }
     }
 
@@ -904,8 +1119,195 @@ impl Yomu {
         cx.notify();
     }
 
-    fn open_settings_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn open_settings_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.anilist_username_input.is_none() {
+            let default_val = self
+                .anilist_data
+                .user
+                .as_ref()
+                .map(|u| u.name.clone())
+                .unwrap_or_default();
+            self.anilist_username_input = Some(cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(default_val)
+                    .placeholder("Enter AniList username…")
+            }));
+        }
         self.open_settings(cx);
+    }
+
+    fn open_anilist_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings_tab = SettingsTab::AniList;
+        self.overlay = Some(Overlay::Settings);
+        cx.notify();
+    }
+
+    fn connect_anilist(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let username = if let Some(input) = self.anilist_username_input.as_ref() {
+            input.read(cx).value().trim().to_string()
+        } else {
+            String::new()
+        };
+        if username.is_empty() {
+            return;
+        }
+
+        self.anilist_data.user = Some(yomu::anilist::AniListUser {
+            id: 0,
+            name: username.clone(),
+            avatar_url: None,
+            token: None,
+        });
+        let _ = self
+            .anilist_data
+            .save(&self.dirs.root().join("anilist.json"));
+        self.show_toast(format!("Connecting to AniList as {}...", username), cx);
+        cx.notify();
+
+        let client = self.anilist_client.clone();
+        let path = self.dirs.root().join("anilist.json");
+        let uname = username.clone();
+        cx.spawn(async move |this, cx| {
+            let u = uname.clone();
+            let res = cx
+                .background_executor()
+                .spawn(async move { client.fetch_user_lists(&u) })
+                .await;
+            let _ = this.update(cx, |this, cx| match res {
+                Ok(media_list) => {
+                    let count = media_list.len();
+                    for media in media_list {
+                        this.anilist_data.cache.insert(media.id, media);
+                    }
+                    this.auto_match_all_manga();
+                    let _ = this.anilist_data.save(&path);
+                    this.show_toast(format!("Connected! Synced {} AniList manga", count), cx);
+                    cx.notify();
+                }
+                Err(err) => {
+                    this.show_toast(format!("Connected as {} (sync note: {})", uname, err), cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn disconnect_anilist(&mut self, cx: &mut Context<Self>) {
+        self.anilist_data.disconnect();
+        let _ = self
+            .anilist_data
+            .save(&self.dirs.root().join("anilist.json"));
+        self.anilist_username_input = None;
+        self.show_toast("Disconnected from AniList", cx);
+        cx.notify();
+    }
+
+    fn sync_anilist(&mut self, cx: &mut Context<Self>) {
+        let username = self.anilist_data.user_name().to_string();
+        if !self.anilist_data.is_connected() {
+            return;
+        }
+        self.show_toast("Syncing with AniList...", cx);
+        cx.notify();
+
+        let client = self.anilist_client.clone();
+        let path = self.dirs.root().join("anilist.json");
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { client.fetch_user_lists(&username) })
+                .await;
+            let _ = this.update(cx, |this, cx| match res {
+                Ok(media_list) => {
+                    let count = media_list.len();
+                    for media in media_list {
+                        this.anilist_data.cache.insert(media.id, media);
+                    }
+                    this.auto_match_all_manga();
+                    let _ = this.anilist_data.save(&path);
+                    this.show_toast(format!("Sync complete: {} manga updated", count), cx);
+                    cx.notify();
+                }
+                Err(err) => {
+                    this.show_toast(format!("Sync failed: {}", err), cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn auto_match_all_manga(&mut self) {
+        for book in self.library.books() {
+            if self.anilist_data.matches.contains_key(&book.id) {
+                continue;
+            }
+            let best = self
+                .anilist_data
+                .cache
+                .values()
+                .filter_map(|m| {
+                    let score = yomu::anilist::title_match_score(&book.title, m);
+                    if score >= 0.75 {
+                        Some((m.id, score))
+                    } else {
+                        None
+                    }
+                })
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            if let Some((media_id, _)) = best {
+                self.anilist_data.matches.insert(book.id.clone(), media_id);
+            }
+        }
+    }
+
+    fn sync_book_progress_to_anilist(&mut self, book_id: &str, cx: &mut Context<Self>) {
+        let Some(&media_id) = self.anilist_data.matches.get(book_id) else {
+            return;
+        };
+        let Some(book) = self.library.get(book_id) else {
+            return;
+        };
+        let current_page = book.current_page + 1;
+        let is_completed = book.is_finished();
+        let status = if is_completed {
+            yomu::anilist::MediaListStatus::Completed
+        } else {
+            yomu::anilist::MediaListStatus::Current
+        };
+        let progress = current_page as i32;
+        self.anilist_data
+            .queue_progress_update(media_id, progress, Some(status));
+        let _ = self
+            .anilist_data
+            .save(&self.dirs.root().join("anilist.json"));
+
+        if let Some(user) = &self.anilist_data.user
+            && let Some(token) = &user.token
+            && !token.is_empty()
+        {
+            let client = self.anilist_client.clone();
+            let token = token.clone();
+            let queue = self.anilist_data.sync_queue.clone();
+            let path = self.dirs.root().join("anilist.json");
+            cx.spawn(async move |this, cx| {
+                let res = cx
+                    .background_executor()
+                    .spawn(async move { client.sync_queued_updates(&token, &queue) })
+                    .await;
+                if let Ok(synced) = res {
+                    if synced > 0 {
+                        let _ = this.update(cx, |this, _| {
+                            this.anilist_data.sync_queue.clear();
+                            let _ = this.anilist_data.save(&path);
+                        });
+                    }
+                }
+            })
+            .detach();
+        }
     }
 
     fn set_thumbnail_size(&mut self, size: ThumbnailSize, cx: &mut Context<Self>) {
@@ -941,6 +1343,7 @@ impl Yomu {
         self.library.settings().corner_rounding.radius_xl_pixels()
     }
 
+    #[allow(dead_code)]
     fn set_border_size(&mut self, size: BorderSize, cx: &mut Context<Self>) {
         if self.library.settings().border_size == size {
             return;
@@ -950,6 +1353,7 @@ impl Yomu {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn set_corner_rounding(&mut self, rounding: CornerRounding, cx: &mut Context<Self>) {
         if self.library.settings().corner_rounding == rounding {
             return;
@@ -1027,7 +1431,13 @@ impl Yomu {
     fn reset_settings(&mut self, cx: &mut Context<Self>) {
         *self.library.settings_mut() = Settings::default();
         let defaults = self.library.settings().clone();
-        self.apply_theme(&defaults.theme_name, cx);
+        let resolved = ui::theme::resolve_theme_name(
+            &defaults.color_scheme,
+            defaults.theme_mode,
+            self.system_dark,
+            &self.custom_themes,
+        );
+        self.apply_theme(&resolved, cx);
         if let Some(reader) = self.reader.as_mut() {
             reader.fit = defaults.fit;
             reader.zoom = 1.0;
@@ -1054,6 +1464,17 @@ impl Yomu {
         KitTheme::update(cx, |theme| theme.apply_config(&config));
         Self::apply_corner_rounding(self.library.settings().corner_rounding, cx);
         self.library.settings_mut().theme_name = name.to_string();
+        if name.starts_with("Catppuccin") {
+            self.library.settings_mut().color_scheme = "Catppuccin".to_string();
+        } else if name.starts_with("Gruvbox") {
+            self.library.settings_mut().color_scheme = "Gruvbox".to_string();
+        } else if self.custom_themes.contains_key(name) {
+            let base = name
+                .strip_suffix(" Dark")
+                .or_else(|| name.strip_suffix(" Light"))
+                .unwrap_or(name);
+            self.library.settings_mut().color_scheme = base.to_string();
+        }
         self.colors = UiColors::from_app(cx);
         self.colors.widget_opacity = self.library.settings().opacity;
         self.theme_before_preview = None;
@@ -1150,6 +1571,44 @@ impl Yomu {
         self.apply_theme(&names[next], cx);
     }
 
+    fn set_theme_mode(&mut self, mode: ThemeModePreference, cx: &mut Context<Self>) {
+        self.library.settings_mut().theme_mode = mode;
+        let scheme = self.library.settings().color_scheme.clone();
+        let resolved =
+            ui::theme::resolve_theme_name(&scheme, mode, self.system_dark, &self.custom_themes);
+        self.apply_theme(&resolved, cx);
+    }
+
+    #[allow(dead_code)]
+    fn cycle_color_scheme(&mut self, cx: &mut Context<Self>) {
+        let schemes = ui::theme::available_color_schemes(&self.custom_themes);
+        if schemes.is_empty() {
+            return;
+        }
+        let current = self.library.settings().color_scheme.as_str();
+        let index = schemes.iter().position(|s| s == current).unwrap_or(0);
+        let next = (index + 1) % schemes.len();
+        let next_scheme = schemes[next].clone();
+        self.library.settings_mut().color_scheme = next_scheme.clone();
+        let mode = self.library.settings().theme_mode;
+        let resolved = ui::theme::resolve_theme_name(
+            &next_scheme,
+            mode,
+            self.system_dark,
+            &self.custom_themes,
+        );
+        self.apply_theme(&resolved, cx);
+    }
+
+    fn set_color_scheme(&mut self, scheme: &str, cx: &mut Context<Self>) {
+        self.library.settings_mut().color_scheme = scheme.to_string();
+        let mode = self.library.settings().theme_mode;
+        let resolved =
+            ui::theme::resolve_theme_name(scheme, mode, self.system_dark, &self.custom_themes);
+        self.apply_theme(&resolved, cx);
+    }
+
+    #[allow(dead_code)]
     fn reload_custom_themes(&mut self, cx: &mut Context<Self>) {
         let themes = match ensure_custom_theme_file(&self.custom_theme_path)
             .and_then(|()| load_custom_themes(&self.custom_theme_path, cx))
@@ -1185,6 +1644,22 @@ impl Yomu {
     /// Fully opaque windows use the opaque appearance, which lets the compositor skip blending;
     /// anything lower needs real alpha transparency.
     fn sync_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let is_dark = window.appearance() == gpui_kit::WindowAppearance::Dark;
+        if self.system_dark != is_dark {
+            self.system_dark = is_dark;
+            if self.library.settings().theme_mode == ThemeModePreference::System {
+                let scheme = self.library.settings().color_scheme.clone();
+                let resolved = ui::theme::resolve_theme_name(
+                    &scheme,
+                    ThemeModePreference::System,
+                    is_dark,
+                    &self.custom_themes,
+                );
+                if self.library.settings().theme_name != resolved {
+                    self.apply_theme(&resolved, cx);
+                }
+            }
+        }
         if self.applied_opaque == Some(true) {
             return;
         }
@@ -1264,6 +1739,16 @@ impl Yomu {
                 }
             }
             Some(Overlay::Series(_)) => {}
+            Some(Overlay::Collection(_)) => {
+                if matches!(token, "escape") {
+                    self.close_overlay(cx);
+                }
+            }
+            Some(Overlay::AniListMatch(_)) => {
+                if matches!(token, "escape") {
+                    self.close_overlay(cx);
+                }
+            }
             Some(Overlay::Settings) => {
                 if matches!(token, "escape" | "enter" | "q") {
                     self.close_overlay(cx);
@@ -1355,16 +1840,17 @@ impl Yomu {
             loop {
                 match receiver.try_recv() {
                     Ok(ImportEvent::Book(book)) => {
-                        this.update(cx, |this, cx| {
-                            let title = book.title.clone();
-                            if this.library.add(book) {
-                                this.save_library();
-                                this.imported_count += 1;
-                            }
-                            this.importing_title = Some(title);
-                            cx.notify();
-                        })
-                        .ok();
+                        let _ = this
+                            .update(cx, |this, cx| {
+                                let title = book.title.clone();
+                                if this.library.add(book) {
+                                    this.save_library();
+                                    this.imported_count += 1;
+                                }
+                                this.importing_title = Some(title);
+                                cx.notify();
+                            })
+                            .ok();
                         // Leave a frame for the newly inserted cover/title before showing the
                         // next completed volume, even when several finish almost together.
                         cx.background_executor()
@@ -1372,12 +1858,13 @@ impl Yomu {
                             .await;
                     }
                     Ok(ImportEvent::Finished(report)) => {
-                        this.update(cx, |this, cx| {
-                            this.importing = false;
-                            this.importing_title = None;
-                            this.show_toast(report.summary(), cx);
-                        })
-                        .ok();
+                        let _ = this
+                            .update(cx, |this, cx| {
+                                this.importing = false;
+                                this.importing_title = None;
+                                this.show_toast(report.summary(), cx);
+                            })
+                            .ok();
                         break;
                     }
                     Err(mpsc::TryRecvError::Empty) => {
@@ -1386,12 +1873,13 @@ impl Yomu {
                             .await;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        this.update(cx, |this, cx| {
-                            this.importing = false;
-                            this.importing_title = None;
-                            cx.notify();
-                        })
-                        .ok();
+                        let _ = this
+                            .update(cx, |this, cx| {
+                                this.importing = false;
+                                this.importing_title = None;
+                                cx.notify();
+                            })
+                            .ok();
                         break;
                     }
                 }
@@ -1472,6 +1960,12 @@ impl Yomu {
         handled
     }
 
+    fn select_all(&mut self, cx: &mut Context<Self>) {
+        let order = self.current_view_order();
+        self.selection.select_all(&order);
+        cx.notify();
+    }
+
     /// Right-click on a book: a book inside a multi-book selection gets the bulk menu; anywhere
     /// else the selection is dropped (like a file manager) and the book gets its own menu.
     fn open_context_menu(
@@ -1501,6 +1995,27 @@ impl Yomu {
         cx.notify();
     }
 
+    fn open_group_context_menu(
+        &mut self,
+        group_key: &str,
+        group_name: &str,
+        book_ids: &[String],
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.selection.select_all(book_ids);
+        let entries = menu::group_menu(group_name, book_ids.len());
+        let menu = BookMenu {
+            book_id: format!("group:{}", group_key),
+            entries,
+            position,
+            selected: None,
+        };
+        self.overlay = Some(Overlay::Menu(menu));
+        cx.notify();
+    }
+
+    #[allow(dead_code)]
     fn open_library_menu(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.overlay, Some(Overlay::LibraryMenu(_))) {
             self.close_overlay(cx);
@@ -1561,7 +2076,7 @@ impl Yomu {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(token, "C-f" | "/" | "slash") {
+        if matches!(token, "C-f" | "/" | "slash" | "C-k") {
             self.activate_search(window, cx);
             return;
         }
@@ -1606,6 +2121,7 @@ impl Yomu {
         }
     }
 
+    #[allow(dead_code)]
     fn enter_group(&mut self, key: String, cx: &mut Context<Self>) {
         self.selection.clear();
         self.open_group = Some(key);
@@ -1716,6 +2232,7 @@ impl Yomu {
     }
 
     fn close_book(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let closed_book_id = self.reader.as_ref().map(|r| r.book_id.clone());
         if let Some(reader) = self.reader.take() {
             for token in reader.cancellations.values() {
                 token.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1728,6 +2245,9 @@ impl Yomu {
         window.set_window_title("yomu");
         window.focus(&self.focus_handle, cx);
         self.save_library();
+        if let Some(id) = closed_book_id {
+            self.sync_book_progress_to_anilist(&id, cx);
+        }
         cx.notify();
     }
 
@@ -1986,6 +2506,16 @@ impl Yomu {
         cx.notify();
     }
 
+    #[allow(dead_code)]
+    fn cycle_fit(&mut self, cx: &mut Context<Self>) {
+        if let Some(next) = self.reader.as_ref().map(|r| r.fit.next()) {
+            self.set_fit(next, cx);
+        } else {
+            let next = self.library.settings().fit.next();
+            self.set_fit(next, cx);
+        }
+    }
+
     fn set_remember_zoom(&mut self, value: Option<bool>, cx: &mut Context<Self>) {
         let next = value.unwrap_or(!self.library.settings().remember_zoom);
         self.library.settings_mut().remember_zoom = next;
@@ -2006,6 +2536,7 @@ impl Yomu {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn reset_zoom(&mut self, cx: &mut Context<Self>) {
         self.library.settings_mut().zoom = 1.0;
         if let Some(reader) = self.reader.as_mut() {
@@ -2214,6 +2745,7 @@ impl Yomu {
         }
     }
 
+    #[allow(dead_code)]
     fn on_library_pinch(&mut self, delta: f32, phase: TouchPhase, cx: &mut Context<Self>) {
         if phase == TouchPhase::Started || phase == TouchPhase::Cancelled {
             self.library_pinch_accum = 0.0;
@@ -2261,6 +2793,10 @@ impl Yomu {
     }
 
     fn drag_start(&mut self, at: (f32, f32)) {
+        // Prevent click/drag interaction when mouse is over the top bar
+        if at.1 <= 56.0 {
+            return;
+        }
         if let Some(reader) = self.reader.as_mut() {
             reader.kinetic.reset();
             let off0 = reader.off;
@@ -2543,7 +3079,7 @@ impl Yomu {
                     reader.show_help = !reader.show_help;
                     cx.notify();
                 } else {
-                    self.settings_tab = SettingsTab::Keyboard;
+                    self.settings_tab = SettingsTab::Shortcuts;
                     self.open_settings(cx);
                 }
             }
@@ -2804,10 +3340,11 @@ impl Yomu {
 
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            this.update(cx, |this, cx| {
-                this.page_decoded(book_id, ix, tier, result, cx)
-            })
-            .ok();
+            let _ = this
+                .update(cx, |this, cx| {
+                    this.page_decoded(book_id, ix, tier, result, cx)
+                })
+                .ok();
         })
         .detach();
     }
@@ -2873,6 +3410,8 @@ impl Yomu {
             Overlay::Confirm(dialog) => self.render_confirm(dialog, cx),
             Overlay::Properties(dialog) => self.render_properties(dialog, cx),
             Overlay::Series(dialog) => self.render_series_dialog(dialog, cx),
+            Overlay::Collection(dialog) => self.render_collection_dialog(dialog, cx),
+            Overlay::AniListMatch(dialog) => self.render_anilist_match_dialog(dialog, cx),
             Overlay::Settings => self.render_settings(cx),
         })
     }
@@ -3333,33 +3872,81 @@ impl Yomu {
     fn render_series_dialog(&self, dialog: &SeriesDialog, cx: &mut Context<Self>) -> AnyElement {
         self.scrim(true, cx)
             .child(
-                self.animate_popup("series-dialog", self.panel(460.))
+                self.animate_popup("series-dialog", self.panel(480.))
                     .child(
                         div()
                             .text_lg()
                             .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(self.colors.foreground)
                             .child(if dialog.book_ids.len() == 1 {
-                                "Set series"
+                                "Set Series & AniList Info"
                             } else {
-                                "Set series for selected books"
+                                "Set Series for Selected Books"
                             }),
                     )
-                    .child(div().text_color(self.colors.muted).child(
-                        "A folder name is suggested when the books share a parent folder. Edit it, or clear the field to leave them ungrouped.",
+                    .child(div().text_xs().text_color(self.colors.muted).child(
+                        "Assign a series name to group these volumes, or link to AniList by ID/URL to sync cover art, metadata, and reading progress.",
                     ))
                     .child(
                         div()
-                            .w_full()
-                            .rounded(px(self.radius_px()))
-                            .border_1()
-                            .border_color(self.colors.accent)
+                            .flex()
+                            .flex_col()
+                            .gap_1()
                             .child(
-                                Input::new(&dialog.input)
-                                    .id("series-name-input")
-                                    .cleanable(true)
-                                    .bordered(false)
-                                    .focus_bordered(false)
-                                    .w_full(),
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(self.colors.foreground)
+                                    .child("Series Name:"),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .rounded(px(self.radius_px()))
+                                    .border_1()
+                                    .border_color(self.colors.accent)
+                                    .child(
+                                        Input::new(&dialog.input)
+                                            .id("series-name-input")
+                                            .cleanable(true)
+                                            .bordered(false)
+                                            .focus_bordered(false)
+                                            .w_full(),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(self.colors.foreground)
+                                    .child("AniList ID or Manga URL (optional):"),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .rounded(px(self.radius_px()))
+                                    .border_1()
+                                    .border_color(with_alpha(self.colors.border, 0.8))
+                                    .child(
+                                        Input::new(&dialog.anilist_input)
+                                            .id("series-anilist-input")
+                                            .cleanable(true)
+                                            .bordered(false)
+                                            .focus_bordered(false)
+                                            .w_full(),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(self.colors.muted)
+                                    .child("e.g. 101517 or https://anilist.co/manga/101517"),
                             ),
                     )
                     .child(
@@ -3369,7 +3956,7 @@ impl Yomu {
                             .justify_between()
                             .items_center()
                             .child(div().text_xs().text_color(self.colors.muted).child(
-                                "Type · Enter to save · Esc to cancel",
+                                "Enter to save · Esc to cancel",
                             ))
                             .child(
                                 div()
@@ -3402,1505 +3989,2873 @@ impl Yomu {
             .into_any_element()
     }
 
-    fn render_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let settings = self.library.settings();
-        let theme_name = settings.theme_name.clone();
-        let theme_path = self.custom_theme_path.display().to_string();
-        let theme_status = self.theme_status.clone();
-        let border_size = settings.border_size;
-        let corner_rounding = settings.corner_rounding;
-        let continuous = settings.continuous;
-        let webcomics = settings.webcomics;
-        let fit = settings.fit;
-        let remember_zoom = settings.remember_zoom;
-        let zoom_val = settings.zoom;
-        let animate = settings.animate;
-        let grouped = settings.group_series;
-        let thumb_size = settings.thumbnail_size;
-        let is_default = *settings == Settings::default();
-        let cache_bytes = self.dirs.cache_size_bytes();
-        let book_count = self.library.books().len();
-
-        let yomu = cx.entity();
-        let tab_bar = TabBar::new("settings-tab-bar")
-            .underline()
-            .selected_index(self.settings_tab.to_index())
-            .on_click({
-                let yomu = yomu.clone();
-                move |&idx, _window, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.settings_tab = SettingsTab::from_index(idx);
-                        cx.notify();
-                    });
-                }
-            })
-            .child(
-                Tab::new()
-                    .label("Appearance")
-                    .prefix(Icon::new(IconName::Palette))
-                    .cursor_pointer(),
-            )
-            .child(
-                Tab::new()
-                    .label("Library")
-                    .prefix(Icon::new(IconName::Library))
-                    .cursor_pointer(),
-            )
-            .child(
-                Tab::new()
-                    .label("Reader")
-                    .prefix(Icon::new(IconName::BookOpen))
-                    .cursor_pointer(),
-            )
-            .child(
-                Tab::new()
-                    .label("Storage")
-                    .prefix(Icon::new(IconName::HardDrive))
-                    .cursor_pointer(),
-            )
-            .child(
-                Tab::new()
-                    .label("Shortcuts")
-                    .prefix(Icon::new(IconName::Keyboard))
-                    .cursor_pointer(),
-            );
-
+    fn render_collection_dialog(
+        &self,
+        dialog: &ui::overlays::CollectionDialog,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_edit = !dialog.is_new;
         let border_px = self.border_px();
         let rounding_xl = self.radius_xl_px();
-        let rounding_md = self.radius_px();
-        let adw_group = move |title: &'static str, rows: Vec<AnyElement>| {
-            let section_slug = title
-                .chars()
-                .map(|c| {
-                    if c.is_alphanumeric() {
-                        c.to_ascii_lowercase()
-                    } else {
-                        '-'
-                    }
-                })
-                .collect::<String>();
-            let section_id = SharedString::from(format!("settings-section-{section_slug}"));
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .px_1()
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(self.colors.muted)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .id(section_id)
-                        .flex()
-                        .flex_col()
-                        .rounded(px(rounding_xl))
-                        .overflow_hidden()
-                        .when(border_px > 0.0, |this| {
-                            this.border(px(border_px)).border_color(self.colors.border)
-                        })
-                        .hover(move |style| {
-                            if border_px > 0.0 {
-                                style.border_color(self.colors.accent)
-                            } else {
-                                style
-                            }
-                        })
-                        .bg(self.widget_surface(self.colors.surface))
-                        .children(rows),
-                )
-        };
-
-        let adw_row = move |icon: IconName,
-                            title: &'static str,
-                            subtitle: Option<String>,
-                            control: AnyElement,
-                            is_last: bool| {
-            let mut row = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .px_4()
-                .py_3()
-                .gap_4();
-            if !is_last {
-                row = row.border_b_1().border_color(self.colors.border);
-            }
-            row.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .p_2()
-                            .rounded(px(rounding_md))
-                            .bg(self.colors.surface_hover)
-                            .text_color(self.colors.accent)
-                            .child(Icon::new(icon).size(px(16.))),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(self.colors.foreground)
-                                    .child(title),
-                            )
-                            .children(subtitle.map(|sub| {
-                                div().text_xs().text_color(self.colors.muted).child(sub)
-                            })),
-                    ),
-            )
-            .child(control)
-            .into_any_element()
-        };
-
-        fn dropdown_item(
-            opt_label: &'static str,
-            is_current: bool,
-            on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-        ) -> PopupMenuItem {
-            PopupMenuItem::element(move |_, _| div().cursor_pointer().flex_1().child(opt_label))
-                .checked(is_current)
-                .on_click(on_click)
-        }
-
         let yomu = cx.entity();
-        let body = match self.settings_tab {
-            SettingsTab::Appearance => {
-                let theme_row = adw_row(
-                    IconName::Palette,
-                    "Color Theme",
-                    Some("Select the theme used for all windows and controls".into()),
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .child(panel_button(
-                            "settings-theme-previous",
-                            "‹",
-                            ButtonKind::Normal,
-                            self.colors,
-                            true,
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.cycle_theme(-1, cx)),
-                        ))
-                        .child(
-                            div()
-                                .min_w(px(120.))
-                                .text_center()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(self.colors.foreground)
-                                .child(theme_name),
-                        )
-                        .child(panel_button(
-                            "settings-theme-next",
-                            "›",
-                            ButtonKind::Normal,
-                            self.colors,
-                            true,
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.cycle_theme(1, cx)),
-                        ))
-                        .into_any_element(),
-                    false,
-                );
-
-                const BORDER_OPTIONS: &[(BorderSize, &str)] = &[
-                    (BorderSize::None, "None (0px)"),
-                    (BorderSize::Thin, "Thin (1px)"),
-                    (BorderSize::Medium, "Medium (2px)"),
-                    (BorderSize::Thick, "Thick (3px)"),
-                    (BorderSize::ExtraThick, "Extra Thick (4px)"),
-                ];
-                let border_dropdown = Button::new("settings-border-size")
-                    .label(border_size.label())
-                    .dropdown_caret(true)
-                    .rounded(ButtonRounded::Medium)
-                    .small()
-                    .secondary()
-                    .outline()
-                    .bg(self.colors.surface)
-                    .border_color(self.colors.border)
-                    .cursor_pointer()
-                    .dropdown_menu_with_anchor(Anchor::TopRight, {
-                        let yomu = yomu.clone();
-                        move |mut menu, _window, _cx| {
-                            for &(val, opt_label) in BORDER_OPTIONS {
-                                let yomu = yomu.clone();
-                                let is_current = val == border_size;
-                                menu = menu.item(dropdown_item(
-                                    opt_label,
-                                    is_current,
-                                    move |_, _window, cx| {
-                                        yomu.update(cx, |this, cx| {
-                                            this.set_border_size(val, cx);
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        }
-                    });
-                let border_row = adw_row(
-                    IconName::Layers,
-                    "Border Thickness",
-                    Some("Border width for cards, dialogs, and controls".into()),
-                    border_dropdown.into_any_element(),
-                    false,
-                );
-
-                const ROUNDING_OPTIONS: &[(CornerRounding, &str)] = &[
-                    (CornerRounding::Sharp, "Sharp (0px)"),
-                    (CornerRounding::Subtle, "Subtle (4px)"),
-                    (CornerRounding::Medium, "Medium (8px)"),
-                    (CornerRounding::Soft, "Soft (14px)"),
-                    (CornerRounding::Round, "Round (20px)"),
-                    (CornerRounding::ExtraSoft, "Extra Soft (28px)"),
-                ];
-                let rounding_dropdown = Button::new("settings-corner-rounding")
-                    .label(corner_rounding.label())
-                    .dropdown_caret(true)
-                    .rounded(ButtonRounded::Medium)
-                    .small()
-                    .secondary()
-                    .outline()
-                    .bg(self.colors.surface)
-                    .border_color(self.colors.border)
-                    .cursor_pointer()
-                    .dropdown_menu_with_anchor(Anchor::TopRight, {
-                        let yomu = yomu.clone();
-                        move |mut menu, _window, _cx| {
-                            for &(val, opt_label) in ROUNDING_OPTIONS {
-                                let yomu = yomu.clone();
-                                let is_current = val == corner_rounding;
-                                menu = menu.item(dropdown_item(
-                                    opt_label,
-                                    is_current,
-                                    move |_, _window, cx| {
-                                        yomu.update(cx, |this, cx| {
-                                            this.set_corner_rounding(val, cx);
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        }
-                    });
-                let rounding_row = adw_row(
-                    IconName::Maximize2,
-                    "Corner Rounding",
-                    Some("Corner radius style across the user interface".into()),
-                    rounding_dropdown.into_any_element(),
-                    false,
-                );
-
-                let reload_row = adw_row(
-                    IconName::FolderOpen,
-                    "Custom Themes Directory",
-                    Some(theme_path),
-                    panel_button(
-                        "settings-theme-reload",
-                        "Reload Themes",
-                        ButtonKind::Normal,
-                        self.colors,
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.reload_custom_themes(cx)),
-                    ),
-                    true,
-                );
-                let mut app_group = adw_group(
-                    "APPEARANCE",
-                    vec![theme_row, border_row, rounding_row, reload_row],
-                );
-                if let Some(status) = theme_status {
-                    app_group = app_group.child(
-                        div()
-                            .px_1()
-                            .text_xs()
-                            .text_color(self.colors.muted)
-                            .child(status),
-                    );
-                }
-                app_group.into_any_element()
-            }
-            SettingsTab::Library => {
-                const THUMB_OPTIONS: &[(ThumbnailSize, &str)] = &[
-                    (ThumbnailSize::ExtraSmall, "Extra Small (150px)"),
-                    (ThumbnailSize::Small, "Small (180px)"),
-                    (ThumbnailSize::Medium, "Medium (210px)"),
-                    (ThumbnailSize::Large, "Large (240px)"),
-                    (ThumbnailSize::ExtraLarge, "Extra Large (280px)"),
-                    (ThumbnailSize::Huge, "Huge (340px)"),
-                ];
-                let thumb_dropdown = Button::new("settings-thumbnail-size")
-                    .label(thumb_size.label())
-                    .dropdown_caret(true)
-                    .rounded(ButtonRounded::Medium)
-                    .small()
-                    .secondary()
-                    .outline()
-                    .bg(self.colors.surface)
-                    .border_color(self.colors.border)
-                    .cursor_pointer()
-                    .dropdown_menu_with_anchor(Anchor::TopRight, {
-                        let yomu = yomu.clone();
-                        move |mut menu, _window, _cx| {
-                            for &(val, opt_label) in THUMB_OPTIONS {
-                                let yomu = yomu.clone();
-                                let is_current = val == thumb_size;
-                                menu = menu.item(dropdown_item(
-                                    opt_label,
-                                    is_current,
-                                    move |_, _window, cx| {
-                                        yomu.update(cx, |this, cx| {
-                                            this.set_thumbnail_size(val, cx);
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        }
-                    });
-                let thumb_row = adw_row(
-                    IconName::Layers,
-                    "Thumbnail Card Size",
-                    Some("Size of cover art cards displayed in the library grid".into()),
-                    thumb_dropdown.into_any_element(),
-                    false,
-                );
-                let group_switch = Switch::new("settings-group-series")
-                    .checked(grouped)
-                    .small()
-                    .cursor_pointer()
-                    .on_click({
-                        let yomu = yomu.clone();
-                        move |&checked, _window, cx| {
-                            yomu.update(cx, |this, cx| {
-                                this.library.settings_mut().group_series = checked;
-                                this.selection.clear();
-                                this.open_group = None;
-                                this.group_scroll.reset();
-                                this.save_library();
-                                cx.notify();
-                            });
-                        }
-                    });
-                let group_row = adw_row(
-                    IconName::FolderArchive,
-                    "Folder Grouping",
-                    Some("Group volumes from the same directory into folder cards".into()),
-                    group_switch.into_any_element(),
-                    true,
-                );
-                adw_group("LIBRARY DISPLAY & LAYOUT", vec![thumb_row, group_row]).into_any_element()
-            }
-            SettingsTab::Reader => {
-                const FIT_OPTIONS: &[(FitMode, &str)] = &[
-                    (FitMode::Page, "Fit Page"),
-                    (FitMode::Width, "Fit Width"),
-                    (FitMode::Height, "Fit Height"),
-                    (FitMode::Original, "Original Size"),
-                ];
-                let is_custom_zoom = remember_zoom && (zoom_val - 1.0).abs() > 0.01;
-                let fit_subtitle = if is_custom_zoom {
-                    format!(
-                        "Baseline mode: {} (custom zoom active: {}%)",
-                        fit.label(),
-                        (zoom_val * 100.0).round() as i32
-                    )
-                } else if remember_zoom {
-                    format!("Baseline layout mode: {}", fit.label())
-                } else {
-                    "Layout mode used when opening any book (resets to 100%)".to_string()
-                };
-
-                let fit_dropdown = Button::new("settings-fit")
-                    .label(fit.label())
-                    .dropdown_caret(true)
-                    .rounded(ButtonRounded::Medium)
-                    .small()
-                    .secondary()
-                    .outline()
-                    .bg(self.colors.surface)
-                    .border_color(self.colors.border)
-                    .cursor_pointer()
-                    .dropdown_menu_with_anchor(Anchor::TopRight, {
-                        let yomu = yomu.clone();
-                        move |mut menu, _window, _cx| {
-                            for &(mode, opt_label) in FIT_OPTIONS {
-                                let yomu = yomu.clone();
-                                let is_current = mode == fit && !is_custom_zoom;
-                                menu = menu.item(dropdown_item(
-                                    opt_label,
-                                    is_current,
-                                    move |_, _window, cx| {
-                                        yomu.update(cx, |this, cx| {
-                                            this.set_fit(mode, cx);
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        }
-                    });
-
-                let mut fit_trailing = div().flex().items_center().gap_2();
-                if is_custom_zoom {
-                    let yomu = yomu.clone();
-                    fit_trailing = fit_trailing.child(
-                        Button::new("settings-reset-zoom")
-                            .label("Reset 100%")
-                            .rounded(ButtonRounded::Medium)
-                            .small()
-                            .ghost()
-                            .cursor_pointer()
-                            .on_click(move |_, _window, cx| {
-                                yomu.update(cx, |this, cx| {
-                                    this.reset_zoom(cx);
-                                });
-                            }),
-                    );
-                }
-                fit_trailing = fit_trailing.child(fit_dropdown);
-
-                let fit_row = adw_row(
-                    IconName::Maximize2,
-                    "Default Page Fit",
-                    Some(fit_subtitle),
-                    fit_trailing.into_any_element(),
-                    false,
-                );
-
-                let zoom_switch = Switch::new("settings-remember-zoom")
-                    .checked(remember_zoom)
-                    .small()
-                    .cursor_pointer()
-                    .on_click({
-                        let yomu = yomu.clone();
-                        move |&checked, _window, cx| {
-                            yomu.update(cx, |this, cx| {
-                                this.set_remember_zoom(Some(checked), cx);
-                            });
-                        }
-                    });
-                let zoom_row = adw_row(
-                    IconName::ZoomIn,
-                    "Remember Zoom Level",
-                    Some(
-                        "Retain custom zoom and pinch magnification across all books instead of resetting on open".into(),
-                    ),
-                    zoom_switch.into_any_element(),
-                    false,
-                );
-                let anim_switch = Switch::new("settings-animations")
-                    .checked(animate)
-                    .small()
-                    .cursor_pointer()
-                    .on_click({
-                        let yomu = yomu.clone();
-                        move |&checked, _window, cx| {
-                            yomu.update(cx, |this, cx| {
-                                this.set_animations(Some(checked), cx);
-                            });
-                        }
-                    });
-                let anim_row = adw_row(
-                    IconName::Sparkles,
-                    "Page Animations",
-                    Some("Slide transitions between page turns and smooth scroll gliding".into()),
-                    anim_switch.into_any_element(),
-                    false,
-                );
-                let cont_switch = Switch::new("settings-continuous")
-                    .checked(continuous)
-                    .small()
-                    .cursor_pointer()
-                    .on_click({
-                        let yomu = yomu.clone();
-                        move |&checked, _window, cx| {
-                            yomu.update(cx, |this, cx| {
-                                this.set_continuous(Some(checked), cx);
-                            });
-                        }
-                    });
-                let cont_row = adw_row(
-                    IconName::AlignVerticalSpaceBetween,
-                    "Continuous Vertical Mode",
-                    Some("Stack pages vertically and scroll through the whole book".into()),
-                    cont_switch.into_any_element(),
-                    false,
-                );
-                let webc_switch = Switch::new("settings-webcomics")
-                    .checked(webcomics)
-                    .small()
-                    .cursor_pointer()
-                    .on_click({
-                        let yomu = yomu.clone();
-                        move |&checked, _window, cx| {
-                            yomu.update(cx, |this, cx| {
-                                this.set_webcomics(Some(checked), cx);
-                            });
-                        }
-                    });
-                let webc_row = adw_row(
-                    IconName::Film,
-                    "Webcomics Mode",
-                    Some(
-                        "Forces a connected, gapless vertical strip for continuous reading".into(),
-                    ),
-                    webc_switch.into_any_element(),
-                    true,
-                );
-                adw_group(
-                    "READING BEHAVIOR",
-                    vec![fit_row, zoom_row, anim_row, cont_row, webc_row],
-                )
-                .into_any_element()
-            }
-            SettingsTab::Storage => {
-                let cache_row = adw_row(
-                    IconName::HardDrive,
-                    "Thumbnail Cache",
-                    Some(format!(
-                        "{} used across cached cover sizes",
-                        format_size(cache_bytes)
-                    )),
-                    panel_button(
-                        "settings-clear-cache",
-                        "Clear Cache",
-                        ButtonKind::Normal,
-                        self.colors,
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.request_clear_thumbnail_cache(cx)
-                        }),
-                    ),
-                    false,
-                );
-                let data_row = adw_row(
-                    IconName::Database,
-                    "Application Data",
-                    Some(format!(
-                        "{} comics registered · permanently wipes library and progress",
-                        book_count
-                    )),
-                    panel_button(
-                        "settings-clear-all",
-                        "Reset All Data",
-                        ButtonKind::Danger,
-                        self.colors,
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.request_clear_all_data(cx)),
-                    ),
-                    true,
-                );
-                adw_group("STORAGE & DATA MANAGEMENT", vec![cache_row, data_row]).into_any_element()
-            }
-            SettingsTab::Keyboard => {
-                let mut body = TableBody::new();
-
-                for (section_idx, (section, rows)) in HELP.iter().enumerate() {
-                    let section_cell = TableCell::new().col_span(2).child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .w_full()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(self.colors.accent)
-                                    .child(section.to_uppercase()),
-                            )
-                            .child(
-                                Tag::secondary()
-                                    .small()
-                                    .child(format!("{} shortcuts", rows.len())),
-                            ),
-                    );
-
-                    body = body.child(
-                        TableRow::new()
-                            .bg(self.colors.surface_hover)
-                            .when(section_idx > 0, |row| {
-                                row.border_t_1().border_color(self.colors.border)
-                            })
-                            .child(section_cell),
-                    );
-
-                    for (keys, description) in rows.iter() {
-                        let desc_cell = TableCell::new().child(
-                            div()
-                                .text_xs()
-                                .text_color(self.colors.foreground)
-                                .child(*description),
-                        );
-
-                        let key_id =
-                            SharedString::from(format!("shortcut-key-{section_idx}-{keys}"));
-                        let key_cell = TableCell::new().text_right().child(
-                            div()
-                                .id(key_id)
-                                .px_2()
-                                .py_0p5()
-                                .rounded(px(rounding_md))
-                                .when(border_px > 0.0, |this| {
-                                    this.border(px(border_px))
-                                        .border_color(with_alpha(self.colors.border, 0.7))
-                                })
-                                .hover(move |style| {
-                                    if border_px > 0.0 {
-                                        style.border_color(self.colors.accent)
-                                    } else {
-                                        style
-                                    }
-                                })
-                                .bg(self.colors.surface)
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(self.colors.accent)
-                                .child(*keys),
-                        );
-
-                        body = body.child(TableRow::new().child(desc_cell).child(key_cell));
-                    }
-                }
-
-                let table = Table::new()
-                    .small()
-                    .child(
-                        TableHeader::new().child(
-                            TableRow::new()
-                                .child(TableHead::new().child("ACTION"))
-                                .child(TableHead::new().text_right().child("SHORTCUT")),
-                        ),
-                    )
-                    .child(body);
-
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .px_1()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(self.colors.muted)
-                            .child("KEYBOARD SHORTCUTS & COMMANDS"),
-                    )
-                    .child(
-                        div()
-                            .id("settings-shortcuts-card")
-                            .flex()
-                            .flex_col()
-                            .rounded(px(rounding_xl))
-                            .overflow_hidden()
-                            .when(border_px > 0.0, |this| {
-                                this.border(px(border_px)).border_color(self.colors.border)
-                            })
-                            .hover(move |style| {
-                                if border_px > 0.0 {
-                                    style.border_color(self.colors.accent)
-                                } else {
-                                    style
-                                }
-                            })
-                            .bg(self.widget_surface(self.colors.surface))
-                            .child(
-                                div()
-                                    .id("settings-shortcuts-scroll")
-                                    .track_scroll(&self.shortcuts_scroll.handle)
-                                    .h(px(320.))
-                                    .overflow_y_scroll()
-                                    .on_scroll_wheel(cx.listener(
-                                        |this, event: &ScrollWheelEvent, _, cx| {
-                                            this.shortcuts_scroll
-                                                .handle_scroll_wheel(event, this.reduce_motion);
-                                            this.wake();
-                                            cx.notify();
-                                        },
-                                    ))
-                                    .child(table),
-                            ),
-                    )
-                    .into_any_element()
-            }
-        };
+        let editing_id = dialog.collection_id.clone();
+        let input_state = dialog.input.clone();
 
         self.scrim(true, cx)
             .child(
-                self.animate_popup("settings-dialog", self.panel(680.))
+                div()
+                    .w(px(380.))
+                    .rounded(px(rounding_xl))
+                    .when(border_px > 0.0, |this| {
+                        this.border(px(border_px)).border_color(self.colors.border)
+                    })
+                    .bg(self.colors.background)
+                    .p_5()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .shadow_xl()
+                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation()
+                    })
                     .child(
                         div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(self.colors.foreground)
-                                    .child("Settings"),
-                            ),
+                            .text_base()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(self.colors.foreground)
+                            .child(if is_edit {
+                                "Rename Collection"
+                            } else {
+                                "New Collection"
+                            }),
                     )
-                    .child(tab_bar)
-                    .child(div().min_h(px(280.)).child(body))
+                    .child(Input::new(&dialog.input))
                     .child(
                         div()
                             .flex()
-                            .flex_row()
-                            .justify_between()
-                            .items_center()
-                            .pt_2()
-                            .border_t_1()
-                            .border_color(self.colors.border)
-                            .child(panel_button(
-                                "settings-reset",
-                                "Reset to Defaults",
-                                ButtonKind::Normal,
-                                self.colors,
-                                !is_default,
-                                cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.request_reset_settings(cx)
-                                }),
-                            ))
-                            .child(panel_button(
-                                "settings-done",
-                                "Done",
-                                ButtonKind::Primary,
-                                self.colors,
-                                true,
-                                cx.listener(|this, _: &ClickEvent, _, cx| this.close_overlay(cx)),
-                            )),
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("collection-dialog-cancel")
+                                    .label("Cancel")
+                                    .rounded(ButtonRounded::Medium)
+                                    .outline()
+                                    .on_click({
+                                        let yomu = yomu.clone();
+                                        move |_, _, cx| {
+                                            yomu.update(cx, |this, cx| this.close_overlay(cx))
+                                        }
+                                    }),
+                            )
+                            .child(
+                                Button::new("collection-dialog-save")
+                                    .primary()
+                                    .label(if is_edit { "Rename" } else { "Create" })
+                                    .rounded(ButtonRounded::Medium)
+                                    .bg(self.colors.accent)
+                                    .text_color(self.colors.accent_foreground)
+                                    .on_click({
+                                        let yomu = yomu.clone();
+                                        move |_, _, cx| {
+                                            let name = input_state.read(cx).value().to_string();
+                                            if !name.trim().is_empty() {
+                                                yomu.update(cx, |this, cx| {
+                                                    if let Some(id) = &editing_id {
+                                                        this.library
+                                                            .rename_collection(id, name.trim());
+                                                    } else {
+                                                        this.library.add_collection(name.trim());
+                                                    }
+                                                    this.save_library();
+                                                    this.close_overlay(cx);
+                                                });
+                                            }
+                                        }
+                                    }),
+                            ),
                     ),
             )
             .into_any_element()
     }
 
-    fn render_library(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let all_books = self.library.books();
-        let count = all_books.len();
-        let books: Vec<&Book> = all_books
-            .iter()
-            .filter(|book| {
-                search::matches(
-                    &book.title,
-                    &book.path,
-                    book.series.as_deref(),
-                    &self.search_query,
-                )
-            })
-            .collect();
+    fn render_anilist_match_dialog(
+        &self,
+        dialog: &ui::overlays::AniListMatchDialog,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let border_px = self.border_px();
+        let rounding_xl = self.radius_xl_px();
+        let yomu = cx.entity();
+        let input_state = dialog.input.clone();
 
-        let thumb_size = self.library.settings().thumbnail_size;
-        let card_w = thumb_size.card_width();
-        let gap = 24.0;
-        let pad_x = 24.0;
-        let vp_w: f32 = window.viewport_size().width.into();
-        let avail_w = (vp_w - pad_x * 2.0).max(card_w);
-        let cols = ((avail_w + gap) / (card_w + gap)).floor().max(1.0) as usize;
-        let grid_w = (cols as f32 * card_w + (cols.saturating_sub(1) as f32) * gap).min(avail_w);
-
-        let make_grid = |elements: Vec<AnyElement>| {
-            div().w_full().flex().flex_row().justify_center().child(
-                div()
-                    .w(px(grid_w))
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap_6()
-                    .children(elements),
-            )
-        };
-        let status: Option<SharedString> = if self.importing {
-            Some(
-                self.importing_title
-                    .as_ref()
-                    .map(|title| format!("{} imported · {title}", self.imported_count))
-                    .unwrap_or_else(|| "Scanning folder…".to_string())
-                    .into(),
-            )
-        } else {
-            self.toast.clone()
-        };
-
-        let view_order = self.current_view_order();
-        let view_count = view_order.len();
-        let selected = self.selected_ids().len();
-        let rounding_md = self.radius_px();
-        let is_search_focused = self.search_active;
-
-        let search_field: AnyElement = if let Some(input) = &self.search_input {
-            div()
-                .id("library-search-wrapper")
-                .w(px(360.))
-                .rounded(px(rounding_md))
-                .border_1()
-                .border_color(if is_search_focused {
-                    self.colors.accent
-                } else {
-                    self.colors.border
-                })
-                .hover(|style| {
-                    if !is_search_focused {
-                        style.border_color(self.colors.accent)
-                    } else {
-                        style
-                    }
-                })
-                .child(
-                    Input::new(input)
-                        .id("library-search")
-                        .cleanable(true)
-                        .bordered(false)
-                        .focus_bordered(false)
-                        .prefix(Icon::new(IconName::Search).size(px(16.)))
-                        .w_full(),
-                )
-                .into_any_element()
-        } else {
-            div().id("library-search").w(px(360.)).into_any_element()
-        };
-
-        let selection_controls = if selected > 0 {
-            let controls = div().flex().flex_row().items_center().gap_2();
-            let controls = if selected < view_count {
-                controls.child(panel_button(
-                    "select-all",
-                    "Select all",
-                    ButtonKind::Normal,
-                    self.colors,
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                        let order = this.current_view_order();
-                        this.selection.select_all(&order);
-                        cx.notify();
-                    }),
-                ))
-            } else {
-                controls
-            };
-            Some(
-                controls
-                    .child(panel_button(
-                        "select-remove",
-                        "Remove",
-                        ButtonKind::Danger,
-                        self.colors,
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.request_remove_selected(cx)),
-                    ))
-                    .child(panel_button(
-                        "select-cancel",
-                        "Cancel",
-                        ButtonKind::Normal,
-                        self.colors,
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.selection.clear();
-                            cx.notify();
-                        }),
-                    )),
-            )
-        } else {
-            None
-        };
-
-        let back_button = (self.open_group.is_some()).then(|| {
-            icon_button(
-                "group-back",
-                "Back to library",
-                IconName::ArrowLeft,
-                self.colors,
-                false,
-                cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.exit_group(cx);
-                }),
-            )
-        });
-
-        let left_controls = match (back_button, selection_controls) {
-            (Some(back), Some(sel)) => Some(
-                div()
-                    .absolute()
-                    .left_6()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .child(back)
-                    .child(sel),
-            ),
-            (Some(back), None) => Some(
-                div()
-                    .absolute()
-                    .left_6()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .child(back),
-            ),
-            (None, Some(sel)) => Some(
-                div()
-                    .absolute()
-                    .left_6()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .child(sel),
-            ),
-            (None, None) => None,
-        };
-
-        let menu_open = matches!(self.overlay, Some(Overlay::LibraryMenu(_)));
-        let header = div()
-            .relative()
-            .w_full()
-            .flex()
-            .flex_row()
-            .flex_none()
-            .items_center()
-            .h(px(72.))
-            .px_6()
-            .children(left_controls)
-            .when(selected == 0 && self.open_group.is_none(), |h| {
-                #[cfg(test)]
-                {
-                    h.child(div().debug_selector(|| "add-files".into()).size_0())
-                }
-                #[cfg(not(test))]
-                {
-                    h
-                }
-            })
+        self.scrim(true, cx)
             .child(
                 div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
+                    .w(px(420.))
+                    .rounded(px(rounding_xl))
+                    .when(border_px > 0.0, |this| {
+                        this.border(px(border_px)).border_color(self.colors.border)
+                    })
+                    .bg(self.colors.background)
+                    .p_5()
                     .flex()
-                    .justify_center()
-                    .child(search_field),
-            )
-            .child(div().flex_1().flex().justify_end().child(icon_button(
-                "library-menu-toggle",
-                "Open menu",
-                IconName::Menu,
-                self.colors,
-                menu_open,
-                cx.listener(|this, _: &ClickEvent, window, cx| {
-                    if matches!(this.overlay, Some(Overlay::LibraryMenu(_))) {
-                        this.close_overlay(cx);
-                    } else {
-                        this.open_library_menu(window, cx);
-                    }
-                }),
-            )));
-
-        let body = if count == 0 {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xl()
-                        .text_color(self.colors.foreground)
-                        .child("Your library is empty"),
-                )
-                .child(div().text_sm().text_color(self.colors.muted).child(
-                    "Drop comic archives (CBZ, CBR) or folders onto this window, or use Add files (Ctrl+O).",
-                ))
-                .into_any_element()
-        } else if books.is_empty() {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xl()
-                        .text_color(self.colors.foreground)
-                        .child("No matching books"),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(self.colors.muted)
-                        .child("Try another title or source path."),
-                )
-                .into_any_element()
-        } else if self.library.settings().group_series {
-            let groups = directory_groups(all_books);
-            let visible_groups: Vec<_> = if self.search_query.trim().is_empty() {
-                groups
-                    .iter()
-                    .filter_map(|group| {
-                        (!group.books.is_empty()).then_some((group, group.books.clone()))
+                    .flex_col()
+                    .gap_4()
+                    .shadow_xl()
+                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation()
                     })
-                    .collect()
-            } else {
-                let visible_ids: HashSet<&str> = books.iter().map(|b| b.id.as_str()).collect();
-                groups
-                    .iter()
-                    .filter_map(|group| {
-                        let members: Vec<_> = group
-                            .books
-                            .iter()
-                            .copied()
-                            .filter(|book| visible_ids.contains(book.id.as_str()))
-                            .collect();
-                        (!members.is_empty()).then_some((group, members))
-                    })
-                    .collect()
-            };
-            if let Some(open_key) = self.open_group.as_deref()
-                && let Some(group) = groups.iter().find(|group| group.key == open_key)
-            {
-                let members: Vec<_> = if self.search_query.trim().is_empty() {
-                    group.books.clone()
-                } else {
-                    let visible_ids: HashSet<&str> = books.iter().map(|b| b.id.as_str()).collect();
-                    group
-                        .books
-                        .iter()
-                        .copied()
-                        .filter(|book| visible_ids.contains(book.id.as_str()))
-                        .collect()
-                };
-                let mut content = div().flex().flex_col().gap_4().child(
-                    div().flex().items_center().gap_3().child(
+                    .child(
                         div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_base()
+                            .font_weight(FontWeight::BOLD)
                             .text_color(self.colors.foreground)
-                            .child(format!("{} · {}", group.name, members.len())),
+                            .child("Match with AniList"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(self.colors.muted)
+                            .child("Enter the manga title or Romanized name to search AniList:"),
+                    )
+                    .child(Input::new(&dialog.input))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("anilist-match-cancel")
+                                    .label("Cancel")
+                                    .rounded(ButtonRounded::Medium)
+                                    .outline()
+                                    .on_click({
+                                        let yomu = yomu.clone();
+                                        move |_, _, cx| {
+                                            yomu.update(cx, |this, cx| this.close_overlay(cx))
+                                        }
+                                    }),
+                            )
+                            .child(
+                                Button::new("anilist-match-search")
+                                    .primary()
+                                    .label("Search")
+                                    .rounded(ButtonRounded::Medium)
+                                    .bg(self.colors.accent)
+                                    .text_color(self.colors.accent_foreground)
+                                    .on_click({
+                                        let yomu = yomu.clone();
+                                        move |_, _, cx| {
+                                            let query = input_state.read(cx).value().to_string();
+                                            yomu.update(cx, |this, cx| {
+                                                this.close_overlay(cx);
+                                                this.start_anilist_search(&query, cx);
+                                            });
+                                        }
+                                    }),
+                            ),
                     ),
-                );
-                let grid_or_empty = if members.is_empty() {
-                    div()
-                        .py_12()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_lg()
-                                .text_color(self.colors.foreground)
-                                .child("No matching books in this group"),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(self.colors.muted)
-                                .child("Try another title or source path."),
-                        )
-                        .into_any_element()
-                } else {
-                    make_grid(
-                        members
-                            .iter()
-                            .map(|book| self.book_card(book, cx))
-                            .collect(),
-                    )
-                    .into_any_element()
-                };
-                content = content.child(grid_or_empty);
-                div()
-                    .id("group-grid")
-                    .track_scroll(&self.group_scroll.handle)
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                        this.group_scroll
-                            .handle_scroll_wheel(event, this.reduce_motion);
-                        this.wake();
+            )
+            .into_any_element()
+    }
+
+    fn render_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let border_px = self.border_px();
+        let cache_bytes = self.dirs.cache_size_bytes();
+        let anilist_username = self.anilist_data.user_name();
+        let anilist_connected = self.anilist_data.is_connected();
+        let auto_sync = false;
+        let yomu = cx.entity();
+
+        let anilist_username_input = self.anilist_username_input.as_ref();
+        let anilist_matched_count = self.anilist_data.matches.len();
+        let anilist_sync_count = self.anilist_data.sync_queue.len();
+
+        let props = ui::settings_view::SettingsViewProps {
+            scroll_handle: &self.settings_scroll.handle,
+            current_tab: self.settings_tab,
+            settings: self.library.settings(),
+            available_schemes: ui::theme::available_color_schemes(&self.custom_themes),
+            anilist_username,
+            anilist_connected,
+            auto_sync_anilist: auto_sync,
+            anilist_username_input,
+            anilist_matched_count,
+            anilist_sync_count,
+            cache_size_str: format_size(cache_bytes),
+            colors: self.colors,
+            radius: px(self.radius_xl_px()),
+        };
+
+        let view = ui::settings_view::render_settings_view(
+            props,
+            {
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        this.settings_scroll.handle_scroll_wheel(e, reduce);
                         cx.notify();
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseDownEvent, _, _| {
-                            this.catch_ui_inertia();
-                        }),
-                    )
-                    .px_6()
-                    .pb_6()
-                    .child(content)
-                    .into_any_element()
-            } else {
-                let grouped_ids: HashSet<_> = visible_groups
-                    .iter()
-                    .flat_map(|(_, members)| members.iter().map(|book| book.id.as_str()))
-                    .collect();
-                let loose_books: Vec<_> = books
-                    .iter()
-                    .copied()
-                    .filter(|book| !grouped_ids.contains(book.id.as_str()))
-                    .collect();
-                let mut cards: Vec<AnyElement> = visible_groups
-                    .iter()
-                    .map(|(group, members)| self.group_card(group, members, cx))
-                    .collect();
-                cards.extend(loose_books.iter().map(|book| self.book_card(book, cx)));
-                div()
-                    .id("grid")
-                    .track_scroll(&self.library_scroll.handle)
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                        this.library_scroll
-                            .handle_scroll_wheel(event, this.reduce_motion);
-                        this.wake();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        this.settings_scroll.cancel_inertia();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |tab, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.settings_tab = tab;
                         cx.notify();
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseDownEvent, _, _| {
-                            this.catch_ui_inertia();
-                        }),
-                    )
-                    .px_6()
-                    .pb_6()
-                    .child(make_grid(cards))
-                    .into_any_element()
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.close_overlay(cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |checked, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_continuous(Some(checked), cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |checked, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_webcomics(Some(checked), cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |checked, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.library.settings_mut().group_series = checked;
+                        this.save_library();
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |checked, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_animations(Some(checked), cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |checked, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.library.settings_mut().remember_zoom = checked;
+                        this.save_library();
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |mode, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_theme_mode(mode, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |scheme, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_color_scheme(&scheme, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |size, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_thumbnail_size(size, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |rounding, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_corner_rounding(rounding, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |border, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_border_size(border, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.request_clear_thumbnail_cache(cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.request_reset_settings(cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.request_clear_all_data(cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.disconnect_anilist(cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.sync_anilist(cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |window, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.connect_anilist(window, cx);
+                    });
+                }
+            },
+        );
+
+        self.scrim(true, cx)
+            .child(
+                div()
+                    .w(px(860.))
+                    .min_w(px(640.))
+                    .max_w(relative(0.92))
+                    .h(px(620.))
+                    .min_h(px(460.))
+                    .max_h(relative(0.90))
+                    .rounded(px(self.radius_xl_px()))
+                    .when(border_px > 0.0, |this| {
+                        this.border(px(border_px)).border_color(self.colors.border)
+                    })
+                    .bg(self.colors.background)
+                    .shadow_xl()
+                    .overflow_hidden()
+                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                    })
+                    .child(view),
+            )
+            .into_any_element()
+    }
+
+    fn render_two_pane_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
+        let radius = px(self.radius_px());
+        let yomu = cx.entity();
+
+        let auto_collapse = window.viewport_size().width < px(720.);
+        let is_collapsed = self.sidebar_collapsed || auto_collapse;
+
+        if self.anilist_username_input.is_none() {
+            let default_val = self
+                .anilist_data
+                .user
+                .as_ref()
+                .map(|u| u.name.clone())
+                .unwrap_or_default();
+            self.anilist_username_input = Some(cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(default_val)
+                    .placeholder("Enter AniList username…")
+            }));
+        }
+
+        // 1. Sidebar Props
+        let continue_reading_count = self
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.has_progress())
+            .count();
+        let all_manga_count = self.library.books().len();
+        let collections_count = self.library.collections.len() + 4;
+        let downloads_count = self
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.path.exists())
+            .count();
+        let anilist_connected = self.anilist_data.is_connected();
+        let user_name = self.anilist_data.user_name();
+        let anilist_counts = [
+            self.anilist_data.count_by_status(None),
+            self.anilist_data
+                .count_by_status(Some(yomu::anilist::MediaListStatus::Planning)),
+            self.anilist_data
+                .count_by_status(Some(yomu::anilist::MediaListStatus::Current)),
+            self.anilist_data
+                .count_by_status(Some(yomu::anilist::MediaListStatus::Completed)),
+            self.anilist_data
+                .count_by_status(Some(yomu::anilist::MediaListStatus::Paused)),
+            self.anilist_data
+                .count_by_status(Some(yomu::anilist::MediaListStatus::Dropped)),
+        ];
+
+        let sidebar_props = ui::sidebar::SidebarProps {
+            scroll_handle: &self.sidebar_scroll.handle,
+            current_section: self.active_section,
+            continue_reading_count,
+            all_manga_count,
+            collections_count,
+            downloads_count,
+            anilist_counts,
+            user_name: user_name.into(),
+            anilist_connected,
+            colors,
+            radius,
+        };
+
+        let sidebar = ui::sidebar::render_sidebar(
+            sidebar_props,
+            {
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        this.sidebar_scroll.handle_scroll_wheel(e, reduce);
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        this.sidebar_scroll.cancel_inertia();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |sec, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let view = match sec {
+                            ui::sidebar::SidebarSection::ContinueReading => {
+                                ui::sidebar::MainView::ContinueReading
+                            }
+                            ui::sidebar::SidebarSection::AllManga => {
+                                ui::sidebar::MainView::AllManga
+                            }
+                            ui::sidebar::SidebarSection::Collections => {
+                                ui::sidebar::MainView::Collections
+                            }
+                            ui::sidebar::SidebarSection::History => ui::sidebar::MainView::History,
+                            ui::sidebar::SidebarSection::Downloads => {
+                                ui::sidebar::MainView::Downloads
+                            }
+                            ui::sidebar::SidebarSection::AniList(cat) => {
+                                ui::sidebar::MainView::AniListCategory(cat)
+                            }
+                        };
+                        this.navigate_to(view, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.open_settings(cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.open_anilist_settings(cx);
+                    });
+                }
+            },
+            {
+                let _yomu = yomu.clone();
+                move |_, window, _| window.remove_window()
+            },
+            {
+                let _yomu = yomu.clone();
+                move |_, window, _| window.minimize_window()
+            },
+            {
+                let _yomu = yomu.clone();
+                move |_, window, _| window.toggle_fullscreen()
+            },
+        );
+
+        // 2. Toolbar Props
+        let search_input = self.search_input.as_ref();
+        let toolbar_props = ui::toolbar::MainToolbarProps {
+            can_go_back: self.open_group.is_some() || self.nav_history_idx > 0,
+            can_go_forward: self.nav_history_idx + 1 < self.nav_history.len(),
+            is_in_group: self.open_group.is_some(),
+            sidebar_collapsed: is_collapsed,
+            is_scrolled: self.is_current_view_scrolled(),
+            search_input,
+            is_grid_mode: self.view_mode_grid,
+            is_group_series: self.library.settings().group_series,
+            colors,
+            radius,
+        };
+
+        let toolbar = ui::toolbar::render_main_toolbar(
+            toolbar_props,
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.toggle_sidebar(cx))
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.navigate_back(cx))
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.navigate_forward(cx))
+            },
+            {
+                let yomu = yomu.clone();
+                move |grid, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.view_mode_grid = grid;
+                        this.library.settings_mut().view_mode_grid = grid;
+                        this.save_library();
+                        cx.notify();
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |group, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.library.settings_mut().group_series = group;
+                        this.save_library();
+                        cx.notify();
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.import_dialog(false, cx))
+            },
+        );
+
+        // 3. Main Content
+        let content: AnyElement = match &self.active_view {
+            ui::sidebar::MainView::ContinueReading => self.render_continue_reading_view(window, cx),
+            ui::sidebar::MainView::AllManga => self.render_all_manga_view(window, cx),
+            ui::sidebar::MainView::Collections => self.render_collections_screen(window, cx),
+            ui::sidebar::MainView::History => self.render_history_view(window, cx),
+            ui::sidebar::MainView::Downloads => self.render_downloads_view(window, cx),
+            ui::sidebar::MainView::AniListCategory(cat) => {
+                self.render_anilist_category_view(*cat, window, cx)
             }
-        } else {
-            div()
-                .id("grid")
-                .track_scroll(&self.library_scroll.handle)
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                    this.library_scroll
-                        .handle_scroll_wheel(event, this.reduce_motion);
-                    this.wake();
-                    cx.notify();
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, _| {
-                        this.catch_ui_inertia();
-                    }),
-                )
-                .px_6()
-                .pb_6()
-                .child(make_grid(
-                    books.iter().map(|book| self.book_card(book, cx)).collect(),
-                ))
-                .into_any_element()
+            ui::sidebar::MainView::Details(book_id) => {
+                let id = book_id.clone();
+                self.render_details_screen(&id, window, cx)
+            }
+            ui::sidebar::MainView::AniListSearch => self.render_anilist_search_screen(window, cx),
+            ui::sidebar::MainView::Settings => self.render_settings(cx),
         };
 
         div()
             .size_full()
-            .relative()
             .flex()
-            .flex_col()
-            .on_pinch(cx.listener(|this, event: &PinchEvent, _, cx| {
-                this.on_library_pinch(event.delta, event.phase, cx);
-            }))
-            .child(header)
-            .child(body)
-            .children(status.map(|text| {
+            .flex_row()
+            .bg(colors.background)
+            .when(!is_collapsed, |s| s.child(sidebar))
+            .child(
                 div()
-                    .absolute()
-                    .bottom_5()
-                    .left_0()
-                    .right_0()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
                     .flex()
-                    .justify_center()
-                    .child(pill(div(), text, self.colors))
-            }))
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(toolbar)
+                    .child(
+                        div()
+                            .id("main-view-content")
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_hidden()
+                            .child(content),
+                    ),
+            )
             .into_any_element()
     }
 
-    fn group_card(
+    fn render_continue_reading_view(
         &self,
-        group: &LibraryGroup<'_>,
-        books: &[&Book],
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let first = books[0];
-        let group_key = group.key.clone();
+        let colors = self.colors;
+        let radius = px(self.radius_px());
+        let yomu = cx.entity();
+
+        let books = self.library.books();
+        let hero_book = books
+            .iter()
+            .filter(|b| b.has_progress())
+            .max_by_key(|b| b.last_read)
+            .or_else(|| books.first());
+
+        let hero = hero_book.map(|book| {
+            let cover_path = self.dirs.cover(&book.id);
+            let display_title = book.title.as_str();
+            let total = book.page_count;
+            let current = if book.opened {
+                book.current_page + 1
+            } else {
+                0
+            };
+            let progress = book.progress();
+            let chapter_label = format!("Ch. {current} of {total}");
+            let genres = book
+                .series
+                .as_ref()
+                .map(|s| vec![s.clone()])
+                .unwrap_or_default();
+
+            ui::continue_reading::ContinueReadingItem {
+                book,
+                cover_path,
+                display_title,
+                chapter_label,
+                progress,
+                genres,
+            }
+        });
+
+        let mut sorted_queue: Vec<&Book> = books.iter().filter(|b| b.has_progress()).collect();
+        sorted_queue.sort_by(|a, b| b.last_read.cmp(&a.last_read));
+
+        let queue: Vec<ui::continue_reading::ContinueReadingItem> = sorted_queue
+            .iter()
+            .skip(1)
+            .take(3)
+            .map(|book| {
+                let cover_path = self.dirs.cover(&book.id);
+                let display_title = book.title.as_str();
+                let _total = book.page_count;
+                let current = if book.opened {
+                    book.current_page + 1
+                } else {
+                    0
+                };
+                let progress = book.progress();
+                let chapter_label = format!("Ch. {current}");
+
+                ui::continue_reading::ContinueReadingItem {
+                    book,
+                    cover_path,
+                    display_title,
+                    chapter_label,
+                    progress,
+                    genres: Vec::new(),
+                }
+            })
+            .collect();
+
         let thumb_size = self.library.settings().thumbnail_size;
-        let card_w = thumb_size.card_width();
-        let card_h = thumb_size.card_height();
-        let border_px = self.border_px();
-        let rounding_lg = self.radius_lg_px();
-        let inner_radius = if border_px > 0.0 {
-            (rounding_lg - border_px).max(0.0)
-        } else {
-            rounding_lg
+        let sidebar_collapsed = self.is_sidebar_collapsed(window);
+        let grid = ui::components::compute_responsive_grid(
+            f32::from(window.viewport_size().width),
+            !sidebar_collapsed,
+            thumb_size,
+        );
+        let card_w = grid.card_w;
+        let cover_h = grid.cover_h;
+
+        let mut sorted_recent: Vec<&Book> = books.iter().collect();
+        sorted_recent.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+
+        let recent: Vec<ui::continue_reading::ContinueReadingItem> = sorted_recent
+            .iter()
+            .take(6)
+            .map(|book| {
+                let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
+                let display_title = book.title.as_str();
+                let _total = book.page_count;
+                let current = if book.opened {
+                    book.current_page + 1
+                } else {
+                    0
+                };
+                let progress = book.progress();
+                let chapter_label = format!("Ch. {current}");
+
+                ui::continue_reading::ContinueReadingItem {
+                    book,
+                    cover_path,
+                    display_title,
+                    chapter_label,
+                    progress,
+                    genres: Vec::new(),
+                }
+            })
+            .collect();
+
+        let props = ui::continue_reading::ContinueReadingProps {
+            scroll_handle: &self.continue_reading_scroll.handle,
+            hero,
+            queue,
+            recent,
+            colors,
+            radius,
+            border_px: self.border_px(),
+            card_w,
+            cover_h,
         };
 
+        ui::continue_reading::render_continue_reading_view(
+            props,
+            {
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        this.continue_reading_scroll.handle_scroll_wheel(e, reduce);
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        this.continue_reading_scroll.cancel_inertia();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |id, window, cx| yomu.update(cx, |this, cx| this.open_book(id, window, cx))
+            },
+            {
+                let yomu = yomu.clone();
+                move |id, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.navigate_to(ui::sidebar::MainView::Details(id.to_string()), cx)
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.navigate_to(ui::sidebar::MainView::AllManga, cx)
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |id, pos, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.open_book_menu(id, point(px(pos.0), px(pos.1)), cx)
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.import_dialog(false, cx);
+                    });
+                }
+            },
+        )
+    }
+
+    fn render_collections_screen(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = self.colors;
+        let radius = px(self.radius_px());
+        let yomu = cx.entity();
+
+        let favorites_count = self.library.favorites.len();
+        let reading_count = self
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.has_progress())
+            .count();
+        let want_to_read_count = self
+            .library
+            .books()
+            .iter()
+            .filter(|b| !b.has_progress())
+            .count();
+        let completed_count = self
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.is_finished())
+            .count();
+
+        let props = ui::collections_view::CollectionsProps {
+            scroll_handle: &self.collections_scroll.handle,
+            favorites_count,
+            reading_count,
+            want_to_read_count,
+            completed_count,
+            custom_collections: self.library.collections.as_slice(),
+            colors,
+            radius,
+        };
+
+        ui::collections_view::render_collections_view(
+            props,
+            {
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        this.collections_scroll.handle_scroll_wheel(e, reduce);
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        this.collections_scroll.cancel_inertia();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.navigate_to(ui::sidebar::MainView::AllManga, cx);
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |id, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.selected_collection_id = Some(id.to_string());
+                        this.navigate_to(ui::sidebar::MainView::AllManga, cx);
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, window, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let input = cx
+                            .new(|cx| InputState::new(window, cx).placeholder("Collection Name…"));
+                        this.overlay = Some(ui::overlays::Overlay::Collection(
+                            ui::overlays::CollectionDialog {
+                                is_new: true,
+                                collection_id: None,
+                                input,
+                            },
+                        ));
+                        cx.notify();
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |id, _pos, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.overlay = Some(ui::overlays::Overlay::Confirm(
+                            ui::overlays::ConfirmDialog {
+                                title: "Delete Collection?".into(),
+                                message: "This collection will be deleted. Underlying manga files will not be affected.".into(),
+                                confirm_label: "Delete",
+                                action: ui::overlays::ConfirmAction::DeleteCollection(id.to_string()),
+                            },
+                        ));
+                        cx.notify();
+                    })
+                }
+            },
+        )
+    }
+
+    fn render_history_view(&self, window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
+        let radius = px(self.radius_px());
+        let yomu = _cx.entity();
+
+        let mut history_books: Vec<&Book> = self
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.has_progress())
+            .collect();
+        history_books.sort_by(|a, b| b.last_read.cmp(&a.last_read));
+
+        if history_books.is_empty() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .text_color(colors.muted)
+                .child(Icon::new(IconName::Clock).size(px(48.)))
+                .child(div().text_base().child("No reading history yet"))
+                .into_any_element();
+        }
+
+        let thumb_size = self.library.settings().thumbnail_size;
+        let sidebar_collapsed = self.is_sidebar_collapsed(window);
+        let grid = ui::components::compute_responsive_grid(
+            f32::from(window.viewport_size().width),
+            !sidebar_collapsed,
+            thumb_size,
+        );
+        let card_w = grid.card_w;
+        let cover_h = grid.cover_h;
+
+        let border_px = self.border_px();
+        let is_grid = self.view_mode_grid;
+        let cards: Vec<AnyElement> = history_books
+            .iter()
+            .map(|book| {
+                let book_id = book.id.clone();
+                let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
+                let display_title = book.title.clone();
+                let total = book.page_count;
+                let current = if book.opened {
+                    book.current_page + 1
+                } else {
+                    0
+                };
+                let progress = book.progress();
+
+                if is_grid {
+                    div()
+                        .id(ElementId::from(SharedString::from(format!(
+                            "hist-item-{}",
+                            book.id
+                        ))))
+                        .w(px(card_w))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .rounded(radius)
+                        .bg(with_alpha(colors.surface, 0.6))
+                        .when(border_px > 0.0, |s| {
+                            s.border(px(border_px)).border_color(colors.border)
+                        })
+                        .overflow_hidden()
+                        .cursor_pointer()
+                        .hover(|s| s.border_color(colors.accent).shadow_md())
+                        .on_click({
+                            let yomu = yomu.clone();
+                            let book_id = book_id.clone();
+                            move |_, _, cx| {
+                                yomu.update(cx, |this, cx| {
+                                    this.navigate_to(
+                                        ui::sidebar::MainView::Details(book_id.clone()),
+                                        cx,
+                                    );
+                                });
+                            }
+                        })
+                        .child(
+                            div()
+                                .id(ElementId::from(SharedString::from(format!(
+                                    "hist-cover-{}",
+                                    book.id
+                                ))))
+                                .relative()
+                                .w_full()
+                                .h(px(cover_h))
+                                .bg(with_alpha(colors.foreground, 0.04))
+                                .overflow_hidden()
+                                .child(
+                                    img(cover_path)
+                                        .size_full()
+                                        .object_fit(gpui_kit::ObjectFit::Cover),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .p_2p5()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(colors.foreground)
+                                        .truncate()
+                                        .child(display_title),
+                                )
+                                .child(div().text_xs().text_color(colors.muted).truncate().child(
+                                    format!("Ch. {current} of {total} · {:.0}%", progress * 100.0),
+                                )),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .id(ElementId::from(SharedString::from(format!(
+                            "hist-item-{}",
+                            book.id
+                        ))))
+                        .w_full()
+                        .h(px(64.))
+                        .px_3p5()
+                        .rounded(radius)
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .bg(with_alpha(colors.surface, 0.5))
+                        .when(border_px > 0.0, |s| {
+                            s.border(px(border_px)).border_color(colors.border)
+                        })
+                        .cursor_pointer()
+                        .hover(|s| {
+                            s.bg(with_alpha(colors.surface, 0.8))
+                                .border_color(colors.accent)
+                        })
+                        .on_click({
+                            let yomu = yomu.clone();
+                            let book_id = book_id.clone();
+                            move |_, _, cx| {
+                                yomu.update(cx, |this, cx| {
+                                    this.navigate_to(
+                                        ui::sidebar::MainView::Details(book_id.clone()),
+                                        cx,
+                                    );
+                                });
+                            }
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .min_w_0()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .id(ElementId::from(SharedString::from(format!(
+                                            "hist-cover-{}",
+                                            book.id
+                                        ))))
+                                        .w(px(36.))
+                                        .h(px(50.))
+                                        .flex_none()
+                                        .rounded(px(self.radius_px().min(4.)))
+                                        .bg(with_alpha(colors.foreground, 0.04))
+                                        .overflow_hidden()
+                                        .child(
+                                            img(cover_path)
+                                                .size_full()
+                                                .object_fit(gpui_kit::ObjectFit::Cover),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(colors.foreground)
+                                                .truncate()
+                                                .child(display_title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(colors.muted)
+                                                .truncate()
+                                                .child(format!(
+                                                    "Ch. {current} of {total} · {:.0}%",
+                                                    progress * 100.0
+                                                )),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .flex_none()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .w(px(90.))
+                                                .h(px(4.))
+                                                .rounded_full()
+                                                .bg(with_alpha(colors.foreground, 0.08))
+                                                .child(
+                                                    div()
+                                                        .h_full()
+                                                        .w(relative(progress))
+                                                        .rounded_full()
+                                                        .bg(colors.accent),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(34.))
+                                                .text_xs()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(colors.muted)
+                                                .child(format!("{:.0}%", progress * 100.0)),
+                                        ),
+                                )
+                                .child(
+                                    Icon::new(IconName::ChevronRight)
+                                        .size(px(16.))
+                                        .text_color(colors.muted),
+                                ),
+                        )
+                        .into_any_element()
+                }
+            })
+            .collect();
+
+        let mut header = div().flex().items_center().gap_2();
+        if !self.selection.is_empty() {
+            header = header
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.foreground)
+                        .child(format!("{} selected", self.selection.len())),
+                )
+                .child(
+                    div().debug_selector(|| "select-all".into()).child(
+                        Button::new("select-all")
+                            .ghost()
+                            .small()
+                            .label("Select all")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.select_all(cx);
+                                    })
+                                }
+                            }),
+                    ),
+                )
+                .child(
+                    div().debug_selector(|| "select-remove".into()).child(
+                        Button::new("select-remove")
+                            .ghost()
+                            .small()
+                            .label("Remove")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.remove_selected(cx);
+                                    })
+                                }
+                            }),
+                    ),
+                )
+                .child(
+                    div().debug_selector(|| "select-cancel".into()).child(
+                        Button::new("select-cancel")
+                            .ghost()
+                            .small()
+                            .label("Cancel")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.selection.clear();
+                                        cx.notify();
+                                    })
+                                }
+                            }),
+                    ),
+                );
+        }
+
+        let show_header = !self.selection.is_empty();
+
         div()
-            .id(SharedString::from(format!("folder-{}", group.key)))
+            .id("history-container")
+            .track_scroll(&self.library_scroll.handle)
+            .on_scroll_wheel({
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        this.library_scroll.handle_scroll_wheel(e, reduce);
+                        cx.notify();
+                    });
+                }
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        this.library_scroll.cancel_inertia();
+                    });
+                }
+            })
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .when(show_header, |this| {
+                this.child(
+                    div()
+                        .w_full()
+                        .px_6()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(colors.border)
+                        .bg(with_alpha(colors.surface, 0.4))
+                        .child(header),
+                )
+            })
+            .child(if is_grid {
+                div()
+                    .px(px(grid.pad_x))
+                    .py_6()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(grid.gap))
+                    .children(cards)
+            } else {
+                div()
+                    .w_full()
+                    .max_w(px(1040.))
+                    .mx_auto()
+                    .px(px(grid.pad_x.max(16.0)))
+                    .py_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(cards)
+            })
+            .into_any_element()
+    }
+
+    fn render_book_card(
+        &self,
+        book: &Book,
+        card_w: f32,
+        cover_h: f32,
+        radius: Pixels,
+        colors: UiColors,
+        yomu: &Entity<Self>,
+    ) -> AnyElement {
+        let book_id = book.id.clone();
+        let thumb_size = self.library.settings().thumbnail_size;
+        let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
+        let display_title = book.title.clone();
+        let total = book.page_count;
+        let current = if book.opened {
+            book.current_page + 1
+        } else {
+            0
+        };
+        let progress = book.progress();
+        let is_selected = self.selection.contains(&book.id);
+        let border_px = self.border_px();
+
+        div()
+            .id(ElementId::from(SharedString::from(format!(
+                "manga-item-{}",
+                book.id
+            ))))
             .w(px(card_w))
             .flex_none()
             .flex()
             .flex_col()
-            .rounded(px(rounding_lg))
-            .when(border_px > 0.0, |this| {
-                this.border(px(border_px)).border_color(self.colors.border)
+            .rounded(radius)
+            .bg(if is_selected {
+                with_alpha(colors.accent, 0.15)
+            } else {
+                with_alpha(colors.surface, 0.6)
             })
-            .bg(self.widget_surface(self.colors.surface))
-            .overflow_hidden()
-            .cursor_pointer()
-            .when(self.overlay.is_none(), |card| {
-                card.hover(|style| {
-                    let style = if border_px > 0.0 {
-                        style.border_color(self.colors.accent)
-                    } else {
-                        style
-                    };
-                    style.shadow_md()
+            .when(border_px > 0.0 || is_selected, |s| {
+                let w = if is_selected {
+                    border_px.max(1.5)
+                } else {
+                    border_px
+                };
+                s.border(px(w)).border_color(if is_selected {
+                    colors.accent
+                } else {
+                    colors.border
                 })
             })
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.enter_group(group_key.clone(), cx);
-            }))
+            .overflow_hidden()
+            .cursor_pointer()
+            .hover(|s| s.border_color(colors.accent).shadow_md())
+            .on_mouse_down(MouseButton::Right, {
+                let yomu = yomu.clone();
+                let book_id = book_id.clone();
+                move |event: &MouseDownEvent, window, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.open_context_menu(&book_id, event.position, window, cx);
+                    });
+                }
+            })
+            .on_click({
+                let yomu = yomu.clone();
+                let book_id = book_id.clone();
+                move |event: &ClickEvent, window, cx| {
+                    let ctrl = event.modifiers().control || event.modifiers().platform;
+                    let shift = event.modifiers().shift;
+                    yomu.update(cx, |this, cx| {
+                        if this.select_click(&book_id, ctrl, shift, cx) {
+                            return;
+                        }
+                        this.open_book(&book_id, window, cx);
+                    });
+                }
+            })
             .child(
                 div()
+                    .id(ElementId::from(SharedString::from(format!(
+                        "manga-cover-{}",
+                        book.id
+                    ))))
                     .relative()
                     .w_full()
-                    .h(px(card_h))
-                    .flex_none()
+                    .h(px(cover_h))
+                    .bg(with_alpha(colors.foreground, 0.04))
                     .overflow_hidden()
-                    .rounded_t(px(inner_radius))
-                    .bg(self.widget_surface(self.colors.surface))
                     .child(
-                        img(self.dirs.cover_for_size(&first.id, thumb_size))
-                            .w_full()
-                            .h_full()
-                            .rounded_t(px(inner_radius))
-                            .object_fit(ObjectFit::Cover),
+                        img(cover_path)
+                            .size_full()
+                            .object_fit(gpui_kit::ObjectFit::Cover),
                     )
-                    .child(
-                        div().absolute().top_2().right_2().child(
-                            Tag::secondary()
-                                .small()
-                                .child(format!("{} volumes", books.len())),
-                        ),
-                    ),
+                    .children(is_selected.then(|| {
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .bg(with_alpha(colors.accent, 0.22))
+                    })),
             )
             .child(
                 div()
-                    .flex_1()
+                    .p_2p5()
                     .flex()
                     .flex_col()
-                    .justify_between()
-                    .gap_2()
-                    .p_3()
+                    .gap_1()
                     .child(
                         div()
-                            .h(px(40.))
-                            .line_clamp(2)
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(self.colors.foreground)
-                            .child(group.name.clone()),
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.foreground)
+                            .truncate()
+                            .child(display_title),
+                    )
+                    .child(div().text_xs().text_color(colors.muted).truncate().child(
+                        if book.opened {
+                            format!("Ch. {current} of {total} · {:.0}%", progress * 100.0)
+                        } else {
+                            format!("{total} pages")
+                        },
+                    ))
+                    .children(book.opened.then(|| {
+                        div()
+                            .h(px(3.))
+                            .w_full()
+                            .rounded(radius)
+                            .bg(with_alpha(colors.foreground, 0.08))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(relative(progress))
+                                    .rounded(radius)
+                                    .bg(colors.accent),
+                            )
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn render_book_list_row(
+        &self,
+        book: &Book,
+        radius: Pixels,
+        colors: UiColors,
+        yomu: &Entity<Self>,
+    ) -> AnyElement {
+        let book_id = book.id.clone();
+        let thumb_size = self.library.settings().thumbnail_size;
+        let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
+        let display_title = book.title.clone();
+        let total = book.page_count;
+        let current = if book.opened {
+            book.current_page + 1
+        } else {
+            0
+        };
+        let progress = book.progress();
+        let is_selected = self.selection.contains(&book.id);
+        let border_px = self.border_px();
+
+        div()
+            .id(ElementId::from(SharedString::from(format!(
+                "manga-item-{}",
+                book.id
+            ))))
+            .w_full()
+            .h(px(64.))
+            .px_3p5()
+            .rounded(radius)
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .bg(if is_selected {
+                with_alpha(colors.accent, 0.15)
+            } else {
+                with_alpha(colors.surface, 0.5)
+            })
+            .when(border_px > 0.0 || is_selected, |s| {
+                let w = if is_selected {
+                    border_px.max(1.5)
+                } else {
+                    border_px
+                };
+                s.border(px(w)).border_color(if is_selected {
+                    colors.accent
+                } else {
+                    colors.border
+                })
+            })
+            .cursor_pointer()
+            .hover(|s| {
+                s.bg(if is_selected {
+                    with_alpha(colors.accent, 0.22)
+                } else {
+                    with_alpha(colors.surface, 0.8)
+                })
+                .border_color(colors.accent)
+            })
+            .on_mouse_down(MouseButton::Right, {
+                let yomu = yomu.clone();
+                let book_id = book_id.clone();
+                move |event: &MouseDownEvent, window, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.open_context_menu(&book_id, event.position, window, cx);
+                    });
+                }
+            })
+            .on_click({
+                let yomu = yomu.clone();
+                let book_id = book_id.clone();
+                move |event: &ClickEvent, window, cx| {
+                    let ctrl = event.modifiers().control || event.modifiers().platform;
+                    let shift = event.modifiers().shift;
+                    yomu.update(cx, |this, cx| {
+                        if this.select_click(&book_id, ctrl, shift, cx) {
+                            return;
+                        }
+                        this.open_book(&book_id, window, cx);
+                    });
+                }
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .min_w_0()
+                    .flex_1()
+                    .children(is_selected.then(|| {
+                        div()
+                            .size(px(18.))
+                            .rounded(px(4.))
+                            .bg(colors.accent)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(IconName::Check)
+                                    .size(px(12.))
+                                    .text_color(colors.accent_foreground),
+                            )
+                    }))
+                    .child(
+                        div()
+                            .id(ElementId::from(SharedString::from(format!(
+                                "manga-cover-{}",
+                                book.id
+                            ))))
+                            .w(px(36.))
+                            .h(px(50.))
+                            .flex_none()
+                            .rounded(px(self.radius_px().min(4.)))
+                            .bg(with_alpha(colors.foreground, 0.04))
+                            .overflow_hidden()
+                            .child(
+                                img(cover_path)
+                                    .size_full()
+                                    .object_fit(gpui_kit::ObjectFit::Cover),
+                            ),
                     )
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap_2()
-                            .child(div().h(px(4.)))
+                            .gap_1()
+                            .min_w_0()
+                            .flex_1()
                             .child(
                                 div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(colors.foreground)
+                                    .truncate()
+                                    .child(display_title),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
                                     .text_xs()
-                                    .text_color(self.colors.muted)
-                                    .child(format!("{} volumes", books.len())),
+                                    .text_color(colors.muted)
+                                    .children(book.series.as_deref().map(|s| {
+                                        div()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded(px(3.))
+                                            .bg(with_alpha(colors.foreground, 0.06))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(colors.foreground)
+                                            .truncate()
+                                            .child(s.to_string())
+                                    }))
+                                    .child(div().truncate().child(if book.opened {
+                                        format!(
+                                            "Ch. {current} of {total} · {:.0}%",
+                                            progress * 100.0
+                                        )
+                                    } else {
+                                        format!("{total} pages")
+                                    })),
                             ),
                     ),
             )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .flex_none()
+                    .children(book.opened.then(|| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .w(px(90.))
+                                    .h(px(4.))
+                                    .rounded_full()
+                                    .bg(with_alpha(colors.foreground, 0.08))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .w(relative(progress))
+                                            .rounded_full()
+                                            .bg(colors.accent),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .w(px(34.))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(colors.muted)
+                                    .child(format!("{:.0}%", progress * 100.0)),
+                            )
+                    }))
+                    .child(if progress >= 1.0 {
+                        div()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_full()
+                            .bg(with_alpha(colors.accent, 0.15))
+                            .text_color(colors.accent)
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Completed")
+                    } else if book.opened {
+                        div()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_full()
+                            .bg(with_alpha(colors.foreground, 0.08))
+                            .text_color(colors.foreground)
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Reading")
+                    } else {
+                        div()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_full()
+                            .bg(with_alpha(colors.foreground, 0.04))
+                            .text_color(colors.muted)
+                            .text_xs()
+                            .child("Unread")
+                    }),
+            )
             .into_any_element()
     }
 
-    fn book_card(&self, book: &Book, cx: &mut Context<Self>) -> AnyElement {
-        let open_id = book.id.clone();
-        let menu_id = book.id.clone();
-        let progress = book.progress();
-        let status = if book.is_finished() {
-            "Finished".to_string()
-        } else if book.opened {
-            format!(
-                "Page {} of {} · {}%",
-                book.current_page + 1,
-                book.page_count,
-                (progress * 100.0).round() as u32
-            )
-        } else {
-            format!("{} pages", book.page_count)
-        };
-
-        let thumb_size = self.library.settings().thumbnail_size;
-        let card_w = thumb_size.card_width();
-        let card_h = thumb_size.card_height();
-        let selected = self.selection.contains(&book.id);
-        let border_px = self.border_px();
-        let rounding_lg = self.radius_lg_px();
-        let card_border = if selected {
-            border_px.max(2.0)
-        } else {
-            border_px
-        };
-        let inner_radius = if card_border > 0.0 {
-            (rounding_lg - card_border).max(0.0)
-        } else {
-            rounding_lg
-        };
-
-        let cover = div()
-            .relative()
-            .w_full()
-            .h(px(card_h))
-            .flex_none()
-            .rounded_t(px(inner_radius))
-            .overflow_hidden()
-            .bg(self.widget_surface(self.colors.surface))
-            .child(
-                img(self.dirs.cover_for_size(&book.id, thumb_size))
-                    .w_full()
-                    .h_full()
-                    .rounded_t(px(inner_radius))
-                    .object_fit(ObjectFit::Cover),
-            )
-            .children(selected.then(|| {
-                // A tint over the cover so a selected book reads as selected at a glance.
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .rounded_t(px(inner_radius))
-                    .bg(with_alpha(self.colors.accent, 0.22))
-            }));
-
-        let progress_bar = Progress::new(SharedString::from(format!("progress-{}", book.id)))
-            .value(progress * 100.0)
-            .color(self.colors.accent)
-            .xsmall();
+    fn render_folder_list_row(
+        &self,
+        group_key: &str,
+        group_name: &str,
+        book_ids: &[String],
+        count: usize,
+        cover_path: PathBuf,
+        radius: Pixels,
+        colors: UiColors,
+        border_px: f32,
+        yomu: &Entity<Self>,
+    ) -> AnyElement {
+        let group_key = group_key.to_string();
+        let group_name = group_name.to_string();
+        let book_ids = book_ids.to_vec();
 
         div()
-            .id(SharedString::from(format!("book-{}", book.id)))
-            .w(px(card_w))
-            .flex_none()
+            .id(SharedString::from(format!("folder-{}", group_key)))
+            .w_full()
+            .h(px(64.))
+            .px_3p5()
+            .rounded(radius)
             .flex()
-            .flex_col()
-            .rounded(px(rounding_lg))
-            .when(card_border > 0.0, |this| {
-                this.border(px(card_border)).border_color(if selected {
-                    self.colors.accent
-                } else {
-                    self.colors.border
-                })
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .bg(with_alpha(colors.surface, 0.5))
+            .when(border_px > 0.0, |s| {
+                s.border(px(border_px)).border_color(colors.border)
             })
-            .bg(self.widget_surface(self.colors.surface))
-            .overflow_hidden()
             .cursor_pointer()
-            .when(self.overlay.is_none(), |card| {
-                card.hover(|style| {
-                    let style = if card_border > 0.0 && !selected {
-                        style.border_color(self.colors.accent)
-                    } else {
-                        style
-                    };
-                    style.shadow_md()
-                })
+            .hover(|s| {
+                s.bg(with_alpha(colors.surface, 0.8))
+                    .border_color(colors.accent)
             })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _, _| {
-                    this.catch_ui_inertia();
-                }),
-            )
-            // `on_click` only ever fires for the left button, so right-clicking never opens a book.
-            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                if this.overlay_recently_closed() {
-                    return;
+            .on_mouse_down(MouseButton::Right, {
+                let yomu = yomu.clone();
+                let group_key = group_key.clone();
+                let group_name = group_name.clone();
+                let book_ids = book_ids.clone();
+                move |event: &MouseDownEvent, _window, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.open_group_context_menu(
+                            &group_key,
+                            &group_name,
+                            &book_ids,
+                            event.position,
+                            cx,
+                        );
+                    });
                 }
-                if this
-                    .scroll_caught_at
-                    .is_some_and(|t| t.elapsed() < SCROLL_CATCH_GUARD)
-                {
-                    return;
+            })
+            .on_click({
+                let yomu = yomu.clone();
+                let group_key = group_key.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.enter_group(group_key.clone(), cx);
+                    });
                 }
-                // Ctrl/Shift-click, or any click while books are selected, edits the selection;
-                // only a plain click on an unselected library opens the book.
-                let modifiers = event.modifiers();
-                let control = modifiers.control || modifiers.platform;
-                if this.select_click(&open_id, control, modifiers.shift, cx) {
-                    return;
-                }
-                this.open_book(&open_id, window, cx);
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    this.open_context_menu(&menu_id, event.position, window, cx);
-                    // The root window also listens for right-clicks to dismiss an
-                    // already-open popup. Do not let this opening click bubble up
-                    // and immediately close the popup we just created.
-                    cx.stop_propagation();
-                }),
-            )
-            .child(cover)
+            })
             .child(
                 div()
-                    .flex_1()
                     .flex()
-                    .flex_col()
-                    .justify_between()
-                    .gap_2()
-                    .p_3()
+                    .items_center()
+                    .gap_3()
+                    .min_w_0()
+                    .flex_1()
                     .child(
                         div()
-                            .h(px(40.))
-                            .line_clamp(2)
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(self.colors.foreground)
-                            .child(SharedString::from(book.title.clone())),
+                            .w(px(36.))
+                            .h(px(50.))
+                            .flex_none()
+                            .rounded(px(self.radius_px().min(4.)))
+                            .bg(with_alpha(colors.foreground, 0.04))
+                            .overflow_hidden()
+                            .child(
+                                img(cover_path)
+                                    .size_full()
+                                    .object_fit(gpui_kit::ObjectFit::Cover),
+                            ),
                     )
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap_2()
-                            .child(progress_bar)
-                            .child(div().text_xs().text_color(self.colors.muted).child(status)),
+                            .gap_1()
+                            .min_w_0()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .child(
+                                        Icon::new(IconName::Folder)
+                                            .size(px(14.))
+                                            .text_color(colors.accent),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(colors.foreground)
+                                            .truncate()
+                                            .child(group_name),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(colors.muted)
+                                    .child(format!("{count} volumes · Series folder")),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2p5()
+                    .flex_none()
+                    .child(
+                        div()
+                            .px_2p5()
+                            .py_1()
+                            .rounded(radius)
+                            .bg(with_alpha(colors.foreground, 0.06))
+                            .border_1()
+                            .border_color(colors.border)
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.foreground)
+                            .child(format!("{count} vols")),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronRight)
+                            .size(px(16.))
+                            .text_color(colors.muted),
                     ),
             )
             .into_any_element()
+    }
+
+    fn render_all_manga_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
+        let radius = px(self.radius_px());
+        let yomu = cx.entity();
+
+        let order = self.current_view_order();
+        let query = self.search_query.trim().to_lowercase();
+        let books: Vec<&Book> = order
+            .iter()
+            .filter_map(|id| self.library.get(id))
+            .filter(|b| {
+                if query.is_empty() {
+                    true
+                } else {
+                    b.title.to_lowercase().contains(&query)
+                        || b.series
+                            .as_ref()
+                            .map_or(false, |s| s.to_lowercase().contains(&query))
+                }
+            })
+            .collect();
+
+        if books.is_empty() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .text_color(colors.muted)
+                .child(Icon::new(IconName::BookOpen).size(px(48.)))
+                .child(div().text_base().child(if query.is_empty() {
+                    "Your library is empty"
+                } else {
+                    "No matching manga found"
+                }))
+                .into_any_element();
+        }
+
+        let thumb_size = self.library.settings().thumbnail_size;
+        let sidebar_collapsed = self.is_sidebar_collapsed(window);
+        let grid = ui::components::compute_responsive_grid(
+            f32::from(window.viewport_size().width),
+            !sidebar_collapsed,
+            thumb_size,
+        );
+        let card_w = grid.card_w;
+        let cover_h = grid.cover_h;
+
+        let border_px = self.border_px();
+        let is_grid = self.view_mode_grid;
+        let mut cards: Vec<AnyElement> = Vec::new();
+
+        if self.library.settings().group_series && self.open_group.is_none() {
+            let groups = directory_groups(books.iter().copied());
+            let mut grouped_ids = HashSet::new();
+
+            for group in &groups {
+                for b in &group.books {
+                    grouped_ids.insert(b.id.clone());
+                }
+                let first = group.books[0];
+                let group_key = group.key.clone();
+                let group_name = group.name.clone();
+                let count = group.books.len();
+                let cover_path = self.dirs.cover_for_size(&first.id, thumb_size);
+
+                if is_grid {
+                    cards.push(
+                        div()
+                            .id(SharedString::from(format!("folder-{}", group.key)))
+                            .w(px(card_w))
+                            .flex_none()
+                            .flex()
+                            .flex_col()
+                            .rounded(radius)
+                            .bg(with_alpha(colors.surface, 0.6))
+                            .when(border_px > 0.0, |s| {
+                                s.border(px(border_px)).border_color(colors.border)
+                            })
+                            .overflow_hidden()
+                            .cursor_pointer()
+                            .hover(|s| s.border_color(colors.accent).shadow_md())
+                            .on_mouse_down(MouseButton::Right, {
+                                let yomu = yomu.clone();
+                                let group_key = group_key.clone();
+                                let group_name = group_name.clone();
+                                let book_ids: Vec<String> =
+                                    group.books.iter().map(|b| b.id.clone()).collect();
+                                move |event: &MouseDownEvent, _window, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.open_group_context_menu(
+                                            &group_key,
+                                            &group_name,
+                                            &book_ids,
+                                            event.position,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            })
+                            .on_click({
+                                let yomu = yomu.clone();
+                                let group_key = group_key.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.enter_group(group_key.clone(), cx);
+                                    });
+                                }
+                            })
+                            .child(
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .h(px(cover_h))
+                                    .bg(with_alpha(colors.foreground, 0.04))
+                                    .overflow_hidden()
+                                    .child(
+                                        img(cover_path)
+                                            .size_full()
+                                            .object_fit(gpui_kit::ObjectFit::Cover),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .top_2()
+                                            .right_2()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded(radius)
+                                            .bg(with_alpha(colors.background, 0.85))
+                                            .border_1()
+                                            .border_color(colors.border)
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(colors.foreground)
+                                            .child(format!("{count} vols")),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .p_2p5()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(colors.foreground)
+                                            .truncate()
+                                            .child(group_name),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(colors.muted)
+                                            .truncate()
+                                            .child(format!("{count} volumes · Series")),
+                                    ),
+                            )
+                            .into_any_element(),
+                    );
+                } else {
+                    let book_ids: Vec<String> = group.books.iter().map(|b| b.id.clone()).collect();
+                    cards.push(self.render_folder_list_row(
+                        &group_key,
+                        &group_name,
+                        &book_ids,
+                        count,
+                        cover_path,
+                        radius,
+                        colors,
+                        border_px,
+                        &yomu,
+                    ));
+                }
+            }
+
+            for book in books.iter().filter(|b| !grouped_ids.contains(&b.id)) {
+                if is_grid {
+                    cards.push(self.render_book_card(book, card_w, cover_h, radius, colors, &yomu));
+                } else {
+                    cards.push(self.render_book_list_row(book, radius, colors, &yomu));
+                }
+            }
+        } else {
+            for book in &books {
+                if is_grid {
+                    cards.push(self.render_book_card(book, card_w, cover_h, radius, colors, &yomu));
+                } else {
+                    cards.push(self.render_book_list_row(book, radius, colors, &yomu));
+                }
+            }
+        }
+
+        let mut header = div().flex().items_center().gap_2();
+        if !self.selection.is_empty() {
+            header = header
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.foreground)
+                        .child(format!("{} selected", self.selection.len())),
+                )
+                .child(
+                    div().debug_selector(|| "select-all".into()).child(
+                        Button::new("select-all")
+                            .ghost()
+                            .small()
+                            .label("Select all")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.select_all(cx);
+                                    })
+                                }
+                            }),
+                    ),
+                )
+                .child(
+                    div().debug_selector(|| "select-remove".into()).child(
+                        Button::new("select-remove")
+                            .ghost()
+                            .small()
+                            .label("Remove")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.request_remove_selected(cx);
+                                    })
+                                }
+                            }),
+                    ),
+                )
+                .child(
+                    div().debug_selector(|| "select-cancel".into()).child(
+                        Button::new("select-cancel")
+                            .ghost()
+                            .small()
+                            .label("Cancel")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.selection.clear();
+                                        cx.notify();
+                                    })
+                                }
+                            }),
+                    ),
+                );
+        }
+
+        let show_header = !self.selection.is_empty();
+        let in_group = self.open_group.is_some();
+        let scroll_handle = if in_group {
+            &self.group_scroll.handle
+        } else {
+            &self.library_scroll.handle
+        };
+
+        div()
+            .id(if in_group {
+                "group-grid"
+            } else {
+                "all-manga-container"
+            })
+            .track_scroll(scroll_handle)
+            .on_scroll_wheel({
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        if this.open_group.is_some() {
+                            this.group_scroll.handle_scroll_wheel(e, reduce);
+                        } else {
+                            this.library_scroll.handle_scroll_wheel(e, reduce);
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        if this.open_group.is_some() {
+                            this.group_scroll.cancel_inertia();
+                        } else {
+                            this.library_scroll.cancel_inertia();
+                        }
+                    });
+                }
+            })
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .when(show_header, |this| {
+                this.child(
+                    div()
+                        .w_full()
+                        .px_6()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(colors.border)
+                        .bg(with_alpha(colors.surface, 0.4))
+                        .child(header),
+                )
+            })
+            .child(if is_grid {
+                div()
+                    .px(px(grid.pad_x))
+                    .py_6()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(grid.gap))
+                    .children(cards)
+            } else {
+                div()
+                    .w_full()
+                    .max_w(px(1040.))
+                    .mx_auto()
+                    .px(px(grid.pad_x.max(16.0)))
+                    .py_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(cards)
+            })
+            .into_any_element()
+    }
+
+    fn render_downloads_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.render_all_manga_view(window, cx)
+    }
+
+    fn render_anilist_category_view(
+        &self,
+        cat: ui::sidebar::AniListCategory,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = self.colors;
+        let radius = px(self.radius_px());
+        let yomu = _cx.entity();
+
+        let status = match cat {
+            ui::sidebar::AniListCategory::MyList => yomu::anilist::MediaListStatus::Current,
+            ui::sidebar::AniListCategory::Planning => yomu::anilist::MediaListStatus::Planning,
+            ui::sidebar::AniListCategory::Reading => yomu::anilist::MediaListStatus::Current,
+            ui::sidebar::AniListCategory::Completed => yomu::anilist::MediaListStatus::Completed,
+            ui::sidebar::AniListCategory::Paused => yomu::anilist::MediaListStatus::Paused,
+            ui::sidebar::AniListCategory::Dropped => yomu::anilist::MediaListStatus::Dropped,
+        };
+
+        let books: Vec<&Book> = self
+            .library
+            .books()
+            .iter()
+            .filter(|b| {
+                if let Some(media) = self.anilist_data.get_media_for_book(&b.id) {
+                    if let Some(user_status) = &media.user_status {
+                        return *user_status == status;
+                    }
+                }
+                false
+            })
+            .collect();
+
+        if books.is_empty() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .text_color(colors.muted)
+                .child(Icon::new(IconName::Bookmark).size(px(48.)))
+                .child(div().text_base().child("No manga tracked in this category"))
+                .into_any_element();
+        }
+
+        let thumb_size = self.library.settings().thumbnail_size;
+        let sidebar_collapsed = self.is_sidebar_collapsed(window);
+        let grid = ui::components::compute_responsive_grid(
+            f32::from(window.viewport_size().width),
+            !sidebar_collapsed,
+            thumb_size,
+        );
+        let card_w = grid.card_w;
+        let cover_h = grid.cover_h;
+
+        let border_px = self.border_px();
+        let is_grid = self.view_mode_grid;
+        let cards: Vec<AnyElement> = books
+            .iter()
+            .map(|book| {
+                let book_id = book.id.clone();
+                let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
+                let display_title = book.title.clone();
+
+                if is_grid {
+                    div()
+                        .id(ElementId::from(SharedString::from(format!(
+                            "cat-item-{}",
+                            book.id
+                        ))))
+                        .w(px(card_w))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .rounded(radius)
+                        .bg(with_alpha(colors.surface, 0.6))
+                        .when(border_px > 0.0, |s| {
+                            s.border(px(border_px)).border_color(colors.border)
+                        })
+                        .overflow_hidden()
+                        .cursor_pointer()
+                        .hover(|s| s.border_color(colors.accent).shadow_md())
+                        .on_click({
+                            let yomu = yomu.clone();
+                            let book_id = book_id.clone();
+                            move |_, _, cx| {
+                                yomu.update(cx, |this, cx| {
+                                    this.navigate_to(
+                                        ui::sidebar::MainView::Details(book_id.clone()),
+                                        cx,
+                                    );
+                                });
+                            }
+                        })
+                        .child(
+                            div()
+                                .id(ElementId::from(SharedString::from(format!(
+                                    "cat-cover-{}",
+                                    book.id
+                                ))))
+                                .relative()
+                                .w_full()
+                                .h(px(cover_h))
+                                .bg(with_alpha(colors.foreground, 0.04))
+                                .overflow_hidden()
+                                .child(
+                                    img(cover_path)
+                                        .size_full()
+                                        .object_fit(gpui_kit::ObjectFit::Cover),
+                                ),
+                        )
+                        .child(
+                            div().p_2p5().flex().flex_col().gap_1().child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(colors.foreground)
+                                    .truncate()
+                                    .child(display_title),
+                            ),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .id(ElementId::from(SharedString::from(format!(
+                            "cat-item-{}",
+                            book.id
+                        ))))
+                        .w_full()
+                        .h(px(64.))
+                        .px_3p5()
+                        .rounded(radius)
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .bg(with_alpha(colors.surface, 0.5))
+                        .when(border_px > 0.0, |s| {
+                            s.border(px(border_px)).border_color(colors.border)
+                        })
+                        .cursor_pointer()
+                        .hover(|s| {
+                            s.bg(with_alpha(colors.surface, 0.8))
+                                .border_color(colors.accent)
+                        })
+                        .on_click({
+                            let yomu = yomu.clone();
+                            let book_id = book_id.clone();
+                            move |_, _, cx| {
+                                yomu.update(cx, |this, cx| {
+                                    this.navigate_to(
+                                        ui::sidebar::MainView::Details(book_id.clone()),
+                                        cx,
+                                    );
+                                });
+                            }
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .min_w_0()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .id(ElementId::from(SharedString::from(format!(
+                                            "cat-cover-{}",
+                                            book.id
+                                        ))))
+                                        .w(px(36.))
+                                        .h(px(50.))
+                                        .flex_none()
+                                        .rounded(px(self.radius_px().min(4.)))
+                                        .bg(with_alpha(colors.foreground, 0.04))
+                                        .overflow_hidden()
+                                        .child(
+                                            img(cover_path)
+                                                .size_full()
+                                                .object_fit(gpui_kit::ObjectFit::Cover),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(colors.foreground)
+                                                .truncate()
+                                                .child(display_title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(colors.muted)
+                                                .child(format!("{} pages", book.page_count)),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            Icon::new(IconName::ChevronRight)
+                                .size(px(16.))
+                                .text_color(colors.muted),
+                        )
+                        .into_any_element()
+                }
+            })
+            .collect();
+
+        let mut header = div().flex().items_center().gap_2();
+        if !self.selection.is_empty() {
+            header = header
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.foreground)
+                        .child(format!("{} selected", self.selection.len())),
+                )
+                .child(
+                    div().debug_selector(|| "select-all".into()).child(
+                        Button::new("select-all")
+                            .ghost()
+                            .small()
+                            .label("Select all")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.select_all(cx);
+                                    })
+                                }
+                            }),
+                    ),
+                )
+                .child(
+                    div().debug_selector(|| "select-remove".into()).child(
+                        Button::new("select-remove")
+                            .ghost()
+                            .small()
+                            .label("Remove")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.remove_selected(cx);
+                                    })
+                                }
+                            }),
+                    ),
+                )
+                .child(
+                    div().debug_selector(|| "select-cancel".into()).child(
+                        Button::new("select-cancel")
+                            .ghost()
+                            .small()
+                            .label("Cancel")
+                            .on_click({
+                                let yomu = yomu.clone();
+                                move |_, _, cx| {
+                                    yomu.update(cx, |this, cx| {
+                                        this.selection.clear();
+                                        cx.notify();
+                                    })
+                                }
+                            }),
+                    ),
+                );
+        }
+
+        let show_header = !self.selection.is_empty();
+
+        div()
+            .id("anilist-category-container")
+            .track_scroll(&self.anilist_category_scroll.handle)
+            .on_scroll_wheel({
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        this.anilist_category_scroll.handle_scroll_wheel(e, reduce);
+                        cx.notify();
+                    });
+                }
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        this.anilist_category_scroll.cancel_inertia();
+                    });
+                }
+            })
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .when(show_header, |this| {
+                this.child(
+                    div()
+                        .w_full()
+                        .px_6()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(colors.border)
+                        .bg(with_alpha(colors.surface, 0.4))
+                        .child(header),
+                )
+            })
+            .child(if is_grid {
+                div()
+                    .px(px(grid.pad_x))
+                    .py_6()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(grid.gap))
+                    .children(cards)
+            } else {
+                div()
+                    .w_full()
+                    .max_w(px(1040.))
+                    .mx_auto()
+                    .px(px(grid.pad_x.max(16.0)))
+                    .py_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(cards)
+            })
+            .into_any_element()
+    }
+
+    fn render_details_screen(
+        &self,
+        book_id: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(book) = self.library.get(book_id) else {
+            return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child("Manga not found")
+                .into_any_element();
+        };
+
+        let colors = self.colors;
+        let radius = px(self.radius_px());
+        let yomu = cx.entity();
+        let cover_path = self.dirs.cover(&book.id);
+        let anilist_meta = self.anilist_data.get_media_for_book(&book.id);
+
+        let props = ui::details::MangaDetailsProps {
+            scroll_handle: &self.details_scroll.handle,
+            book,
+            cover_path,
+            anilist_meta,
+            selected_tab: self.details_tab_index,
+            synopsis_expanded: self.details_synopsis_expanded,
+            colors,
+            radius,
+        };
+
+        ui::details::render_manga_details(
+            props,
+            {
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        this.details_scroll.handle_scroll_wheel(e, reduce);
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        this.details_scroll.cancel_inertia();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.navigate_back(cx))
+            },
+            {
+                let yomu = yomu.clone();
+                let book_id = book.id.clone();
+                move |_, window, cx| {
+                    yomu.update(cx, |this, cx| this.open_book(&book_id, window, cx))
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |idx, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.details_tab_index = idx;
+                        cx.notify();
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.details_synopsis_expanded = !this.details_synopsis_expanded;
+                        cx.notify();
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                let book_id = book.id.clone();
+                move |_, window, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let input =
+                            cx.new(|cx| InputState::new(window, cx).default_value(book_id.clone()));
+                        this.overlay = Some(ui::overlays::Overlay::AniListMatch(
+                            ui::overlays::AniListMatchDialog {
+                                book_id: book_id.clone(),
+                                input,
+                                results: Vec::new(),
+                                is_searching: false,
+                            },
+                        ));
+                        cx.notify();
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                let book_id = book.id.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        if let Some(media) = this.anilist_data.get_media_for_book(&book_id) {
+                            let media_id = media.id;
+                            let current_page = this
+                                .library
+                                .get(&book_id)
+                                .map(|b| b.current_page)
+                                .unwrap_or(0)
+                                + 1;
+                            this.anilist_data.queue_progress_update(
+                                media_id,
+                                current_page as i32,
+                                Some(yomu::anilist::MediaListStatus::Current),
+                            );
+                            let _ = this
+                                .anilist_data
+                                .save(&this.dirs.root().join("anilist.json"));
+                            this.show_toast("Reading progress queued for AniList sync", cx);
+                        }
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                let book_id = book.id.clone();
+                move |_, pos, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.open_book_menu(&book_id, point(px(pos.0), px(pos.1)), cx)
+                    })
+                }
+            },
+        )
+    }
+
+    fn render_anilist_search_screen(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = self.colors;
+        let radius = px(self.radius_px());
+        let yomu = cx.entity();
+
+        if self.anilist_search_input.is_none() {
+            let state =
+                cx.new(|cx| InputState::new(window, cx).placeholder("Search manga on AniList…"));
+            self.anilist_search_input = Some(state);
+        }
+        let search_input = self.anilist_search_input.as_ref().unwrap();
+
+        let props = ui::anilist_search::AniListSearchProps {
+            scroll_handle: &self.anilist_search_scroll.handle,
+            search_input,
+            selected_filter: 0,
+            results: &self.anilist_search_results,
+            is_searching: self.anilist_is_searching,
+            colors,
+            radius,
+        };
+
+        ui::anilist_search::render_anilist_search(
+            props,
+            {
+                let yomu = yomu.clone();
+                move |e, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        let reduce = this.reduce_motion;
+                        this.anilist_search_scroll.handle_scroll_wheel(e, reduce);
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, _| {
+                        this.anilist_search_scroll.cancel_inertia();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_idx, _, cx| {
+                    yomu.update(cx, |_this, cx| {
+                        cx.notify();
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |media_id, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.anilist_data.queue_progress_update(
+                            media_id,
+                            0,
+                            Some(yomu::anilist::MediaListStatus::Planning),
+                        );
+                        let _ = this
+                            .anilist_data
+                            .save(&this.dirs.root().join("anilist.json"));
+                        this.show_toast("Added to AniList Planning list", cx);
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.navigate_back(cx))
+            },
+        )
+    }
+
+    fn navigate_to(&mut self, view: ui::sidebar::MainView, cx: &mut Context<Self>) {
+        if self.active_view == view {
+            return;
+        }
+        if self.nav_history_idx + 1 < self.nav_history.len() {
+            self.nav_history.truncate(self.nav_history_idx + 1);
+        }
+        self.nav_history.push(view.clone());
+        self.nav_history_idx = self.nav_history.len() - 1;
+        self.active_view = view.clone();
+
+        match &view {
+            ui::sidebar::MainView::ContinueReading => {
+                self.active_section = ui::sidebar::SidebarSection::ContinueReading;
+            }
+            ui::sidebar::MainView::AllManga => {
+                self.active_section = ui::sidebar::SidebarSection::AllManga;
+            }
+            ui::sidebar::MainView::Collections => {
+                self.active_section = ui::sidebar::SidebarSection::Collections;
+            }
+            ui::sidebar::MainView::History => {
+                self.active_section = ui::sidebar::SidebarSection::History;
+            }
+            ui::sidebar::MainView::Downloads => {
+                self.active_section = ui::sidebar::SidebarSection::Downloads;
+            }
+            ui::sidebar::MainView::AniListCategory(cat) => {
+                self.active_section = ui::sidebar::SidebarSection::AniList(*cat);
+            }
+            ui::sidebar::MainView::Details(id) => {
+                self.selected_book_id = Some(id.clone());
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn is_sidebar_collapsed(&self, window: &Window) -> bool {
+        self.sidebar_collapsed || window.viewport_size().width < px(720.)
+    }
+
+    fn is_current_view_scrolled(&self) -> bool {
+        let scroll_handle = if self.open_group.is_some() {
+            &self.group_scroll.handle
+        } else {
+            match self.active_view {
+                ui::sidebar::MainView::ContinueReading => &self.continue_reading_scroll.handle,
+                ui::sidebar::MainView::AllManga => &self.library_scroll.handle,
+                ui::sidebar::MainView::Collections => &self.collections_scroll.handle,
+                ui::sidebar::MainView::History => &self.library_scroll.handle,
+                ui::sidebar::MainView::Downloads => &self.library_scroll.handle,
+                ui::sidebar::MainView::AniListCategory(_) => &self.anilist_category_scroll.handle,
+                ui::sidebar::MainView::Details(_) => &self.details_scroll.handle,
+                ui::sidebar::MainView::AniListSearch => &self.anilist_search_scroll.handle,
+                ui::sidebar::MainView::Settings => &self.settings_scroll.handle,
+            }
+        };
+        scroll_handle.offset().y < px(-2.0)
+    }
+
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
+    fn navigate_back(&mut self, cx: &mut Context<Self>) {
+        if self.open_group.is_some() {
+            self.exit_group(cx);
+            return;
+        }
+        if self.nav_history_idx > 0 {
+            self.nav_history_idx -= 1;
+            let view = self.nav_history[self.nav_history_idx].clone();
+            self.active_view = view;
+            cx.notify();
+        }
+    }
+
+    fn navigate_forward(&mut self, cx: &mut Context<Self>) {
+        if self.nav_history_idx + 1 < self.nav_history.len() {
+            self.nav_history_idx += 1;
+            let view = self.nav_history[self.nav_history_idx].clone();
+            self.active_view = view;
+            cx.notify();
+        }
+    }
+
+    #[allow(dead_code)]
+    fn current_view_title(&self) -> &'static str {
+        match &self.active_view {
+            ui::sidebar::MainView::ContinueReading => "Continue Reading",
+            ui::sidebar::MainView::AllManga => "All Manga",
+            ui::sidebar::MainView::Collections => "Collections",
+            ui::sidebar::MainView::History => "History",
+            ui::sidebar::MainView::Downloads => "Downloads",
+            ui::sidebar::MainView::AniListCategory(cat) => match cat {
+                ui::sidebar::AniListCategory::MyList => "My List",
+                ui::sidebar::AniListCategory::Planning => "Planning",
+                ui::sidebar::AniListCategory::Reading => "Reading",
+                ui::sidebar::AniListCategory::Completed => "Completed",
+                ui::sidebar::AniListCategory::Paused => "Paused",
+                ui::sidebar::AniListCategory::Dropped => "Dropped",
+            },
+            ui::sidebar::MainView::Details(_) => "Manga Details",
+            ui::sidebar::MainView::AniListSearch => "AniList Search",
+            ui::sidebar::MainView::Settings => "Settings",
+        }
+    }
+
+    fn start_anilist_search(&mut self, query: &str, cx: &mut Context<Self>) {
+        if query.trim().is_empty() {
+            return;
+        }
+        self.anilist_is_searching = true;
+        self.anilist_search_error = None;
+        self.navigate_to(ui::sidebar::MainView::AniListSearch, cx);
+
+        let client = self.anilist_client.clone();
+        let query_str = query.trim().to_string();
+
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { client.search_manga(&query_str) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.anilist_is_searching = false;
+                match res {
+                    Ok(media_list) => {
+                        this.anilist_search_results = media_list;
+                    }
+                    Err(err) => {
+                        this.anilist_search_error = Some(err.to_string());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn render_reader(&self, reader: &Reader, cx: &mut Context<Self>) -> AnyElement {
@@ -5016,6 +6971,7 @@ impl Yomu {
                     }
                 ),
                 self.colors,
+                px(self.radius_px()),
             )
         });
         let hud = self.hud.clone().map(|text| {
@@ -5023,6 +6979,7 @@ impl Yomu {
                 div().absolute().top_4().left_0().right_0(),
                 text,
                 self.colors,
+                px(self.radius_px()),
             )
         });
 
@@ -5034,10 +6991,226 @@ impl Yomu {
                     div().absolute().bottom_4().left_0().right_0(),
                     text,
                     self.colors,
+                    px(self.radius_px()),
                 )
                 .into_any_element()
             })
         };
+
+        let yomu = cx.entity();
+        let book_title = self
+            .library
+            .get(&reader.book_id)
+            .map(|b| b.title.clone())
+            .unwrap_or_default();
+        let current_page_str = format!("{} / {}", reader.page + 1, reader.total);
+        let fit_mode = reader.fit;
+
+        let top_bar = div()
+            .id("reader-top-hover-area")
+            .group("reader-top")
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(56.))
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .group_hover("reader-top", |s| s.opacity(1.0))
+                    .opacity(0.0)
+                    .w_full()
+                    .h(px(52.))
+                    .px_4()
+                    .bg(with_alpha(self.colors.background, 0.92))
+                    .border_b_1()
+                    .border_color(with_alpha(self.colors.border, 0.5))
+                    .shadow_lg()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                Button::new("reader-back-btn")
+                                    .ghost()
+                                    .small()
+                                    .label("← Library")
+                                    .tooltip("Back to library (Esc)")
+                                    .rounded(ButtonRounded::Medium)
+                                    .on_click({
+                                        let yomu = yomu.clone();
+                                        move |_, window, cx| {
+                                            yomu.update(cx, |this, cx| this.close_book(window, cx));
+                                        }
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(self.colors.foreground)
+                                    .child(book_title),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(self.colors.muted)
+                            .child(current_page_str),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("reader-fit-toggle")
+                                    .ghost()
+                                    .small()
+                                    .dropdown_caret(true)
+                                    .rounded(ButtonRounded::Medium)
+                                    .tooltip("Display fit mode")
+                                    .label(fit_mode.label())
+                                    .dropdown_menu({
+                                        let yomu = yomu.clone();
+                                        move |mut menu, _, _| {
+                                            menu = menu.check_side(MenuSide::Left).min_w(px(140.));
+                                            let options = [
+                                                FitMode::Page,
+                                                FitMode::Width,
+                                                FitMode::Height,
+                                                FitMode::Original,
+                                            ];
+                                            for &mode in &options {
+                                                let yomu = yomu.clone();
+                                                menu = menu.item(
+                                                    PopupMenuItem::new(mode.label())
+                                                        .checked(mode == fit_mode)
+                                                        .on_click(move |_, _, cx| {
+                                                            yomu.update(cx, |this, cx| {
+                                                                this.set_fit(mode, cx);
+                                                            });
+                                                        }),
+                                                );
+                                            }
+                                            menu
+                                        }
+                                    }),
+                            )
+                            .child(
+                                Button::new("reader-fullscreen-toggle")
+                                    .ghost()
+                                    .small()
+                                    .rounded(ButtonRounded::Medium)
+                                    .tooltip("Toggle fullscreen (F11)")
+                                    .icon(IconName::Maximize)
+                                    .on_click(move |_, window, _| window.toggle_fullscreen()),
+                            ),
+                    ),
+            );
+
+        let left_chevron = div()
+            .id("reader-prev-hover-area")
+            .group("reader-prev")
+            .absolute()
+            .left_0()
+            .top(relative(0.35))
+            .bottom(relative(0.35))
+            .w(px(72.))
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .flex()
+            .items_center()
+            .pl_4()
+            .child(
+                div()
+                    .id("reader-prev-chevron")
+                    .group_hover("reader-prev", |s| s.opacity(1.0))
+                    .opacity(0.0)
+                    .size(px(40.))
+                    .rounded(px(self.radius_px()))
+                    .bg(with_alpha(self.colors.background, 0.85))
+                    .border_1()
+                    .border_color(with_alpha(self.colors.border, 0.5))
+                    .shadow_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(with_alpha(self.colors.accent, 0.2)))
+                    .tooltip(|window, cx| {
+                        Tooltip::new("Previous page (Left or K)").build(window, cx)
+                    })
+                    .on_click({
+                        let yomu = yomu.clone();
+                        move |_, _, cx| {
+                            yomu.update(cx, |this, cx| {
+                                this.turn_by(false, 1, Arrive::Start, cx);
+                            })
+                        }
+                    })
+                    .child(
+                        Icon::new(IconName::ChevronLeft)
+                            .size(px(20.))
+                            .text_color(self.colors.foreground),
+                    ),
+            );
+
+        let right_chevron = div()
+            .id("reader-next-hover-area")
+            .group("reader-next")
+            .absolute()
+            .right_0()
+            .top(relative(0.35))
+            .bottom(relative(0.35))
+            .w(px(72.))
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .flex()
+            .items_center()
+            .justify_end()
+            .pr_4()
+            .child(
+                div()
+                    .id("reader-next-chevron")
+                    .group_hover("reader-next", |s| s.opacity(1.0))
+                    .opacity(0.0)
+                    .size(px(40.))
+                    .rounded(px(self.radius_px()))
+                    .bg(with_alpha(self.colors.background, 0.85))
+                    .border_1()
+                    .border_color(with_alpha(self.colors.border, 0.5))
+                    .shadow_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(with_alpha(self.colors.accent, 0.2)))
+                    .tooltip(|window, cx| Tooltip::new("Next page (Right or J)").build(window, cx))
+                    .on_click({
+                        let yomu = yomu.clone();
+                        move |_, _, cx| {
+                            yomu.update(cx, |this, cx| {
+                                this.turn_by(true, 1, Arrive::Start, cx);
+                            })
+                        }
+                    })
+                    .child(
+                        Icon::new(IconName::ChevronRight)
+                            .size(px(20.))
+                            .text_color(self.colors.foreground),
+                    ),
+            );
 
         div()
             .size_full()
@@ -5087,6 +7260,9 @@ impl Yomu {
             .children(info)
             .children(hud)
             .children(vim_status)
+            .child(top_bar)
+            .child(left_chevron)
+            .child(right_chevron)
             .children(
                 reader
                     .show_help
@@ -5106,6 +7282,27 @@ impl Yomu {
         if self.shortcuts_scroll.step(dt, self.reduce_motion) {
             moving = true;
         }
+        if self.continue_reading_scroll.step(dt, self.reduce_motion) {
+            moving = true;
+        }
+        if self.collections_scroll.step(dt, self.reduce_motion) {
+            moving = true;
+        }
+        if self.details_scroll.step(dt, self.reduce_motion) {
+            moving = true;
+        }
+        if self.settings_scroll.step(dt, self.reduce_motion) {
+            moving = true;
+        }
+        if self.sidebar_scroll.step(dt, self.reduce_motion) {
+            moving = true;
+        }
+        if self.anilist_search_scroll.step(dt, self.reduce_motion) {
+            moving = true;
+        }
+        if self.anilist_category_scroll.step(dt, self.reduce_motion) {
+            moving = true;
+        }
         moving
     }
 
@@ -5121,6 +7318,34 @@ impl Yomu {
         }
         if self.shortcuts_scroll.has_active_inertia() {
             self.shortcuts_scroll.reset();
+            caught = true;
+        }
+        if self.continue_reading_scroll.has_active_inertia() {
+            self.continue_reading_scroll.reset();
+            caught = true;
+        }
+        if self.collections_scroll.has_active_inertia() {
+            self.collections_scroll.reset();
+            caught = true;
+        }
+        if self.details_scroll.has_active_inertia() {
+            self.details_scroll.reset();
+            caught = true;
+        }
+        if self.settings_scroll.has_active_inertia() {
+            self.settings_scroll.reset();
+            caught = true;
+        }
+        if self.sidebar_scroll.has_active_inertia() {
+            self.sidebar_scroll.reset();
+            caught = true;
+        }
+        if self.anilist_search_scroll.has_active_inertia() {
+            self.anilist_search_scroll.reset();
+            caught = true;
+        }
+        if self.anilist_category_scroll.has_active_inertia() {
+            self.anilist_category_scroll.reset();
             caught = true;
         }
         if caught {
@@ -5484,7 +7709,7 @@ impl Render for Yomu {
         let reading = self.reader.is_some();
         let content = match self.reader.as_ref() {
             Some(reader) => self.render_reader(reader, cx),
-            None => self.render_library(window, cx),
+            None => self.render_two_pane_shell(window, cx),
         };
 
         let root_bg = self.colors.background;
@@ -5676,6 +7901,7 @@ fn help_overlay(colors: UiColors, border_px: f32, rounding_xl: f32) -> AnyElemen
         .into_any_element()
 }
 
+#[allow(dead_code)]
 fn icon_button(
     id: &'static str,
     label: &'static str,
