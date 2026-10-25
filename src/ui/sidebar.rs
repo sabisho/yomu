@@ -5,13 +5,12 @@ use gpui_kit::component::Icon;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, MouseButton,
-    MouseDownEvent, Pixels, ScrollHandle, ScrollWheelEvent, SharedString, Styled, Window, div, px,
+    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
+    SharedString, Styled, Window, div, px,
 };
 
 use super::components::{
-    mac_window_controls, macos_sidebar_bg, section_header, settings_shortcut_str, stat_badge,
-    with_alpha,
+    macos_sidebar_bg, section_header, settings_shortcut_str, stat_badge, with_alpha,
 };
 use super::theme::UiColors;
 
@@ -99,14 +98,9 @@ pub struct SidebarProps<'a> {
 
 pub fn render_sidebar(
     props: SidebarProps,
-    on_scroll_wheel: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
-    on_mouse_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_select: impl Fn(SidebarSection, &mut Window, &mut App) + 'static,
     on_settings: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_open_anilist: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_close_window: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_min_window: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_zoom_window: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let on_select = std::rc::Rc::new(on_select);
     let colors = props.colors;
@@ -184,46 +178,37 @@ pub fn render_sidebar(
         .bg(sidebar_bg)
         .border_r_1()
         .border_color(colors.border)
-        // Top Header: Traffic lights + App Brand "Yomu" + Collapse Button
+        // Top Header: App Brand "Yomu" (offset on macOS for native traffic lights)
         .child(
             div()
                 .h(px(52.))
                 .w_full()
-                .px_4()
+                .when(cfg!(target_os = "macos"), |s| s.pl(px(80.)))
+                .when(!cfg!(target_os = "macos"), |s| s.px_4())
                 .flex()
                 .items_center()
-                .justify_between()
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap_3()
-                        .child(mac_window_controls(
-                            on_close_window,
-                            on_min_window,
-                            on_zoom_window,
-                        ))
+                        .gap_2()
+                        .child(
+                            Icon::new(IconName::BookOpen)
+                                .size(px(17.))
+                                .text_color(colors.accent),
+                        )
                         .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    Icon::new(IconName::BookOpen)
-                                        .size(px(17.))
-                                        .text_color(colors.accent),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(colors.foreground)
-                                        .child("Yomu"),
-                                ),
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(colors.foreground)
+                                .child("Yomu"),
                         ),
                 ),
         )
-        .child(
+        .child(gpui_kit::base::ScrollBounce::new(
+            "sidebar-scroll-bounce",
+            props.scroll_handle,
             div()
                 .id("sidebar-nav-scroll")
                 .track_scroll(props.scroll_handle)
@@ -232,8 +217,6 @@ pub fn render_sidebar(
                 .flex()
                 .flex_col()
                 .overflow_y_scroll()
-                .on_scroll_wheel(on_scroll_wheel)
-                .on_mouse_down(MouseButton::Left, on_mouse_down)
                 // Main Navigation
                 .child(nav_item(
                     SidebarSection::ContinueReading,
@@ -282,7 +265,7 @@ pub fn render_sidebar(
                         active,
                     )
                 })),
-        )
+        ))
         // User Profile & Settings bar at the bottom
         .child(
             div()

@@ -7,6 +7,7 @@ use yomu::menu::{BookAction, Entry};
 #[derive(Clone)]
 pub struct BookMenu {
     pub book_id: String,
+    pub target_ids: Vec<String>,
     pub entries: Vec<Entry>,
     pub position: Point<Pixels>,
     pub selected: Option<usize>,
@@ -15,6 +16,7 @@ pub struct BookMenu {
 #[allow(dead_code)]
 pub enum ConfirmAction {
     Book(BookAction, String),
+    RemoveBooks(Vec<String>),
     RemoveSelected,
     ResetSettings,
     ClearThumbnailCache,

@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "gpui-component"
-version = "0.7.3"
+version = "0.8.0"
 build = "build.rs"
 publish = true
 autolib = false
@@ -64,6 +64,10 @@ speech = [
     "windows/Foundation_Collections",
     "windows/Globalization",
     "windows/Media_SpeechRecognition",
+]
+syntect = [
+    "dep:syntect",
+    "dep:two-face",
 ]
 test-support = [
     "gpui/test-support",
@@ -259,32 +263,8 @@ path = "src/lib.rs"
 doctest = false
 
 [[test]]
-name = "base_compat"
-path = "tests/base_compat.rs"
-
-[[test]]
-name = "controlled_change_callbacks"
-path = "tests/controlled_change_callbacks.rs"
-
-[[test]]
-name = "legacy_button_compat"
-path = "tests/legacy_button_compat.rs"
-
-[[test]]
-name = "legacy_controls_compat"
-path = "tests/legacy_controls_compat.rs"
-
-[[test]]
-name = "legacy_language_config_compat"
-path = "tests/legacy_language_config_compat.rs"
-
-[[test]]
-name = "table_dump_range"
-path = "tests/table_dump_range.rs"
-
-[[test]]
-name = "theme_compat"
-path = "tests/theme_compat.rs"
+name = "integration"
+path = "tests/integration/main.rs"
 
 [dependencies.anyhow]
 version = "1"
@@ -300,19 +280,19 @@ version = "=0.3.9"
 package = "gpui-pre"
 
 [dependencies.gpui-base]
-version = "0.7.1"
+version = "0.8.0"
 
 [dependencies.gpui-component-macros]
-version = "0.7.1"
+version = "0.8.0"
 
 [dependencies.gpui-fast]
-version = "0.1.7"
+version = "0.1.10"
 features = ["windows-manifest-provided-by-host"]
 optional = true
 package = "gpui-fast"
 
 [dependencies.gpui-kit-assets]
-version = "0.7.1"
+version = "0.8.0"
 
 [dependencies.gpui_macros]
 version = "=0.3.9"
@@ -386,8 +366,24 @@ version = "1"
 version = "=0.3.9"
 package = "gpui-pre-sum-tree"
 
+[dependencies.syntect]
+version = "5.3.0"
+features = [
+    "parsing",
+    "default-syntaxes",
+    "regex-fancy",
+]
+optional = true
+default-features = false
+
 [dependencies.tracing]
 version = "0.1.41"
+
+[dependencies.two-face]
+version = "0.4.5"
+features = ["syntect-fancy"]
+optional = true
+default-features = false
 
 [dependencies.unicode-segmentation]
 version = "1"
@@ -404,7 +400,7 @@ features = ["test-support"]
 package = "gpui-pre"
 
 [dev-dependencies.gpui-fast]
-version = "0.1.7"
+version = "0.1.10"
 features = [
     "windows-manifest-provided-by-host",
     "test-support",

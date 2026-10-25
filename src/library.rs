@@ -205,91 +205,73 @@ pub const LIBRARY_VERSION: u32 = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThumbnailSize {
-    #[serde(alias = "extra-small", alias = "xsmall")]
-    ExtraSmall,
+    #[serde(alias = "extra-small", alias = "xsmall", alias = "extrasmall")]
     Small,
     #[default]
     Medium,
+    #[serde(
+        alias = "extra-large",
+        alias = "xlarge",
+        alias = "extralarge",
+        alias = "huge",
+        alias = "extra-huge",
+        alias = "xhuge"
+    )]
     Large,
-    #[serde(alias = "extra-large", alias = "xlarge")]
-    ExtraLarge,
-    #[serde(alias = "huge", alias = "extra-huge", alias = "xhuge")]
-    Huge,
 }
 
 impl ThumbnailSize {
-    pub const ALL: [ThumbnailSize; 6] = [
-        ThumbnailSize::ExtraSmall,
+    pub const ALL: [ThumbnailSize; 3] = [
         ThumbnailSize::Small,
         ThumbnailSize::Medium,
         ThumbnailSize::Large,
-        ThumbnailSize::ExtraLarge,
-        ThumbnailSize::Huge,
     ];
 
     pub fn label(&self) -> &'static str {
         match self {
-            ThumbnailSize::ExtraSmall => "Extra Small (150px)",
-            ThumbnailSize::Small => "Small (180px)",
-            ThumbnailSize::Medium => "Medium (210px)",
-            ThumbnailSize::Large => "Large (240px)",
-            ThumbnailSize::ExtraLarge => "Extra Large (280px)",
-            ThumbnailSize::Huge => "Huge (340px)",
+            ThumbnailSize::Small => "Small",
+            ThumbnailSize::Medium => "Medium",
+            ThumbnailSize::Large => "Large",
         }
     }
 
     pub fn card_width(&self) -> f32 {
         match self {
-            ThumbnailSize::ExtraSmall => 150.0,
             ThumbnailSize::Small => 180.0,
-            ThumbnailSize::Medium => 210.0,
-            ThumbnailSize::Large => 240.0,
-            ThumbnailSize::ExtraLarge => 280.0,
-            ThumbnailSize::Huge => 340.0,
+            ThumbnailSize::Medium => 220.0,
+            ThumbnailSize::Large => 270.0,
         }
     }
 
     pub fn card_height(&self) -> f32 {
         match self {
-            ThumbnailSize::ExtraSmall => 225.0,
             ThumbnailSize::Small => 270.0,
-            ThumbnailSize::Medium => 315.0,
-            ThumbnailSize::Large => 360.0,
-            ThumbnailSize::ExtraLarge => 420.0,
-            ThumbnailSize::Huge => 510.0,
+            ThumbnailSize::Medium => 330.0,
+            ThumbnailSize::Large => 405.0,
         }
     }
 
     pub fn pixel_dimensions(&self) -> (u32, u32) {
         match self {
-            ThumbnailSize::ExtraSmall => (300, 450),
             ThumbnailSize::Small => (360, 540),
-            ThumbnailSize::Medium => (420, 630),
-            ThumbnailSize::Large => (480, 720),
-            ThumbnailSize::ExtraLarge => (560, 840),
-            ThumbnailSize::Huge => (680, 1020),
+            ThumbnailSize::Medium => (440, 660),
+            ThumbnailSize::Large => (540, 810),
         }
     }
 
     pub fn dir_name(&self) -> &'static str {
         match self {
-            ThumbnailSize::ExtraSmall => "xsmall",
             ThumbnailSize::Small => "small",
             ThumbnailSize::Medium => "medium",
             ThumbnailSize::Large => "large",
-            ThumbnailSize::ExtraLarge => "xlarge",
-            ThumbnailSize::Huge => "huge",
         }
     }
 
     pub fn next(&self) -> Self {
         match self {
-            ThumbnailSize::ExtraSmall => ThumbnailSize::Small,
             ThumbnailSize::Small => ThumbnailSize::Medium,
             ThumbnailSize::Medium => ThumbnailSize::Large,
-            ThumbnailSize::Large => ThumbnailSize::ExtraLarge,
-            ThumbnailSize::ExtraLarge => ThumbnailSize::Huge,
-            ThumbnailSize::Huge => ThumbnailSize::ExtraSmall,
+            ThumbnailSize::Large => ThumbnailSize::Small,
         }
     }
 }
@@ -428,6 +410,9 @@ pub struct Settings {
     /// Slide between pages and glide when scrolling. Reduced-motion preferences of the desktop
     /// switch this off regardless of the stored value.
     pub animate: bool,
+    /// Disable nonessential animations across the application.
+    #[serde(default)]
+    pub disable_animations: bool,
     /// Stack pages vertically and scroll through the whole book instead of turning pages.
     pub continuous: bool,
     /// Force a connected, gapless vertical strip of pages, regardless of the normal reading mode.
@@ -445,6 +430,9 @@ pub struct Settings {
     pub corner_rounding: CornerRounding,
     /// View mode for library cards: true for grid view (default), false for list view.
     pub view_mode_grid: bool,
+    /// Whether Vim keyboard navigation is enabled. Disabled by default.
+    #[serde(default)]
+    pub vim_mode: bool,
     /// Opacity of the window background, `OPACITY_MIN..=OPACITY_MAX`. Raised widget surfaces use
     /// a small opacity lift to stay distinct; page images, covers, and text remain opaque.
     pub opacity: f32,
@@ -460,6 +448,7 @@ impl Default for Settings {
             remember_zoom: true,
             zoom: 1.0,
             animate: true,
+            disable_animations: false,
             continuous: false,
             webcomics: false,
             group_series: false,
@@ -467,6 +456,7 @@ impl Default for Settings {
             border_size: BorderSize::Thin,
             corner_rounding: CornerRounding::Standard,
             view_mode_grid: true,
+            vim_mode: false,
             opacity: OPACITY_MAX,
         }
     }
@@ -512,9 +502,17 @@ impl Settings {
                 }
             }
         }
-        if let Some(animate) = object.get("animate").and_then(|v| v.as_bool()) {
-            settings.animate = animate;
-        }
+        let disabled = match (
+            object.get("disable_animations").and_then(|v| v.as_bool()),
+            object.get("animate").and_then(|v| v.as_bool()),
+        ) {
+            (Some(true), _) | (_, Some(false)) => true,
+            (Some(false), _) => false,
+            (None, Some(true)) => false,
+            (None, None) => false,
+        };
+        settings.disable_animations = disabled;
+        settings.animate = !disabled;
         if let Some(continuous) = object.get("continuous").and_then(|v| v.as_bool()) {
             settings.continuous = continuous;
         }
@@ -544,6 +542,9 @@ impl Settings {
         }
         if let Some(view_mode_grid) = object.get("view_mode_grid").and_then(|v| v.as_bool()) {
             settings.view_mode_grid = view_mode_grid;
+        }
+        if let Some(vim_mode) = object.get("vim_mode").and_then(|v| v.as_bool()) {
+            settings.vim_mode = vim_mode;
         }
         if let Some(fit) = object
             .get("fit")
@@ -1330,7 +1331,7 @@ mod tests {
         let loaded = Library::load(&dirs).unwrap();
         assert_eq!(loaded.settings().border_size, BorderSize::None);
         assert_eq!(loaded.settings().corner_rounding, CornerRounding::Rounded);
-        assert_eq!(loaded.settings().thumbnail_size, ThumbnailSize::Huge);
+        assert_eq!(loaded.settings().thumbnail_size, ThumbnailSize::Large);
     }
 
     #[test]

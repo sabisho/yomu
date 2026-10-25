@@ -5,8 +5,8 @@ use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::{Icon, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, MouseButton,
-    MouseDownEvent, Pixels, ScrollHandle, ScrollWheelEvent, SharedString, Styled, Window, div, px,
+    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
+    SharedString, Styled, Window, div, px,
 };
 use yomu::collections::Collection;
 
@@ -26,8 +26,6 @@ pub struct CollectionsProps<'a> {
 
 pub fn render_collections_view(
     props: CollectionsProps,
-    on_scroll_wheel: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
-    on_mouse_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_select_smart: impl Fn(&'static str, &mut Window, &mut App) + 'static,
     on_select_custom: impl Fn(&str, &mut Window, &mut App) + 'static,
     on_new_collection: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -97,17 +95,18 @@ pub fn render_collections_view(
             .into_any_element()
     };
 
-    div()
-        .id("collections-container")
-        .track_scroll(props.scroll_handle)
-        .size_full()
-        .overflow_y_scroll()
-        .on_scroll_wheel(on_scroll_wheel)
-        .on_mouse_down(MouseButton::Left, on_mouse_down)
-        .p_6()
-        .flex()
-        .flex_col()
-        .gap_6()
+    gpui_kit::base::ScrollBounce::new(
+        "collections-scroll-bounce",
+        props.scroll_handle,
+        div()
+            .id("collections-container")
+            .track_scroll(props.scroll_handle)
+            .size_full()
+            .overflow_y_scroll()
+            .p_6()
+            .flex()
+            .flex_col()
+            .gap_6()
         // Top Toolbar inside view
         .child(
             div()
@@ -148,14 +147,14 @@ pub fn render_collections_view(
                             "Favorites",
                             props.favorites_count,
                             IconName::Heart,
-                            gpui_kit::rgb(0xFF3B30).into(),
+                            colors.accent,
                         ))
                         .child(smart_card(
                             "reading",
                             "Currently Reading",
                             props.reading_count,
                             IconName::BookOpen,
-                            gpui_kit::rgb(0x007AFF).into(),
+                            colors.foreground,
                         )),
                 )
                 .child(
@@ -169,14 +168,14 @@ pub fn render_collections_view(
                             "Want to Read",
                             props.want_to_read_count,
                             IconName::Clock,
-                            gpui_kit::rgb(0xFF9500).into(),
+                            colors.foreground,
                         ))
                         .child(smart_card(
                             "completed",
                             "Completed",
                             props.completed_count,
                             IconName::Check,
-                            gpui_kit::rgb(0x34C759).into(),
+                            colors.accent,
                         )),
                 ),
         )
@@ -318,6 +317,7 @@ pub fn render_collections_view(
                         }))
                         .into_any_element()
                 }),
-        )
-        .into_any_element()
+        ),
+    )
+    .into_any_element()
 }

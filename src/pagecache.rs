@@ -23,14 +23,12 @@ pub fn system_memory_budget() -> u64 {
     {
         if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
             for line in meminfo.lines() {
-                if let Some(rest) = line.strip_prefix("MemTotal:") {
-                    if let Some(kb_str) = rest.trim().strip_suffix("kB") {
-                        if let Ok(kb) = kb_str.trim().parse::<u64>() {
-                            let total_bytes = kb * 1024;
-                            return (total_bytes / 8)
-                                .clamp(512 * 1024 * 1024, 3 * 1024 * 1024 * 1024);
-                        }
-                    }
+                if let Some(rest) = line.strip_prefix("MemTotal:")
+                    && let Some(kb_str) = rest.trim().strip_suffix("kB")
+                    && let Ok(kb) = kb_str.trim().parse::<u64>()
+                {
+                    let total_bytes = kb * 1024;
+                    return (total_bytes / 8).clamp(512 * 1024 * 1024, 3 * 1024 * 1024 * 1024);
                 }
             }
         }

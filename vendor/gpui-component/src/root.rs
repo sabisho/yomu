@@ -10,8 +10,9 @@ use crate::{
     window_border,
 };
 use gpui::{
-    App, AppContext, Context, DefiniteLength, ElementId, Entity, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement as _, Render, RenderOnce, Styled, WeakFocusHandle, Window, div,
+    App, AppContext, Bounds, Context, DefiniteLength, DispatchPhase, ElementId, Entity,
+    FocusHandle, GlobalElementId, InteractiveElement, IntoElement, MouseMoveEvent,
+    ParentElement as _, Pixels, Render, RenderOnce, Styled, WeakFocusHandle, Window, canvas, div,
     prelude::FluentBuilder as _,
 };
 use gpui_base::{TextSelection, TextSelectionScopeId};
@@ -28,6 +29,11 @@ pub(crate) struct WindowState {
     pub(super) focused_input: Option<AnyInputState>,
     pub notification: Entity<NotificationList>,
     pub(crate) tooltip_overlay: Entity<gpui_base::TooltipOverlay>,
+    tooltip_hovered_trigger: Option<GlobalElementId>,
+    tooltip_trigger_lifetime: std::rc::Weak<()>,
+    /// Bounds of the tooltip trigger last pressed, whose tooltip stays
+    /// dismissed until the pointer moves outside them.
+    tooltip_pressed_trigger: Option<Bounds<Pixels>>,
     pub(crate) native_menu_overlay: Entity<FallbackMenuOverlay>,
     touch_selection_overlay: Entity<WindowTouchSelectionOverlay>,
     sheet_size: Option<DefiniteLength>,
@@ -78,6 +84,9 @@ impl WindowState {
             notification: cx.new(|cx| NotificationList::new(window, cx)),
             tooltip_overlay: cx
                 .new(|_| gpui_base::TooltipOverlay::new().render_with(render_tooltip)),
+            tooltip_hovered_trigger: None,
+            tooltip_trigger_lifetime: std::rc::Weak::new(),
+            tooltip_pressed_trigger: None,
             native_menu_overlay: cx.new(|_| FallbackMenuOverlay::new()),
             touch_selection_overlay: cx.new(|cx| WindowTouchSelectionOverlay::new(window, cx)),
             sheet_size: None,
@@ -425,6 +434,94 @@ impl WindowState {
         Some(root.read(cx).tooltip_overlay.clone())
     }
 
+    /// Only the current trigger may request a hide. Hover listeners run in
+    /// reverse paint order, so a new trigger can enter before the old one leaves.
+    pub(crate) fn tooltip_overlay_for_trigger(
+        trigger: &GlobalElementId,
+        lifetime: std::rc::Weak<()>,
+        hovered: bool,
+        window: &Window,
+        cx: &mut App,
+    ) -> Option<Entity<gpui_base::TooltipOverlay>> {
+        Self::entity(window, cx)?.update(cx, |state, _| {
+            if hovered {
+                state.tooltip_hovered_trigger = Some(trigger.clone());
+                state.tooltip_trigger_lifetime = lifetime;
+            } else if state.tooltip_hovered_trigger.as_ref() == Some(trigger) {
+                state.tooltip_hovered_trigger = None;
+                state.tooltip_trigger_lifetime = std::rc::Weak::new();
+            } else {
+                return None;
+            }
+            Some(state.tooltip_overlay.clone())
+        })
+    }
+
+    fn dismiss_removed_tooltip(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(trigger) = self.tooltip_hovered_trigger.clone() else {
+            return;
+        };
+        let state = cx.weak_entity();
+        // Defer until GPUI has retained this frame's element states and dropped
+        // absent ones. A reused cached subtree keeps its trigger alive.
+        window.defer(cx, move |_, cx| {
+            _ = state.update(cx, |state, cx| {
+                if state.tooltip_hovered_trigger.as_ref() != Some(&trigger)
+                    || state.tooltip_trigger_lifetime.upgrade().is_some()
+                {
+                    return;
+                }
+                state.tooltip_hovered_trigger = None;
+                state.tooltip_trigger_lifetime = std::rc::Weak::new();
+                state
+                    .tooltip_overlay
+                    .update(cx, |overlay, cx| overlay.hide(cx));
+            });
+        });
+    }
+
+    /// Keeps the tooltip of the trigger at `bounds` dismissed until the
+    /// pointer moves outside them.
+    pub(crate) fn press_tooltip_trigger(bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+        Self::try_update(window, cx, |state, _, cx| {
+            state.tooltip_pressed_trigger = Some(bounds);
+            cx.notify();
+        });
+    }
+
+    pub(crate) fn is_tooltip_trigger_pressed(
+        bounds: Bounds<Pixels>,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        Self::try_read(window, cx)
+            .is_some_and(|state| state.tooltip_pressed_trigger == Some(bounds))
+    }
+
+    /// Ends the press on the first pointer move outside the trigger. It is
+    /// window-level because a removed or moved trigger never reports a
+    /// hover-leave.
+    fn tooltip_press_listener(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
+        let bounds = self.tooltip_pressed_trigger?;
+        let state = cx.entity().downgrade();
+        Some(canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Capture || bounds.contains(&event.position) {
+                        return;
+                    }
+                    _ = state.update(cx, |state, cx| {
+                        if state.tooltip_pressed_trigger == Some(bounds) {
+                            state.tooltip_pressed_trigger = None;
+                            cx.notify();
+                        }
+                    });
+                });
+            },
+        ))
+    }
+
     /// Get the fallback native-menu overlay entity for this window.
     pub(crate) fn native_menu_overlay(
         window: &Window,
@@ -437,6 +534,7 @@ impl WindowState {
 
 impl gpui_base::RootPlugin for WindowState {
     fn prepare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_removed_tooltip(window, cx);
         window.set_rem_size(cx.theme().font_size);
         TextSelection::activate_scope(self.active_text_selection_scope(), window, cx);
     }
@@ -470,6 +568,7 @@ impl Render for WindowState {
             .child(WindowStateLayers { root: cx.entity() })
             .child(self.touch_selection_overlay.clone())
             .child(self.tooltip_overlay.clone())
+            .children(self.tooltip_press_listener(cx))
             .child(self.native_menu_overlay.clone())
     }
 }

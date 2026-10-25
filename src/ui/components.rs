@@ -3,12 +3,12 @@
 use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, InteractiveElement, ObjectFit, Pixels, RenderImage, Rgba,
-    SharedString, Styled, StyledImage, Window, div, img, px,
+    AnyElement, App, ClickEvent, Div, ObjectFit, Pixels, RenderImage, Rgba, SharedString, Styled,
+    StyledImage, Window, div, img, px,
 };
 
 use super::theme::UiColors;
@@ -31,27 +31,30 @@ pub fn compute_responsive_grid(
 ) -> ResponsiveGrid {
     let sidebar_w = if sidebar_visible { 240.0 } else { 0.0 };
     let content_w = (viewport_width - sidebar_w).max(200.0);
-    let is_narrow = content_w < 560.0;
-    let pad_x = if is_narrow { 16.0 } else { 24.0 };
-    let gap = if is_narrow { 16.0 } else { 24.0 };
-    let available_w = (content_w - pad_x * 2.0).max(120.0);
 
-    let base_w = thumb_size.card_width();
-    let max_cols = ((available_w + gap) / (base_w * 0.74 + gap))
-        .floor()
-        .max(1.0) as usize;
-    let min_cols = ((available_w + gap) / (base_w * 1.36 + gap))
-        .floor()
-        .max(1.0) as usize;
-    let target_cols = ((available_w + gap) / (base_w + gap)).round().max(1.0) as usize;
-    let cols = target_cols.clamp(min_cols, max_cols);
+    let card_w = thumb_size.card_width();
+    let cover_h = thumb_size.card_height();
 
-    let card_w = if cols == 1 {
-        available_w.min(base_w * 1.25)
+    let min_space = if content_w < 560.0 { 12.0 } else { 14.0 };
+
+    // Maximum number of cards that can fit with at least min_space margin on edges and between cards
+    let cols = if content_w <= card_w + min_space * 2.0 {
+        1
     } else {
-        ((available_w - (cols - 1) as f32 * gap) / cols as f32).max(120.0)
+        (((content_w - min_space) / (card_w + min_space)).floor() as usize).max(1)
     };
-    let cover_h = (card_w * 1.5).round();
+
+    let (pad_x, gap) = if cols <= 1 {
+        let pad = ((content_w - card_w) / 2.0).max(min_space);
+        (pad, min_space)
+    } else {
+        let rem = (content_w - (cols as f32 * card_w)).max(0.0);
+        let space = rem / (cols + 1) as f32;
+        let gap = space.floor().max(min_space);
+        let pad_x =
+            ((content_w - (cols as f32 * card_w + (cols - 1) as f32 * gap)) / 2.0).max(min_space);
+        (pad_x, gap)
+    };
 
     ResponsiveGrid {
         cols,
@@ -224,88 +227,27 @@ pub fn panel_button(
     }
 }
 
-/// Three macOS traffic light dots (close, minimize, zoom) rendered at the top-left of the window.
-pub fn mac_window_controls(
-    on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_min: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_zoom: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(
-            div()
-                .id("traffic-close")
-                .size(px(12.))
-                .rounded_full()
-                .bg(gpui_kit::rgb(0xFF5F56))
-                .border_1()
-                .border_color(gpui_kit::rgb(0xE0443E))
-                .cursor_pointer()
-                .tooltip(|window, cx| Tooltip::new("Close window").build(window, cx))
-                .on_click(on_close),
-        )
-        .child(
-            div()
-                .id("traffic-min")
-                .size(px(12.))
-                .rounded_full()
-                .bg(gpui_kit::rgb(0xFFBD2E))
-                .border_1()
-                .border_color(gpui_kit::rgb(0xDEA123))
-                .cursor_pointer()
-                .tooltip(|window, cx| Tooltip::new("Minimize window").build(window, cx))
-                .on_click(on_min),
-        )
-        .child(
-            div()
-                .id("traffic-zoom")
-                .size(px(12.))
-                .rounded_full()
-                .bg(gpui_kit::rgb(0x27C93F))
-                .border_1()
-                .border_color(gpui_kit::rgb(0x1AAB29))
-                .cursor_pointer()
-                .tooltip(|window, cx| Tooltip::new("Toggle fullscreen (F11)").build(window, cx))
-                .on_click(on_zoom),
-        )
-}
-
 /// Subtle count badge used in the sidebar and navigation items.
-pub fn stat_badge(count: usize, active: bool, colors: UiColors, radius: Pixels) -> Div {
-    let bg_color = if active {
-        with_alpha(colors.accent_foreground, 0.22)
+pub fn stat_badge(
+    count: usize,
+    active: bool,
+    _colors: UiColors,
+    _radius: Pixels,
+) -> impl IntoElement {
+    if active {
+        Tag::primary().small().child(count.to_string())
     } else {
-        with_alpha(colors.foreground, 0.08)
-    };
-    let text_color = if active {
-        colors.accent_foreground
-    } else {
-        colors.muted
-    };
-    div()
-        .px_2()
-        .py_0p5()
-        .rounded(radius)
-        .bg(bg_color)
-        .text_xs()
-        .font_weight(gpui_kit::FontWeight::MEDIUM)
-        .text_color(text_color)
-        .child(count.to_string())
+        Tag::secondary().small().child(count.to_string())
+    }
 }
 
 /// Badge for manga genre tags.
-pub fn genre_tag(label: impl Into<SharedString>, colors: UiColors, radius: Pixels) -> Div {
-    div()
-        .px_2p5()
-        .py_1()
-        .rounded(radius)
-        .bg(with_alpha(colors.foreground, 0.08))
-        .text_xs()
-        .font_weight(gpui_kit::FontWeight::NORMAL)
-        .text_color(colors.foreground)
-        .child(label.into())
+pub fn genre_tag(
+    label: impl Into<SharedString>,
+    _colors: UiColors,
+    _radius: Pixels,
+) -> impl IntoElement {
+    Tag::secondary().small().child(label.into())
 }
 
 /// Star rating pill.

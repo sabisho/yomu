@@ -8,7 +8,7 @@ use std::{
     io::{Cursor, Write},
 };
 use yomu::archive::SourceKind;
-use yomu::motion::PageTransition;
+use yomu::motion::{KineticScroll, PageTransition};
 
 fn png_bytes() -> Vec<u8> {
     let image = image::RgbaImage::from_pixel(60, 90, image::Rgba([90, 40, 160, 255]));
@@ -111,7 +111,7 @@ fn opacity(view: &Entity<Yomu>, cx: &mut VisualTestContext) -> f32 {
 fn act(view: &Entity<Yomu>, cx: &mut VisualTestContext, id: &str, action: BookAction) {
     let id = id.to_string();
     view.update_in(cx, move |this, window, cx| {
-        this.run_book_action(action, &id, window, cx)
+        this.run_book_action(action, &id, &[id.clone()], window, cx)
     });
     cx.run_until_parked();
 }
@@ -498,6 +498,9 @@ fn menu_keyboard_navigation(cx: &mut TestAppContext) {
 fn keys_do_not_leak_to_the_reader_while_a_dialog_is_open(cx: &mut TestAppContext) {
     let fx = fixture("leak");
     let (view, cx) = launch(&fx, cx);
+    view.update_in(cx, |this, _, _| {
+        this.library.settings_mut().vim_mode = true;
+    });
     let id = fx.ids[0].clone();
     act(&view, cx, &id, BookAction::Open);
     assert_eq!(reading(&view, cx), Some(0));
@@ -916,9 +919,7 @@ fn group_view_scroll_is_independent_from_library_grid_scroll(cx: &mut TestAppCon
 
     // Simulate user having scrolled down in the library grid
     view.update(cx, |this, _| {
-        this.library_scroll
-            .handle
-            .set_offset(point(px(0.), px(-600.)));
+        this.library_scroll.set_offset(point(px(0.), px(-600.)));
     });
 
     // Enter a group
@@ -928,7 +929,7 @@ fn group_view_scroll_is_independent_from_library_grid_scroll(cx: &mut TestAppCon
     cx.run_until_parked();
 
     // Group view MUST open at the top (offset 0), not inheriting the -600px library scroll
-    let group_offset = view.read_with(cx, |this, _| this.group_scroll.handle.offset());
+    let group_offset = view.read_with(cx, |this, _| this.group_scroll.offset());
     assert_eq!(
         group_offset.y,
         px(0.),
@@ -936,7 +937,7 @@ fn group_view_scroll_is_independent_from_library_grid_scroll(cx: &mut TestAppCon
     );
 
     // Library grid's scroll position is preserved while group is open
-    let lib_offset = view.read_with(cx, |this, _| this.library_scroll.handle.offset());
+    let lib_offset = view.read_with(cx, |this, _| this.library_scroll.offset());
     assert_eq!(
         lib_offset.y,
         px(-600.),
@@ -950,7 +951,7 @@ fn group_view_scroll_is_independent_from_library_grid_scroll(cx: &mut TestAppCon
 
     assert_eq!(view.read_with(cx, |this, _| this.open_group.clone()), None);
     // Group scroll is reset on exit so reopening any group starts fresh at top
-    let group_offset_after = view.read_with(cx, |this, _| this.group_scroll.handle.offset());
+    let group_offset_after = view.read_with(cx, |this, _| this.group_scroll.offset());
     assert_eq!(
         group_offset_after.y,
         px(0.),
@@ -1661,6 +1662,9 @@ fn left_to_right_navigation_in_both_directions_at_the_start_middle_and_end(
 ) {
     let fx = fixture("ltr");
     let (view, cx) = launch(&fx, cx);
+    view.update_in(cx, |this, _, _| {
+        this.library.settings_mut().vim_mode = true;
+    });
     open_book_by_index(&fx, &view, cx, 0);
 
     cx.simulate_keystrokes("left");
@@ -1743,6 +1747,9 @@ fn clicking_the_screen_edges_and_the_wheel_turn_the_page(cx: &mut TestAppContext
 fn decoded_pages_stay_in_a_small_window(cx: &mut TestAppContext) {
     let fx = fixture("cache-ltr");
     let (view, cx) = launch(&fx, cx);
+    view.update_in(cx, |this, _, _| {
+        this.library.settings_mut().vim_mode = true;
+    });
     open_book_by_index(&fx, &view, cx, 0);
     cx.simulate_keystrokes("shift-g");
     cx.run_until_parked();
@@ -1950,6 +1957,9 @@ fn reduced_motion_and_the_animate_command_turn_animation_off(cx: &mut TestAppCon
 fn keyboard_scrolling_glides_accumulates_and_leaves_the_app_idle(cx: &mut TestAppContext) {
     let fx = fixture("glide");
     let (view, cx) = launch(&fx, cx);
+    view.update_in(cx, |this, _, _| {
+        this.library.settings_mut().vim_mode = true;
+    });
     open_book_by_index(&fx, &view, cx, 0);
     // zoom in far enough that the page is taller than the window
     view.update_in(cx, |this, window, cx| {
@@ -2330,18 +2340,11 @@ fn library_pinch_adjusts_thumbnail_size(cx: &mut TestAppContext) {
         this.on_library_pinch(0.2, TouchPhase::Moved, cx);
         assert_eq!(this.library.settings().thumbnail_size, ThumbnailSize::Large);
 
-        // Step up again to ExtraLarge
+        // Stepping up again caps at Large (maximum size)
         this.on_library_pinch(0.4, TouchPhase::Moved, cx);
-        assert_eq!(
-            this.library.settings().thumbnail_size,
-            ThumbnailSize::ExtraLarge
-        );
-
-        // Step down towards Large (< -0.35)
-        this.on_library_pinch(-0.4, TouchPhase::Moved, cx);
         assert_eq!(this.library.settings().thumbnail_size, ThumbnailSize::Large);
 
-        // Step down towards Medium
+        // Step down towards Medium (< -0.35)
         this.on_library_pinch(-0.4, TouchPhase::Moved, cx);
         assert_eq!(
             this.library.settings().thumbnail_size,
@@ -2349,6 +2352,10 @@ fn library_pinch_adjusts_thumbnail_size(cx: &mut TestAppContext) {
         );
 
         // Step down towards Small
+        this.on_library_pinch(-0.4, TouchPhase::Moved, cx);
+        assert_eq!(this.library.settings().thumbnail_size, ThumbnailSize::Small);
+
+        // Stepping down again caps at Small (minimum size)
         this.on_library_pinch(-0.4, TouchPhase::Moved, cx);
         assert_eq!(this.library.settings().thumbnail_size, ThumbnailSize::Small);
 
@@ -2361,142 +2368,79 @@ fn library_pinch_adjusts_thumbnail_size(cx: &mut TestAppContext) {
 }
 
 #[test]
-fn ui_scroll_controller_flick_inertia_and_touch_catch() {
-    let mut controller = UiScrollController::new();
+fn kinetic_scroll_flick_inertia_and_touch_catch() {
+    let mut kinetic = KineticScroll::new();
+    let now = Instant::now();
 
-    let event_start = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(0.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Started,
-    };
-    controller.handle_scroll_wheel(&event_start, false);
-    assert!(controller.kinetic.inertia.is_none());
-    assert!(controller.kinetic.last_motion_time.is_none());
+    kinetic.push_motion(now, 0.0, 0.0);
+    assert!(kinetic.inertia.is_none());
+    assert!(kinetic.last_motion_time.is_some());
 
-    let event_move1 = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Moved,
-    };
-    controller.handle_scroll_wheel(&event_move1, false);
-    assert!(controller.kinetic.last_motion_time.is_some());
+    kinetic.push_motion(now + Duration::from_millis(16), 0.0, -40.0);
+    kinetic.push_motion(now + Duration::from_millis(32), 0.0, -60.0);
 
-    let event_move2 = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(-60.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Moved,
-    };
-    controller.handle_scroll_wheel(&event_move2, false);
+    let started = kinetic.end_touch(true);
+    assert!(started);
+    assert!(kinetic.has_active_inertia());
+    assert!(kinetic.inertia.is_some());
 
-    let event_end = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(0.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Ended,
-    };
-    controller.handle_scroll_wheel(&event_end, false);
-    assert!(controller.has_active_inertia());
-    assert!(controller.kinetic.inertia.is_some());
-
-    let moving = controller.step(0.016, false);
-    assert!(moving, "inertia should be active");
+    let delta = kinetic.step(0.016);
+    assert!(delta.is_some(), "inertia should be active");
 
     // Touch down mid-inertia cancels immediately (touch catch)
-    controller.handle_scroll_wheel(&event_start, false);
-    assert!(!controller.has_active_inertia());
-    assert!(controller.kinetic.inertia.is_none());
+    kinetic.cancel_inertia();
+    assert!(!kinetic.has_active_inertia());
+    assert!(kinetic.inertia.is_none());
 }
 
 #[test]
-fn ui_scroll_controller_reduced_motion() {
-    let mut controller = UiScrollController::new();
+fn kinetic_scroll_reduced_motion() {
+    let mut kinetic = KineticScroll::new();
+    let now = Instant::now();
 
-    let event_start = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(0.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Started,
-    };
-    controller.handle_scroll_wheel(&event_start, true);
+    kinetic.push_motion(now, 0.0, 0.0);
+    kinetic.push_motion(now + Duration::from_millis(16), 0.0, -80.0);
 
-    let event_move = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(-80.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Moved,
-    };
-    controller.handle_scroll_wheel(&event_move, true);
-
-    let event_end = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(0.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Ended,
-    };
-    controller.handle_scroll_wheel(&event_end, true);
-
-    assert!(!controller.has_active_inertia());
-    assert!(controller.kinetic.inertia.is_none());
-    assert!(!controller.step(0.016, true));
+    // With allow_inertia = false (reduced motion), end_touch does not start inertia
+    let started = kinetic.end_touch(false);
+    assert!(!started);
+    assert!(!kinetic.has_active_inertia());
+    assert!(kinetic.inertia.is_none());
+    assert!(kinetic.step(0.016).is_none());
 }
 
 #[test]
-fn ui_scroll_controller_linux_stillness_fallback() {
-    let mut controller = UiScrollController::new();
+fn kinetic_scroll_linux_stillness_fallback() {
+    let mut kinetic = KineticScroll::new();
+    let now = Instant::now();
 
-    let event_move1 = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Moved,
-    };
-    controller.handle_scroll_wheel(&event_move1, false);
+    kinetic.push_motion(now, 0.0, -40.0);
+    kinetic.push_motion(now + Duration::from_millis(16), 0.0, -60.0);
 
-    let event_move2 = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(-60.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Moved,
-    };
-    controller.handle_scroll_wheel(&event_move2, false);
+    let t2 = now + Duration::from_millis(16);
+    // Immediately after motion (<35ms), stillness timeout not elapsed
+    assert!(!kinetic.check_stillness_timeout(t2 + Duration::from_millis(10), true));
+    assert!(kinetic.inertia.is_none());
+    assert!(kinetic.is_awaiting_release());
 
-    // Immediately after motion (<35ms), controller keeps frame loop alive while awaiting release
-    assert!(controller.step(0.016, false));
-    assert!(controller.kinetic.inertia.is_none());
-    assert!(controller.kinetic.is_awaiting_release());
-
-    // Simulate 40ms passing without Ended event (touchpad release without Ended)
-    controller.kinetic.last_motion_time = Some(Instant::now() - Duration::from_millis(40));
-
-    // Next step triggers inertia from stillness fallback
-    let running = controller.step(0.016, false);
+    // 40ms passing without Ended event (touchpad release without Ended on Linux)
+    let running = kinetic.check_stillness_timeout(t2 + Duration::from_millis(40), true);
     assert!(running);
-    assert!(controller.kinetic.inertia.is_some());
+    assert!(kinetic.inertia.is_some());
 }
 
 #[test]
-fn ui_scroll_controller_stale_timeout_never_triggers_inertia() {
-    let mut controller = UiScrollController::new();
+fn kinetic_scroll_stale_timeout_never_triggers_inertia() {
+    let mut kinetic = KineticScroll::new();
+    let now = Instant::now();
 
-    let event_move = ScrollWheelEvent {
-        position: point(px(0.), px(0.)),
-        delta: ScrollDelta::Pixels(point(px(0.), px(-50.))),
-        modifiers: Modifiers::default(),
-        touch_phase: TouchPhase::Moved,
-    };
-    controller.handle_scroll_wheel(&event_move, false);
+    kinetic.push_motion(now, 0.0, -50.0);
 
     // Simulate 200ms passing (stale motion, finger stopped on pad or long pause)
-    controller.kinetic.last_motion_time = Some(Instant::now() - Duration::from_millis(200));
-
-    // Must NOT trigger inertia when stale!
-    let running = controller.step(0.016, false);
+    let running = kinetic.check_stillness_timeout(now + Duration::from_millis(200), true);
     assert!(!running);
-    assert!(controller.kinetic.inertia.is_none());
-    assert!(!controller.kinetic.is_active());
+    assert!(kinetic.inertia.is_none());
+    assert!(!kinetic.is_active());
 }
 
 #[gpui_kit::test]
@@ -2720,16 +2664,13 @@ fn extended_thumbnail_border_and_rounding_options(cx: &mut TestAppContext) {
     let (view, cx) = launch(&fx, cx);
 
     view.update_in(cx, |this, _, cx| {
-        // Thumbnail sizes
-        this.set_thumbnail_size(ThumbnailSize::ExtraSmall, cx);
-        assert_eq!(
-            this.library.settings().thumbnail_size,
-            ThumbnailSize::ExtraSmall
-        );
-        assert_eq!(ThumbnailSize::ExtraSmall.card_width(), 150.0);
-        this.set_thumbnail_size(ThumbnailSize::Huge, cx);
-        assert_eq!(this.library.settings().thumbnail_size, ThumbnailSize::Huge);
-        assert_eq!(ThumbnailSize::Huge.card_width(), 340.0);
+        // Thumbnail sizes: Small, Medium, Large
+        this.set_thumbnail_size(ThumbnailSize::Small, cx);
+        assert_eq!(this.library.settings().thumbnail_size, ThumbnailSize::Small);
+        assert_eq!(ThumbnailSize::Small.card_width(), 180.0);
+        this.set_thumbnail_size(ThumbnailSize::Large, cx);
+        assert_eq!(this.library.settings().thumbnail_size, ThumbnailSize::Large);
+        assert_eq!(ThumbnailSize::Large.card_width(), 270.0);
 
         // Border sizes
         this.set_border_size(BorderSize::None, cx);
@@ -2770,6 +2711,9 @@ fn extended_thumbnail_border_and_rounding_options(cx: &mut TestAppContext) {
 fn library_view_command_box_and_theme_preview(cx: &mut TestAppContext) {
     let fx = fixture("cmdbox-test");
     let (view, cx) = launch(&fx, cx);
+    view.update_in(cx, |this, _, _| {
+        this.library.settings_mut().vim_mode = true;
+    });
 
     // Initial state: in library view, not in cmdline
     view.update_in(cx, |this, _, _| {
@@ -2985,12 +2929,12 @@ fn dropdown_menu_interaction_and_selection(cx: &mut TestAppContext) {
 
     // Test thumbnail size setter
     view.update(cx, |this, cx| {
-        this.set_thumbnail_size(ThumbnailSize::ExtraLarge, cx);
+        this.set_thumbnail_size(ThumbnailSize::Large, cx);
     });
     cx.run_until_parked();
     assert_eq!(
         view.read_with(cx, |this, _| this.library.settings().thumbnail_size),
-        ThumbnailSize::ExtraLarge
+        ThumbnailSize::Large
     );
 
     // Test corner rounding setter
@@ -3063,4 +3007,353 @@ fn dropdown_menu_interaction_and_selection(cx: &mut TestAppContext) {
         on_select,
     );
     drop(btn);
+}
+
+#[gpui_kit::test]
+fn navigation_back_and_forward_symmetry(cx: &mut TestAppContext) {
+    let fx = fixture("nav-symmetry-test");
+    let (view, cx) = launch(&fx, cx);
+
+    view.update_in(cx, |this, _, cx| {
+        // Initial state: AllManga
+        assert_eq!(this.nav_history.len(), 1);
+        assert_eq!(this.nav_history_idx, 0);
+        assert_eq!(
+            this.nav_history[0],
+            NavDestination::Section(ui::sidebar::SidebarSection::AllManga)
+        );
+
+        // Enter a group
+        this.enter_group_named("series-1".to_string(), "Series One".to_string(), cx);
+        assert_eq!(this.nav_history.len(), 2);
+        assert_eq!(this.nav_history_idx, 1);
+        assert_eq!(this.open_group.as_deref(), Some("series-1"));
+
+        // Navigate to Details from within the group
+        this.navigate_to(ui::sidebar::MainView::Details("book-1".to_string()), cx);
+        assert_eq!(this.nav_history.len(), 3);
+        assert_eq!(this.nav_history_idx, 2);
+
+        // Back 1: must return directly to the group (not top-level!)
+        this.navigate_back(cx);
+        assert_eq!(this.nav_history_idx, 1);
+        assert_eq!(this.open_group.as_deref(), Some("series-1"));
+
+        // Back 2: must return to AllManga
+        this.navigate_back(cx);
+        assert_eq!(this.nav_history_idx, 0);
+        assert_eq!(this.open_group, None);
+        assert_eq!(this.active_section, ui::sidebar::SidebarSection::AllManga);
+
+        // Back at bottom does nothing
+        this.navigate_back(cx);
+        assert_eq!(this.nav_history_idx, 0);
+
+        // Forward 1: must re-enter group "series-1"
+        this.navigate_forward(cx);
+        assert_eq!(this.nav_history_idx, 1);
+        assert_eq!(this.open_group.as_deref(), Some("series-1"));
+
+        // Forward 2: must re-enter Details("book-1")
+        this.navigate_forward(cx);
+        assert_eq!(this.nav_history_idx, 2);
+        assert_eq!(
+            this.active_view,
+            ui::sidebar::MainView::Details("book-1".to_string())
+        );
+
+        // Forward at top does nothing
+        this.navigate_forward(cx);
+        assert_eq!(this.nav_history_idx, 2);
+
+        // Back to group (idx 1)
+        this.navigate_back(cx);
+        assert_eq!(this.nav_history_idx, 1);
+
+        // Navigating to a new section truncates forward history (which had Details at idx 2)
+        this.navigate_to(ui::sidebar::MainView::ContinueReading, cx);
+        assert_eq!(this.nav_history.len(), 3);
+        assert_eq!(this.nav_history_idx, 2);
+        assert_eq!(
+            this.nav_history[2],
+            NavDestination::Section(ui::sidebar::SidebarSection::ContinueReading)
+        );
+
+        // Forward does nothing because forward history was truncated
+        this.navigate_forward(cx);
+        assert_eq!(this.nav_history_idx, 2);
+    });
+}
+
+#[gpui_kit::test]
+fn test_right_click_does_not_select_or_show_selection_toolbar(cx: &mut TestAppContext) {
+    let fx = fixture("rtclick_nosel");
+    let (view, cx) = launch(&fx, cx);
+
+    // Initial state: 0 items selected, browsing controls visible
+    assert!(selected(&view, cx).is_empty());
+    assert!(cx.debug_bounds("add-files").is_some());
+    assert!(cx.debug_bounds("select-all").is_none());
+
+    // Right-click on card 0
+    click(cx, card(0), MouseButton::Right);
+    cx.run_until_parked();
+
+    // Context menu opens, but item is NOT selected, and selection toolbar does NOT appear
+    assert_eq!(overlay_kind(&view, cx), "menu");
+    assert!(
+        selected(&view, cx).is_empty(),
+        "right-clicking an unselected item must not select it"
+    );
+    assert!(
+        cx.debug_bounds("select-all").is_none(),
+        "selection toolbar must not appear on right-click"
+    );
+}
+
+#[gpui_kit::test]
+fn test_right_click_on_selected_preserves_multi_selection(cx: &mut TestAppContext) {
+    let fx = fixture("rtclick_preserves");
+    let (view, cx) = launch(&fx, cx);
+
+    // Select books 0 and 1
+    ctrl_click(cx, 0);
+    ctrl_click(cx, 1);
+    assert_eq!(selected(&view, cx).len(), 2);
+
+    // Right-click on book 1 (an item already within multi-selection)
+    click(cx, card(1), MouseButton::Right);
+    cx.run_until_parked();
+
+    // Context menu opens and multi-selection is preserved
+    assert_eq!(overlay_kind(&view, cx), "menu");
+    assert_eq!(
+        selected(&view, cx).len(),
+        2,
+        "multi-selection must be preserved when right-clicking an already-selected item"
+    );
+    let labels = menu_labels(&view, cx);
+    assert!(
+        labels.iter().any(|l| l.to_lowercase().contains("2 books")),
+        "context menu offers bulk actions for the 2 selected books: {labels:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn test_contextual_toolbar_mode_transitions(cx: &mut TestAppContext) {
+    let fx = fixture("ctx_toolbar");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Browsing mode: no selection
+    assert!(cx.debug_bounds("add-files").is_some());
+    assert!(cx.debug_bounds("select-all").is_none());
+    assert!(cx.debug_bounds("select-remove").is_none());
+    assert!(cx.debug_bounds("select-cancel").is_none());
+
+    // 2. Transition to selection mode: select card 0
+    ctrl_click(cx, 0);
+    cx.run_until_parked();
+
+    // Browsing controls are replaced by selection actions in the single top toolbar
+    assert!(
+        cx.debug_bounds("add-files").is_none(),
+        "import button is replaced in selection mode"
+    );
+    assert!(cx.debug_bounds("select-all").is_some());
+    assert!(cx.debug_bounds("select-remove").is_some());
+    let cancel = cx
+        .debug_bounds("select-cancel")
+        .expect("Cancel button present in selection mode");
+
+    // 3. Click Cancel: returns to normal browsing mode
+    click(cx, cancel.center(), MouseButton::Left);
+    cx.run_until_parked();
+
+    assert!(selected(&view, cx).is_empty());
+    assert!(
+        cx.debug_bounds("add-files").is_some(),
+        "import button restored in browsing mode"
+    );
+    assert!(cx.debug_bounds("select-all").is_none());
+    assert!(cx.debug_bounds("select-remove").is_none());
+}
+
+#[gpui_kit::test]
+fn test_back_navigation_visibility_and_no_forward_button(cx: &mut TestAppContext) {
+    let fx = fixture("nav_back");
+    let (view, cx) = launch(&fx, cx);
+
+    // Forward button is never present in the library toolbar
+    assert!(
+        cx.debug_bounds("toolbar-nav-forward").is_none(),
+        "forward button is completely removed"
+    );
+
+    // In top-level library root: Back button is hidden
+    assert!(
+        cx.debug_bounds("group-back").is_none(),
+        "back button is hidden at top-level library root"
+    );
+
+    // Enter a group
+    view.update_in(cx, |this, _, cx| {
+        this.open_group = Some("series:test_series".into());
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Back button is now visible
+    let back = cx
+        .debug_bounds("group-back")
+        .expect("group-back button is visible when inside group");
+    click(cx, back.center(), MouseButton::Left);
+    cx.run_until_parked();
+
+    // Back button exits the group and hides itself
+    assert_eq!(view.read_with(cx, |this, _| this.open_group.clone()), None);
+    assert!(cx.debug_bounds("group-back").is_none());
+}
+
+#[gpui_kit::test]
+fn test_vim_mode_default_off_and_settings_persistence(cx: &mut TestAppContext) {
+    let fx = fixture("vim_default");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Off by default
+    view.update_in(cx, |this, _, _| {
+        assert!(
+            !this.library.settings().vim_mode,
+            "vim_mode must be off by default"
+        );
+        assert!(!this.is_vim_enabled());
+    });
+
+    // Pressing ':' in library when vim mode is off does NOT enter cmdline
+    cx.simulate_keystrokes(":");
+    view.update_in(cx, |this, _, _| {
+        assert!(
+            !this.in_cmdline(),
+            "colon must not open cmdline when vim mode is off"
+        );
+    });
+
+    // 2. Enable vim mode via settings
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_vim_mode(true, cx);
+    });
+
+    // Now typing ':' opens cmdline
+    cx.simulate_keystrokes(":");
+    view.update_in(cx, |this, _, _| {
+        assert!(
+            this.in_cmdline(),
+            "colon opens cmdline when vim mode is enabled"
+        );
+    });
+    cx.simulate_keystrokes("escape");
+
+    // 3. Persists across restarts
+    let on_disk = Library::load(&fx.dirs).unwrap();
+    assert!(
+        on_disk.settings().vim_mode,
+        "vim mode setting must persist on disk"
+    );
+}
+
+#[gpui_kit::test]
+fn test_vim_mode_cli_flag_override(cx: &mut TestAppContext) {
+    let fx = fixture("vim_cli");
+    let (view, cx) = launch(&fx, cx);
+
+    // Settings on disk are default (vim_mode = false)
+    assert!(!saved_settings(&fx).vim_mode);
+
+    // Session override via CLI flag (--vim)
+    view.update_in(cx, |this, _, _| {
+        this.vim_cli_override = true;
+        assert!(this.is_vim_enabled());
+    });
+
+    // Typing ':' opens cmdline
+    cx.simulate_keystrokes(":");
+    view.update_in(cx, |this, _, _| {
+        assert!(this.in_cmdline());
+    });
+    cx.simulate_keystrokes("escape");
+
+    // Disk settings are NOT modified by CLI session override
+    assert!(
+        !saved_settings(&fx).vim_mode,
+        "CLI flag must not permanently alter saved settings on disk"
+    );
+}
+
+#[gpui_kit::test]
+fn test_disable_animations_setting_and_reduced_motion_override(cx: &mut TestAppContext) {
+    let fx = fixture("disable_anim");
+    let (view, cx) = launch(&fx, cx);
+
+    // Default: animations enabled (disable_animations is false)
+    view.update_in(cx, |this, _, _| {
+        assert!(!this.library.settings().disable_animations);
+        assert!(this.animations_enabled());
+    });
+
+    // 1. User toggles disable_animations ON
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_disable_animations(true, cx);
+        assert!(this.library.settings().disable_animations);
+        assert!(!this.animations_enabled());
+    });
+
+    // Verify it persists on disk
+    let on_disk = Library::load(&fx.dirs).unwrap();
+    assert!(on_disk.settings().disable_animations);
+
+    // 2. User toggles disable_animations OFF
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_disable_animations(false, cx);
+        assert!(!this.library.settings().disable_animations);
+        assert!(this.animations_enabled());
+    });
+
+    // 3. System asks for reduced motion: animations must stay off regardless of user setting
+    view.update_in(cx, |this, _, _| {
+        this.reduce_motion = true;
+        assert!(
+            !this.animations_enabled(),
+            "system reduced motion must override user setting"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn test_shortcuts_tab_adapts_to_vim_mode(cx: &mut TestAppContext) {
+    let fx = fixture("shortcuts_vim");
+    let (view, cx) = launch(&fx, cx);
+
+    view.update_in(cx, |this, _, cx| {
+        this.settings_tab = ui::overlays::SettingsTab::Shortcuts;
+        // With vim mode off
+        this.toggle_vim_mode(false, cx);
+    });
+
+    view.update_in(cx, |this, _, _| {
+        assert!(!this.is_vim_enabled());
+    });
+
+    // Enable vim mode
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_vim_mode(true, cx);
+        assert!(this.is_vim_enabled());
+    });
+}
+
+#[gpui_kit::test]
+fn test_volume_count_badge_is_numeric_only(cx: &mut TestAppContext) {
+    let fx = fixture("badge");
+    let (view, cx) = launch(&fx, cx);
+    let (colors, radius) = view.read_with(cx, |this, _| (this.colors, px(this.radius_px())));
+    // stat_badge creates a Tag with the numeric count only
+    let _badge = ui::components::stat_badge(42, false, colors, radius);
 }

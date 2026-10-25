@@ -37,6 +37,13 @@ impl Selection {
         self.anchor = None;
     }
 
+    pub fn remove(&mut self, id: &str) {
+        self.ids.remove(id);
+        if self.anchor.as_deref() == Some(id) {
+            self.anchor = None;
+        }
+    }
+
     /// Selected ids in library order (so bulk actions and messages are deterministic).
     pub fn in_order(&self, order: &[String]) -> Vec<String> {
         order

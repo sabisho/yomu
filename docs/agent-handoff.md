@@ -238,9 +238,9 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - Aligned titlebar branding horizontally alongside macOS traffic lights.
   - Standardized rounded box corners (`CornerRounding`) across UI components, eliminating inconsistent pill shapes and ensuring cursor styles (`cursor_pointer`) on all interactive switches and buttons.
 - **Dynamic Responsive Grid Layout (`compute_responsive_grid`):**
-  - Replaced rigid fixed card widths with dynamic responsive column calculation based on available content viewport width and selected `ThumbnailSize`.
-  - Cards stretch and scale proportionally to evenly span from left padding to right padding with zero wasted margin space on the right.
-  - In narrow views (<560px, e.g. when sidebar collapses), dynamically scales cards to fit 2 full columns without dropping to 1 card.
+  - Card dimensions (`card_w`, `cover_h`) are strictly fixed to the user's selected `ThumbnailSize` (Small: 180×270, Medium: 220×330, Large: 270×405) so covers never stretch, blow up, or shrink when the window resizes or when the sidebar toggles.
+  - Column count (`cols`) dynamically adjusts to fit the maximum number of full cards across the available viewport width.
+  - Remaining horizontal space is distributed evenly across all outer margins (`pad_x`) and inter-card gaps (`gap`): left padding, spaces between cards, and right padding are all identical and adapt smoothly as the window width changes, with zero wasted margin on the right.
 - **Unified Single Sidebar Toggle Button:**
   - Removed duplicate sidebar collapse button in the sidebar header; retained the single canonical toggle button in the toolbar (`toolbar-sidebar-toggle`) adhering to macOS HIG.
 - **Monochrome Settings Panel Navigation:**
@@ -266,6 +266,76 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - Interactive segmented controls with active accent fill, hover states, and native GPUI Kit tooltips.
 - **Native GPUI Kit Tooltips Throughout the Entire UI:**
   - Integrated `gpui_kit::component::tooltip::Tooltip` across window traffic lights (close, minimize, zoom), toolbar controls (sidebar toggle, navigation back/forward, grouping toggles, view mode toggles, import button), manga details actions (back to library, continue reading, link AniList, more options), settings traffic light, and reader navigation chevrons.
+
+### 18. Native UX Refinement, Cross-Platform Polish, and GPUI Kit 0.8 Architecture
+- **Platform-Native Window Decorations & Dynamic Insets:**
+  - Excised fake custom window traffic dots from the sidebar and dialogs.
+  - On macOS, restored AppKit native traffic lights at `(16, 18)` via `TitlebarOptions { appears_transparent: true, traffic_light_position: Some(...) }`.
+  - Sidebar header and collapsed toolbar dynamically apply `pl(px(80.))` strictly on macOS, preventing collision with native traffic lights while maintaining zero superfluous padding on Linux and Windows.
+  - On Windows, relies on native DWM caption controls with `appears_transparent: false`.
+  - On Linux, requests `WindowDecorations::Server` (SSD). When the compositor negotiates SSD (e.g. Mutter/KWin), compositor draws window controls. When client-decorated (`Decorations::Client`), dynamically renders a clean, Libadwaita-inspired close button on the far right of the toolbar with actions shifted left.
+- **Redesigned Standalone Import Button:**
+  - Replaced visible "Import" text button with a minimal 28px plus (+) icon button matching the exact dimensions, 14px icon weight, visual style, hover/pressed states, and corner radius of the view-mode switches.
+  - Retained `debug_selector("add-files")` and accessible tooltip `Import files (⌘O / Ctrl+O)`.
+- **Consolidated Thumbnail Sizes (Small, Medium, Large):**
+  - Eliminated duplicate thumbnail settings from Appearance; unified in Library tab under "Thumbnail Size".
+  - Refactored `ThumbnailSize` enum to 3 options: `Small` (180px), `Medium` (220px), `Large` (270px).
+  - Preserved backward compatibility with legacy `library.json` files via serde aliases (`xsmall`, `extra-small`, `xlarge`, `extra-large`, `huge`).
+  - Removed raw pixel dimensions from UI labels; updated trackpad pinch zoom to cycle cleanly between Small <-> Medium <-> Large.
+- **Unified Appearance Mode Dropdown Selector:**
+  - Replaced custom preview cards with native `macos_dropdown_button` dropdown offering `System`, `Light`, `Dark`.
+  - Matches the existing `Color Scheme` and `Corner Rounding` dropdown styling and interaction semantics.
+- **Thumbnail Corner Clipping Fix:**
+  - Identified root cause: GPUI's `overflow_hidden()` on parent divs clips to an axis-aligned bounding box, not rounded corners.
+  - Added `.rounded_t(radius)` directly to grid card cover containers and `img(cover_path)` elements, and `.rounded(px(radius.min(4.)))` to list items. Covers now smoothly follow the card border without corner bleeding or flat cutoffs.
+- **Symmetrical Destination-Based Navigation Model:**
+  - Implemented `NavDestination` enum (`Section(SidebarSection)`, `Group { key, name }`, `Details(id)`, `AniListSearch`).
+  - Fixed asymmetric Back/Forward navigation: entering a group now records a first-class navigation destination, allowing Forward to re-enter the group, and Back from nested views (Details) to return to the group rather than popping to root.
+  - Toolbar `can_go_back` and `can_go_forward` update immediately and reliably based on stack index.
+
+### 19. Context-Aware Controls, Selection Decoupling, Single Contextual Toolbar, Platform Settings Controls, Simplified Navigation, Opt-in Vim Mode, and Design-Token Icons
+- **Decoupled Right-Click Behavior & Selection State (`src/main.rs`, `src/ui/overlays.rs`, `src/selection.rs`):**
+  - Right-clicking an item (folder group or individual book) no longer automatically selects it or triggers selection mode.
+  - `BookMenu` now carries `target_ids: Vec<String>` explicitly. Context menu operations (e.g. Remove, Mark Read, Mark Unread) operate directly on `target_ids` rather than requiring items to be in the global selection.
+  - Right-clicking an already-selected item preserves the existing multi-selection and offers batch actions on all selected items.
+  - Right-clicking an unselected item drops any active selection without selecting the clicked item, opening the context menu cleanly targeted to that item.
+- **Single Contextual Toolbar (`src/ui/toolbar.rs`, `src/main.rs`):**
+  - Excised the secondary toolbar row (`show_header`) from `render_all_manga_view`, `render_history_view`, and `render_anilist_category_view`.
+  - Consolidated selection controls directly into the primary top toolbar:
+    - Browsing Mode (`selection_count == 0`): displays search bar, grouping switch, view mode switch, and import button.
+    - Selection Mode (`selection_count > 0`): replaces browsing controls with `N selected` badge, `Select all`, `Remove`, and `Cancel` in the exact same 52px header area without height jumps or layout shifts.
+- **Platform-Aware Settings Panel Window Controls (`src/ui/settings_view.rs`):**
+  - On macOS: displays close button on the top-left (`settings-close-macos`), matching native macOS window conventions.
+  - On Windows: displays close button on the top-right (`settings-close-win`).
+  - On Linux with CSD (`Decorations::Client`): displays Libadwaita-inspired close button on the top-right (`settings-close-csd`).
+  - On Linux with SSD (`Decorations::Server`): omits in-window close button, letting the compositor handle decorations.
+- **Simplified Back-Only Navigation (`src/ui/toolbar.rs`, `src/main.rs`):**
+  - Forward navigation button removed entirely from the toolbar.
+  - Back button (`toolbar-nav-back`) is visible strictly when viewing inside an open series group (`open_group.is_some()`). In library root or individual volume modes, the Back button is hidden.
+  - Activating Back exits the group back to the library view cleanly.
+- **Opt-In Vim Navigation (`src/library.rs`, `src/main.rs`, `src/ui/settings_view.rs`):**
+  - Vim mode is disabled by default (`Settings.vim_mode = false`, with `#[serde(default)]` backward compatibility).
+  - Reader settings tab provides a toggle switch (`vim-mode-switch`) under "Vim Keybindings".
+  - Added CLI flags `--vim` and `--vim-mode` in `main.rs` to override Vim mode for the current session without modifying saved settings.
+  - When disabled, Vim keys (`j`, `k`, `h`, `l`, `gg`, `G`, `:`) do not intercept desktop navigation, allowing standard arrow and modifier keys to function predictably.
+- **Theme-Aware Collection Icons (`src/ui/collections_view.rs`):**
+  - Replaced hard-coded RGB hex colors with semantic GPUI Kit design tokens (`colors.accent` and `colors.foreground`), ensuring visual consistency across all themes and appearance modes.
+- **Recently Added & Library Grid Consistency (`src/ui/continue_reading.rs`, `src/main.rs`):**
+  - Aligned Recently Added layout with All Manga: dynamically interprets folder cards when `group_series` is enabled and individual volume cards when disabled.
+  - Eliminated uneven margin/whitespace on the right by passing the dynamically calculated `grid.gap` (`recent_gap`) and responsive card width into Recently Added.
+- **Numeric-Only Volume Badges (`src/main.rs`, `src/ui/components.rs`):**
+  - Replaced hard-coded `"vols"` strings with `ui::components::stat_badge(count, false, colors, radius)`.
+  - Badges are squircle-shaped, theme-aware, and display strictly the numeric volume count matching the sidebar count badges.
+- **Thumbnail Inner Corner Radius Derivation (`src/main.rs`, `src/ui/continue_reading.rs`):**
+  - Solved corner overflow where square cover images poked past rounded card borders.
+  - Cards now compute `inner_radius = (radius - px(border_px)).max(px(0.))` derived from the configured corner radius and border thickness, applied to both the cover container and image with top rounding.
+- **Dynamic Shortcuts Settings Pane (`src/ui/settings_view.rs`):**
+  - Shortcuts tab in the Settings panel dynamically checks the active `vim_mode` state (including session CLI flags).
+  - Displays standard desktop navigation shortcuts (Arrow keys, Space, PageDown) when Vim mode is disabled, and displays Vim keybindings (`j`, `k`, `gg`, `G`, `:`) when Vim mode is enabled.
+- **Application-Wide Disable Animations Setting (`src/library.rs`, `src/ui/settings_view.rs`, `src/main.rs`):**
+  - Added persistent `disable_animations` switch to Settings Reader tab.
+  - When system reduced motion is active, the switch is forced on, disabled (greyed out), and displays an informative helper message.
+  - Enforced a centralized animation policy: `animations_enabled = !system_reduced_motion && !user_disable_animations`.
 
 ## Build and verification
 

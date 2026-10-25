@@ -192,7 +192,7 @@ impl AniListData {
     pub fn is_connected(&self) -> bool {
         self.user
             .as_ref()
-            .map_or(false, |u| u.token.is_some() || !u.name.is_empty())
+            .is_some_and(|u| u.token.is_some() || !u.name.is_empty())
     }
 
     pub fn user_name(&self) -> &str {
@@ -226,7 +226,7 @@ impl AniListData {
         if let Some(media) = self.cache.get_mut(&media_id) {
             media.user_progress = Some(progress);
             if status.is_some() {
-                media.user_status = status.clone();
+                media.user_status = status;
             }
         }
         self.sync_queue.retain(|item| item.media_id != media_id);
@@ -598,18 +598,15 @@ fn parse_media_json(val: &serde_json::Value) -> AniListMedia {
         for edge in staff {
             let role = edge["role"].as_str().unwrap_or("");
             let name = edge["node"]["name"]["full"].as_str().unwrap_or("");
-            if role.contains("Story")
+            if (role.contains("Story")
                 || role.contains("Original Creator")
-                || role.contains("Author")
+                || role.contains("Author"))
+                && author.is_none()
             {
-                if author.is_none() {
-                    author = Some(name.to_string());
-                }
+                author = Some(name.to_string());
             }
-            if role.contains("Art") || role.contains("Illustration") {
-                if artist.is_none() {
-                    artist = Some(name.to_string());
-                }
+            if (role.contains("Art") || role.contains("Illustration")) && artist.is_none() {
+                artist = Some(name.to_string());
             }
         }
     }
@@ -687,17 +684,17 @@ pub fn parse_anilist_id(input: &str) -> Option<u64> {
     if let Some(pos) = trimmed.find("/manga/") {
         let after = &trimmed[pos + 7..];
         let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(id) = digits.parse::<u64>() {
-            if id > 0 {
-                return Some(id);
-            }
+        if let Ok(id) = digits.parse::<u64>()
+            && id > 0
+        {
+            return Some(id);
         }
     }
     let digits: String = trimmed.chars().filter(|c| c.is_ascii_digit()).collect();
-    if let Ok(id) = digits.parse::<u64>() {
-        if id > 0 {
-            return Some(id);
-        }
+    if let Ok(id) = digits.parse::<u64>()
+        && id > 0
+    {
+        return Some(id);
     }
     None
 }

@@ -104,10 +104,10 @@ fn decode_jpeg_fit_bgra(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Decoded>
 ///
 /// The returned buffer is already **BGRA**, the channel order gpui expects.
 pub fn decode_fit_bgra(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Decoded> {
-    if bytes.starts_with(&[0xff, 0xd8]) {
-        if let Ok(decoded) = decode_jpeg_fit_bgra(bytes, max_w, max_h) {
-            return Ok(decoded);
-        }
+    if bytes.starts_with(&[0xff, 0xd8])
+        && let Ok(decoded) = decode_jpeg_fit_bgra(bytes, max_w, max_h)
+    {
+        return Ok(decoded);
     }
 
     let img = decode(bytes)?;
@@ -214,10 +214,10 @@ fn make_jpeg_cover(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Vec<u8>> {
 
 /// Encode a JPEG thumbnail that fits inside `max_w` x `max_h`, keeping the aspect ratio.
 pub fn make_cover_jpeg(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Vec<u8>> {
-    if bytes.starts_with(&[0xff, 0xd8]) {
-        if let Ok(cover) = make_jpeg_cover(bytes, max_w, max_h) {
-            return Ok(cover);
-        }
+    if bytes.starts_with(&[0xff, 0xd8])
+        && let Ok(cover) = make_jpeg_cover(bytes, max_w, max_h)
+    {
+        return Ok(cover);
     }
 
     let img = decode(bytes)?;

@@ -1,5 +1,7 @@
 //! Split-pane Settings view matching macOS Human Interface Guidelines.
 
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
@@ -7,15 +9,16 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Side, Sizable, Size};
+use gpui_kit::component::{Disableable, Icon, Side, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, ElementId, Entity, FontWeight, InteractiveElement,
-    MouseButton, MouseDownEvent, Pixels, Rgba, ScrollHandle, ScrollWheelEvent, SharedString,
-    Styled, Window, div, px, rgb,
+    AnyElement, App, ClickEvent, Div, ElementId, Entity, FontWeight, InteractiveElement, Pixels,
+    ScrollHandle, SharedString, Styled, Window, div, px,
 };
 
-use super::components::{macos_sidebar_bg, with_alpha, zoom_shortcut_str};
+use super::components::{
+    macos_sidebar_bg, open_shortcut_str, settings_shortcut_str, with_alpha, zoom_shortcut_str,
+};
 use super::overlays::SettingsTab;
 use super::theme::{UiColors, is_standalone_scheme};
 use crate::library::{BorderSize, CornerRounding, Settings, ThemeModePreference, ThumbnailSize};
@@ -32,21 +35,23 @@ pub struct SettingsViewProps<'a> {
     pub anilist_matched_count: usize,
     pub anilist_sync_count: usize,
     pub cache_size_str: String,
+    pub is_client_decorated: bool,
+    pub system_reduced_motion: bool,
+    pub vim_mode: bool,
     pub colors: UiColors,
     pub radius: Pixels,
 }
 
 pub fn render_settings_view(
     props: SettingsViewProps,
-    on_scroll_wheel: impl Fn(&ScrollWheelEvent, &mut Window, &mut App) + 'static,
-    on_mouse_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     on_select_tab: impl Fn(SettingsTab, &mut Window, &mut App) + 'static,
     on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_toggle_continuous: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_webcomics: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
-    on_toggle_animate: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_toggle_disable_animations: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_remember_zoom: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_toggle_vim_mode: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_set_theme_mode: impl Fn(ThemeModePreference, &mut Window, &mut App) + 'static,
     on_set_color_scheme: impl Fn(String, &mut Window, &mut App) + 'static,
     on_set_thumbnail_size: impl Fn(ThumbnailSize, &mut Window, &mut App) + 'static,
@@ -105,44 +110,67 @@ pub fn render_settings_view(
                         .flex()
                         .flex_col()
                         .gap_1p5()
-                        // macOS Window Traffic Lights & Title Header
-                        .child(
-                            div()
-                                .px_2()
-                                .pt_1p5()
-                                .pb_3()
+                        // Platform-aware header: close button placement adapts to OS & decoration mode
+                        .child({
+                            let is_macos = cfg!(target_os = "macos");
+                            let is_windows = cfg!(target_os = "windows");
+                            let close_btn = div()
+                                .id("settings-close-btn")
+                                .size(px(20.))
+                                .rounded(px(4.))
                                 .flex()
                                 .items_center()
-                                .gap_3()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
+                                .tooltip(|window, cx| {
+                                    Tooltip::new("Close settings (Esc)").build(window, cx)
+                                })
+                                .on_click({
+                                    let on_close = on_close.clone();
+                                    move |e, window, cx| on_close(e, window, cx)
+                                })
                                 .child(
-                                    div()
-                                        .id("settings-traffic-close")
-                                        .size(px(12.))
-                                        .rounded_full()
-                                        .bg(Rgba {
-                                            r: 1.0,
-                                            g: 0.37,
-                                            b: 0.34,
-                                            a: 1.0,
-                                        })
-                                        .cursor_pointer()
-                                        .hover(|s| s.opacity(0.8))
-                                        .tooltip(|window, cx| {
-                                            Tooltip::new("Close settings (Esc)").build(window, cx)
-                                        })
-                                        .on_click({
-                                            let on_close = on_close.clone();
-                                            move |e, window, cx| on_close(e, window, cx)
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(colors.foreground)
-                                        .child("Settings"),
-                                ),
-                        )
+                                    Icon::new(IconName::Close)
+                                        .size(px(14.))
+                                        .text_color(colors.muted),
+                                );
+                            let title = div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(colors.foreground)
+                                .child("Settings");
+
+                            if is_macos {
+                                div()
+                                    .px_2()
+                                    .pt_1p5()
+                                    .pb_3()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(close_btn)
+                                    .child(title)
+                            } else if is_windows || props.is_client_decorated {
+                                div()
+                                    .px_2()
+                                    .pt_1p5()
+                                    .pb_3()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(title)
+                                    .child(close_btn)
+                            } else {
+                                div()
+                                    .px_2()
+                                    .pt_1p5()
+                                    .pb_3()
+                                    .flex()
+                                    .items_center()
+                                    .child(title)
+                            }
+                        })
                         .children(tabs.iter().map(|&(tab, icon, label)| {
                             let on_select_tab = on_select_tab.clone();
                             let active = props.current_tab == tab;
@@ -194,112 +222,117 @@ pub fn render_settings_view(
         )
         // Right macOS Settings Content Pane
         .child(
-            div()
-                .id("settings-content-scroll")
-                .track_scroll(props.scroll_handle)
-                .on_scroll_wheel(on_scroll_wheel)
-                .on_mouse_down(MouseButton::Left, on_mouse_down)
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .rounded_r(props.radius)
-                .overflow_hidden()
-                .overflow_y_scroll()
-                .px_7()
-                .py_6()
-                .flex()
-                .flex_col()
-                .gap_4()
-                .child(
-                    div()
-                        .pb_1()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .text_lg()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(colors.foreground)
-                                .child(props.current_tab.label()),
-                        )
-                        .child(
-                            div().text_xs().text_color(colors.muted).child(match props
-                                .current_tab
-                            {
-                                SettingsTab::General => {
-                                    "Configure general reading defaults and view application information."
-                                }
-                                SettingsTab::Appearance => {
-                                    "Customize theme colors, card cover dimensions, rounding, and borders."
-                                }
-                                SettingsTab::Reader => {
-                                    "Control reader transitions, layout scrolling, zoom retention, and navigation."
-                                }
-                                SettingsTab::Library => {
-                                    "Manage library organization, folder grouping, and cover size presets."
-                                }
-                                SettingsTab::AniList => {
-                                    "Connect your AniList profile to sync progress and fetch manga database metadata."
-                                }
-                                SettingsTab::Shortcuts => {
-                                    "Quick keyboard shortcut reference for navigation and reading controls."
-                                }
-                                SettingsTab::Advanced => {
-                                    "Manage local thumbnail cover cache and reset library data."
-                                }
-                            }),
+            gpui_kit::base::ScrollBounce::new(
+                "settings-scroll-bounce",
+                props.scroll_handle,
+                div()
+                    .id("settings-content-scroll")
+                    .track_scroll(props.scroll_handle)
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .rounded_r(props.radius)
+                    .overflow_hidden()
+                    .overflow_y_scroll()
+                    .px_7()
+                    .py_6()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .pb_1()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(colors.foreground)
+                                    .child(props.current_tab.label()),
+                            )
+                            .child(
+                                div().text_xs().text_color(colors.muted).child(match props
+                                    .current_tab
+                                {
+                                    SettingsTab::General => {
+                                        "Configure general reading defaults and view application information."
+                                    }
+                                    SettingsTab::Appearance => {
+                                        "Customize theme colors, card cover dimensions, rounding, and borders."
+                                    }
+                                    SettingsTab::Reader => {
+                                        "Control reader transitions, layout scrolling, zoom retention, and navigation."
+                                    }
+                                    SettingsTab::Library => {
+                                        "Manage library organization, folder grouping, and cover size presets."
+                                    }
+                                    SettingsTab::AniList => {
+                                        "Connect your AniList profile to sync progress and fetch manga database metadata."
+                                    }
+                                    SettingsTab::Shortcuts => {
+                                        "Quick keyboard shortcut reference for navigation and reading controls."
+                                    }
+                                    SettingsTab::Advanced => {
+                                        "Manage local thumbnail cover cache and reset library data."
+                                    }
+                                }),
+                            ),
+                    )
+                    .child(match props.current_tab {
+                        SettingsTab::General => {
+                            render_tab_general(props.settings, colors, on_toggle_continuous)
+                        }
+                        SettingsTab::Appearance => render_tab_appearance(
+                            props.settings,
+                            &props.available_schemes,
+                            colors,
+                            on_set_theme_mode.clone(),
+                            on_set_color_scheme,
+                            on_set_corner_rounding,
+                            on_set_border_size,
                         ),
-                )
-                .child(match props.current_tab {
-                    SettingsTab::General => {
-                        render_tab_general(props.settings, colors, on_toggle_continuous)
-                    }
-                    SettingsTab::Appearance => render_tab_appearance(
-                        props.settings,
-                        &props.available_schemes,
-                        colors,
-                        on_set_theme_mode.clone(),
-                        on_set_color_scheme,
-                        on_set_thumbnail_size.clone(),
-                        on_set_corner_rounding,
-                        on_set_border_size,
-                    ),
-                    SettingsTab::Reader => render_tab_reader(
-                        props.settings,
-                        colors,
-                        on_toggle_continuous,
-                        on_toggle_webcomics,
-                        on_toggle_animate,
-                        on_toggle_remember_zoom,
-                    ),
-                    SettingsTab::Library => render_tab_library(
-                        props.settings,
-                        colors,
-                        on_toggle_group_series,
-                        on_set_thumbnail_size,
-                    ),
-                    SettingsTab::AniList => render_tab_anilist(
-                        props.anilist_username,
-                        props.anilist_connected,
-                        props.auto_sync_anilist,
-                        props.anilist_username_input,
-                        props.anilist_sync_count,
-                        props.anilist_matched_count,
-                        colors,
-                        on_connect_anilist,
-                        on_disconnect_anilist,
-                        on_sync_anilist,
-                    ),
-                    SettingsTab::Shortcuts => render_tab_shortcuts(colors),
-                    SettingsTab::Advanced => render_tab_advanced(
-                        &props.cache_size_str,
-                        colors,
-                        on_clear_cache,
-                        on_reset_settings,
-                        on_reset_all_data,
-                    ),
-                }),
+                        SettingsTab::Reader => render_tab_reader(
+                            props.settings,
+                            props.system_reduced_motion,
+                            colors,
+                            on_toggle_continuous,
+                            on_toggle_webcomics,
+                            on_toggle_disable_animations,
+                            on_toggle_remember_zoom,
+                            on_toggle_vim_mode,
+                        ),
+                        SettingsTab::Library => render_tab_library(
+                            props.settings,
+                            colors,
+                            on_toggle_group_series,
+                            on_set_thumbnail_size,
+                        ),
+                        SettingsTab::AniList => render_tab_anilist(
+                            props.anilist_username,
+                            props.anilist_connected,
+                            props.auto_sync_anilist,
+                            props.anilist_username_input,
+                            props.anilist_sync_count,
+                            props.anilist_matched_count,
+                            colors,
+                            on_connect_anilist,
+                            on_disconnect_anilist,
+                            on_sync_anilist,
+                        ),
+                        SettingsTab::Shortcuts => {
+                            render_tab_shortcuts(colors, props.vim_mode)
+                        }
+                        SettingsTab::Advanced => render_tab_advanced(
+                            &props.cache_size_str,
+                            colors,
+                            on_clear_cache,
+                            on_reset_settings,
+                            on_reset_all_data,
+                        ),
+                    }),
+            ),
         )
         .into_any_element()
 }
@@ -393,227 +426,6 @@ pub fn macos_dropdown_button<T: Clone + PartialEq + 'static>(
         .into_any_element()
 }
 
-fn render_appearance_picker(
-    current_mode: ThemeModePreference,
-    colors: UiColors,
-    on_set_mode: std::rc::Rc<dyn Fn(ThemeModePreference, &mut Window, &mut App)>,
-) -> Div {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_3()
-        .child(render_appearance_card(
-            ThemeModePreference::System,
-            "Auto",
-            current_mode == ThemeModePreference::System,
-            colors,
-            on_set_mode.clone(),
-        ))
-        .child(render_appearance_card(
-            ThemeModePreference::Light,
-            "Light",
-            current_mode == ThemeModePreference::Light,
-            colors,
-            on_set_mode.clone(),
-        ))
-        .child(render_appearance_card(
-            ThemeModePreference::Dark,
-            "Dark",
-            current_mode == ThemeModePreference::Dark,
-            colors,
-            on_set_mode,
-        ))
-}
-
-fn render_appearance_card(
-    mode: ThemeModePreference,
-    label: &'static str,
-    active: bool,
-    colors: UiColors,
-    on_set_mode: std::rc::Rc<dyn Fn(ThemeModePreference, &mut Window, &mut App)>,
-) -> AnyElement {
-    let card_id = format!("appearance-card-{}", label.to_lowercase());
-    let on_click = {
-        let on_set_mode = on_set_mode.clone();
-        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-            on_set_mode(mode, window, cx);
-        }
-    };
-
-    let preview_box = match mode {
-        ThemeModePreference::Light => div().size_full().bg(rgb(0x78abdf)).p_1p5().child(
-            div()
-                .size_full()
-                .rounded(px(4.))
-                .bg(rgb(0xffffff))
-                .shadow_sm()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .h(px(10.))
-                        .px_1()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(div().size(px(4.)).rounded_full().bg(rgb(0xff5f56)))
-                        .child(div().size(px(4.)).rounded_full().bg(rgb(0xffbd2e)))
-                        .child(div().size(px(4.)).rounded_full().bg(rgb(0x27c93f))),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .mx_1()
-                        .mb_1()
-                        .rounded(px(2.))
-                        .bg(rgb(0xf0f2f5)),
-                ),
-        ),
-        ThemeModePreference::Dark => div().size_full().bg(rgb(0x162032)).p_1p5().child(
-            div()
-                .size_full()
-                .rounded(px(4.))
-                .bg(rgb(0x252e3e))
-                .shadow_sm()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .h(px(10.))
-                        .px_1()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(div().size(px(4.)).rounded_full().bg(rgb(0xff5f56)))
-                        .child(div().size(px(4.)).rounded_full().bg(rgb(0xffbd2e)))
-                        .child(div().size(px(4.)).rounded_full().bg(rgb(0x27c93f))),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .mx_1()
-                        .mb_1()
-                        .rounded(px(2.))
-                        .bg(rgb(0x1a212e)),
-                ),
-        ),
-        ThemeModePreference::System => div()
-            .size_full()
-            .flex()
-            .flex_row()
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .bg(rgb(0x78abdf))
-                    .p_1p5()
-                    .pr_0()
-                    .child(
-                        div()
-                            .size_full()
-                            .rounded_l(px(4.))
-                            .bg(rgb(0xffffff))
-                            .shadow_sm()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .h(px(10.))
-                                    .px_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(div().size(px(4.)).rounded_full().bg(rgb(0xff5f56)))
-                                    .child(div().size(px(4.)).rounded_full().bg(rgb(0xffbd2e))),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .ml_1()
-                                    .mb_1()
-                                    .rounded_l(px(2.))
-                                    .bg(rgb(0xf0f2f5)),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .bg(rgb(0x162032))
-                    .p_1p5()
-                    .pl_0()
-                    .child(
-                        div()
-                            .size_full()
-                            .rounded_r(px(4.))
-                            .bg(rgb(0x252e3e))
-                            .shadow_sm()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .h(px(10.))
-                                    .px_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(div().size(px(4.)).rounded_full().bg(rgb(0x27c93f))),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .mr_1()
-                                    .mb_1()
-                                    .rounded_r(px(2.))
-                                    .bg(rgb(0x1a212e)),
-                            ),
-                    ),
-            ),
-    };
-
-    let outer = div()
-        .w(px(74.))
-        .h(px(48.))
-        .rounded(px(7.))
-        .overflow_hidden();
-
-    let outer = if active {
-        outer.border_2().border_color(rgb(0x007aff))
-    } else {
-        outer
-            .border_1()
-            .border_color(with_alpha(colors.border, 0.8))
-    };
-
-    div()
-        .id(ElementId::from(SharedString::from(card_id)))
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap_1p5()
-        .cursor_pointer()
-        .on_click(on_click)
-        .child(outer.child(preview_box))
-        .child(
-            div()
-                .text_xs()
-                .font_weight(if active {
-                    FontWeight::BOLD
-                } else {
-                    FontWeight::NORMAL
-                })
-                .text_color(if active {
-                    colors.foreground
-                } else {
-                    colors.muted
-                })
-                .child(label),
-        )
-        .into_any_element()
-}
-
 fn render_tab_general(
     settings: &Settings,
     colors: UiColors,
@@ -633,6 +445,7 @@ fn render_tab_general(
                 .child(
                     div().cursor_pointer().child(
                         Switch::new("gen-continuous-mode-switch")
+                            .accessibility_label("Continuous vertical reading mode")
                             .small()
                             .checked(settings.continuous)
                             .on_click(move |val, window, cx| on_toggle_continuous(*val, window, cx)),
@@ -696,7 +509,6 @@ fn render_tab_appearance(
     colors: UiColors,
     on_set_theme_mode: std::rc::Rc<dyn Fn(ThemeModePreference, &mut Window, &mut App)>,
     on_set_color_scheme: std::rc::Rc<dyn Fn(String, &mut Window, &mut App)>,
-    on_set_thumbnail_size: std::rc::Rc<dyn Fn(ThumbnailSize, &mut Window, &mut App)>,
     on_set_corner_rounding: std::rc::Rc<dyn Fn(CornerRounding, &mut Window, &mut App)>,
     on_set_border_size: std::rc::Rc<dyn Fn(BorderSize, &mut Window, &mut App)>,
 ) -> Div {
@@ -722,11 +534,17 @@ fn render_tab_appearance(
         None
     };
 
+    let theme_mode_label = match settings.theme_mode {
+        ThemeModePreference::System => "System",
+        ThemeModePreference::Light => "Light",
+        ThemeModePreference::Dark => "Dark",
+    };
+
     div()
         .flex()
         .flex_col()
         .gap_4()
-        // Section: Appearance Mode (Auto / Light / Dark)
+        // Section: Appearance Mode (System / Light / Dark)
         .child(
             settings_card(colors).child(
                 div()
@@ -762,9 +580,26 @@ fn render_tab_appearance(
                                         ),
                                     ),
                             )
-                            .child(render_appearance_picker(
-                                settings.theme_mode,
-                                colors,
+                            .child(macos_dropdown_button(
+                                "theme-mode-dropdown",
+                                theme_mode_label,
+                                vec![
+                                    (
+                                        "System".to_string(),
+                                        ThemeModePreference::System,
+                                        settings.theme_mode == ThemeModePreference::System,
+                                    ),
+                                    (
+                                        "Light".to_string(),
+                                        ThemeModePreference::Light,
+                                        settings.theme_mode == ThemeModePreference::Light,
+                                    ),
+                                    (
+                                        "Dark".to_string(),
+                                        ThemeModePreference::Dark,
+                                        settings.theme_mode == ThemeModePreference::Dark,
+                                    ),
+                                ],
                                 on_set_theme_mode,
                             )),
                     )
@@ -811,30 +646,6 @@ fn render_tab_appearance(
             settings_card(colors)
                 .child(
                     settings_row(
-                        "Cover Grid Size",
-                        "Thumbnail width and cover scaling in library grid view.",
-                        colors,
-                    )
-                    .child(macos_dropdown_button(
-                        "thumb-dropdown",
-                        settings.thumbnail_size.label(),
-                        [
-                            ThumbnailSize::ExtraSmall,
-                            ThumbnailSize::Small,
-                            ThumbnailSize::Medium,
-                            ThumbnailSize::Large,
-                            ThumbnailSize::ExtraLarge,
-                            ThumbnailSize::Huge,
-                        ]
-                        .into_iter()
-                        .map(|s| (s.label().to_string(), s, s == settings.thumbnail_size))
-                        .collect(),
-                        on_set_thumbnail_size,
-                    )),
-                )
-                .child(settings_divider(colors))
-                .child(
-                    settings_row(
                         "Corner Rounding",
                         "Border curvature across cards, covers, and dialogs.",
                         colors,
@@ -875,11 +686,13 @@ fn render_tab_appearance(
 
 fn render_tab_reader(
     settings: &Settings,
+    system_reduced_motion: bool,
     colors: UiColors,
     on_toggle_continuous: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_webcomics: impl Fn(bool, &mut Window, &mut App) + 'static,
-    on_toggle_animate: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_toggle_disable_animations: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_remember_zoom: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_toggle_vim_mode: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> Div {
     div().flex().flex_col().gap_4().child(
         settings_card(colors)
@@ -892,6 +705,7 @@ fn render_tab_reader(
                 .child(
                     div().cursor_pointer().child(
                         Switch::new("continuous-mode-switch")
+                            .accessibility_label("Continuous vertical reading mode")
                             .small()
                             .checked(settings.continuous)
                             .on_click(move |val, window, cx| {
@@ -910,6 +724,7 @@ fn render_tab_reader(
                 .child(
                     div().cursor_pointer().child(
                         Switch::new("webcomics-mode-switch")
+                            .accessibility_label("Webcomics zero-gap mode")
                             .small()
                             .checked(settings.webcomics)
                             .on_click(move |val, window, cx| on_toggle_webcomics(*val, window, cx)),
@@ -919,17 +734,31 @@ fn render_tab_reader(
             .child(settings_divider(colors))
             .child(
                 settings_row(
-                    "Page Turn Animations",
-                    "Smooth slide animations when flipping pages.",
+                    "Disable Animations",
+                    if system_reduced_motion {
+                        "All nonessential animations are disabled because your operating system's reduced-motion preference is on."
+                    } else {
+                        "Disable nonessential transitions, glides, and decorative motion across the application."
+                    },
                     colors,
                 )
                 .child(
-                    div().cursor_pointer().child(
-                        Switch::new("animate-mode-switch")
-                            .small()
-                            .checked(settings.animate)
-                            .on_click(move |val, window, cx| on_toggle_animate(*val, window, cx)),
-                    ),
+                    div()
+                        .when(!system_reduced_motion, |s| s.cursor_pointer())
+                        .child(
+                            Switch::new("disable-animations-switch")
+                                .accessibility_label("Disable animations")
+                                .small()
+                                .checked(if system_reduced_motion {
+                                    true
+                                } else {
+                                    settings.disable_animations
+                                })
+                                .disabled(system_reduced_motion)
+                                .on_click(move |val, window, cx| {
+                                    on_toggle_disable_animations(*val, window, cx)
+                                }),
+                        ),
                 ),
             )
             .child(settings_divider(colors))
@@ -942,11 +771,29 @@ fn render_tab_reader(
                 .child(
                     div().cursor_pointer().child(
                         Switch::new("remember-zoom-switch")
+                            .accessibility_label("Remember per-book zoom")
                             .small()
                             .checked(settings.remember_zoom)
                             .on_click(move |val, window, cx| {
                                 on_toggle_remember_zoom(*val, window, cx)
                             }),
+                    ),
+                ),
+            )
+            .child(settings_divider(colors))
+            .child(
+                settings_row(
+                    "Vim Keyboard Navigation",
+                    "Enable Vim modal motions (j/k, gg, G, :) in reader and library.",
+                    colors,
+                )
+                .child(
+                    div().cursor_pointer().child(
+                        Switch::new("vim-mode-switch")
+                            .accessibility_label("Vim keyboard navigation")
+                            .small()
+                            .checked(settings.vim_mode)
+                            .on_click(move |val, window, cx| on_toggle_vim_mode(*val, window, cx)),
                     ),
                 ),
             ),
@@ -970,6 +817,7 @@ fn render_tab_library(
                 .child(
                     div().cursor_pointer().child(
                         Switch::new("group-series-switch")
+                            .accessibility_label("Folder grouping")
                             .small()
                             .checked(settings.group_series)
                             .on_click(move |val, window, cx| {
@@ -981,24 +829,17 @@ fn render_tab_library(
             .child(settings_divider(colors))
             .child(
                 settings_row(
-                    "Cover Grid Size",
+                    "Thumbnail Size",
                     "Size of book covers in the library grid view.",
                     colors,
                 )
                 .child(macos_dropdown_button(
                     "cycle-thumb-btn-lib",
                     settings.thumbnail_size.label(),
-                    [
-                        ThumbnailSize::ExtraSmall,
-                        ThumbnailSize::Small,
-                        ThumbnailSize::Medium,
-                        ThumbnailSize::Large,
-                        ThumbnailSize::ExtraLarge,
-                        ThumbnailSize::Huge,
-                    ]
-                    .into_iter()
-                    .map(|s| (s.label().to_string(), s, s == settings.thumbnail_size))
-                    .collect(),
+                    ThumbnailSize::ALL
+                        .into_iter()
+                        .map(|s| (s.label().to_string(), s, s == settings.thumbnail_size))
+                        .collect(),
                     on_set_thumbnail_size,
                 )),
             ),
@@ -1185,52 +1026,81 @@ fn render_tab_anilist(
                 colors,
             )
             .child(
-                div()
-                    .cursor_pointer()
-                    .child(Switch::new("auto-sync-anilist").small().checked(auto_sync)),
+                div().cursor_pointer().child(
+                    Switch::new("auto-sync-anilist")
+                        .accessibility_label("Auto-sync AniList reading progress")
+                        .small()
+                        .checked(auto_sync),
+                ),
             ),
         ),
     )
 }
 
-fn render_tab_shortcuts(colors: UiColors) -> Div {
+fn render_tab_shortcuts(colors: UiColors, vim_mode: bool) -> Div {
     let search_sc = if cfg!(target_os = "macos") {
-        "⌘K or / or ⌘F"
-    } else {
+        if vim_mode {
+            "⌘K or / or ⌘F"
+        } else {
+            "⌘K or ⌘F"
+        }
+    } else if vim_mode {
         "Ctrl+K or / or Ctrl+F"
+    } else {
+        "Ctrl+K or Ctrl+F"
     };
     let zoom_sc = zoom_shortcut_str();
-    let settings_sc = if cfg!(target_os = "macos") {
-        "⌘,"
-    } else {
-        "Ctrl+,"
-    };
-    let open_sc = if cfg!(target_os = "macos") {
-        "⌘O or ⌘+Shift+O"
-    } else {
-        "Ctrl+O or Ctrl+Shift+O"
-    };
+    let settings_sc = settings_shortcut_str();
+    let open_sc = open_shortcut_str();
 
-    let shortcuts = [
-        ("Continue / Open Manga", "Enter or Left Click"),
-        ("Import Manga Files / Folder", open_sc),
-        ("Search Library or AniList", search_sc),
-        ("Toggle Fullscreen", "F or F11"),
-        ("Next Page / Scroll Down", "J or Space or Down or Right"),
-        (
+    let mut shortcuts: Vec<(&'static str, String)> = Vec::new();
+    shortcuts.push(("Continue / Open Manga", "Enter or Left Click".to_string()));
+    shortcuts.push(("Import Manga Files / Folder", open_sc.to_string()));
+    shortcuts.push(("Search Library or AniList", search_sc.to_string()));
+    if vim_mode {
+        shortcuts.push(("Command Prompt", ":".to_string()));
+    }
+    shortcuts.push(("Toggle Fullscreen", "F or F11".to_string()));
+    if vim_mode {
+        shortcuts.push((
+            "Next Page / Scroll Down",
+            "j or J or Space or Down or Right or PageDown".to_string(),
+        ));
+        shortcuts.push((
             "Previous Page / Scroll Up",
-            "K or Shift+Space or Up or Left",
-        ),
-        ("First Page / Cover", "gg"),
-        ("Last Page", "G"),
-        ("Toggle Continuous Vertical", "v"),
-        ("Toggle Webcomics Mode", "w"),
-        ("Zoom In / Out", zoom_sc),
-        ("Reset Zoom", "0 or z0"),
-        ("Command Prompt", ":"),
-        ("Settings", settings_sc),
-        ("Close / Back to Library", "Esc or q"),
-    ];
+            "k or K or Shift+Space or Up or Left or PageUp".to_string(),
+        ));
+        shortcuts.push(("First Page / Cover", "gg or Home".to_string()));
+        shortcuts.push(("Last Page", "G or End".to_string()));
+        shortcuts.push(("Jump to Page", "{count}G or :{count}".to_string()));
+        shortcuts.push(("Set / Jump to Mark", "m{a-z} / '{a-z}".to_string()));
+    } else {
+        shortcuts.push((
+            "Next Page / Scroll Down",
+            "Space or Down or Right or PageDown".to_string(),
+        ));
+        shortcuts.push((
+            "Previous Page / Scroll Up",
+            "Shift+Space or Up or Left or PageUp".to_string(),
+        ));
+        shortcuts.push(("First Page / Cover", "Home".to_string()));
+        shortcuts.push(("Last Page", "End".to_string()));
+    }
+    shortcuts.push(("Toggle Continuous Vertical", "v".to_string()));
+    shortcuts.push(("Toggle Webcomics Mode", "w".to_string()));
+    if vim_mode {
+        shortcuts.push(("Zoom In / Out", format!("{zoom_sc} or zi / zo")));
+        shortcuts.push(("Reset Zoom", "0 or z0".to_string()));
+    } else {
+        shortcuts.push(("Zoom In / Out", zoom_sc.to_string()));
+        shortcuts.push(("Reset Zoom", "0".to_string()));
+    }
+    shortcuts.push(("Settings", settings_sc.to_string()));
+    if vim_mode {
+        shortcuts.push(("Close / Back to Library", "Esc or q".to_string()));
+    } else {
+        shortcuts.push(("Close / Back to Library", "Esc".to_string()));
+    }
 
     div()
         .w_full()
@@ -1248,8 +1118,8 @@ fn render_tab_shortcuts(colors: UiColors) -> Div {
                             .child(TableHead::new().child("KEYBOARD SHORTCUT")),
                     ),
                 )
-                .child(
-                    TableBody::new().children(shortcuts.iter().map(|&(action, shortcut)| {
+                .child(TableBody::new().children(shortcuts.into_iter().map(
+                    |(action, shortcut)| {
                         TableRow::new()
                             .child(
                                 TableCell::new()
@@ -1272,8 +1142,8 @@ fn render_tab_shortcuts(colors: UiColors) -> Div {
                                         .child(shortcut),
                                 ),
                             )
-                    })),
-                ),
+                    },
+                ))),
         )
 }
 

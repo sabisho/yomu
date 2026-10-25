@@ -1,10 +1,12 @@
 //! Main toolbar matching macOS Yomu design reference.
 
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Sizable, Size};
+use gpui_kit::component::{Icon, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, Entity, FontWeight, InteractiveElement, Pixels, Styled, Window,
@@ -16,13 +18,16 @@ use super::theme::UiColors;
 
 pub struct MainToolbarProps<'a> {
     pub can_go_back: bool,
-    pub can_go_forward: bool,
-    pub is_in_group: bool,
     pub sidebar_collapsed: bool,
     pub is_scrolled: bool,
     pub search_input: Option<&'a Entity<InputState>>,
     pub is_grid_mode: bool,
     pub is_group_series: bool,
+    pub is_client_decorated: bool,
+    pub selection_count: usize,
+    pub on_select_all: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    pub on_remove_selected: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    pub on_cancel_selection: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     pub colors: UiColors,
     pub radius: Pixels,
 }
@@ -31,10 +36,10 @@ pub fn render_main_toolbar(
     props: MainToolbarProps,
     on_toggle_sidebar: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_forward: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_toggle_grid: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_import: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_close_window: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
 ) -> AnyElement {
     let on_toggle_grid = std::rc::Rc::new(on_toggle_grid);
     let on_toggle_grid_false = on_toggle_grid.clone();
@@ -45,6 +50,9 @@ pub fn render_main_toolbar(
         .h(px(52.))
         .w_full()
         .px_4()
+        .when(props.sidebar_collapsed && cfg!(target_os = "macos"), |s| {
+            s.pl(px(80.))
+        })
         .flex()
         .items_center()
         .justify_between()
@@ -78,55 +86,27 @@ pub fn render_main_toolbar(
                             },
                         )),
                 )
-                .child(
-                    div()
-                        .id("toolbar-nav-back")
-                        .size(px(28.))
-                        .rounded(props.radius)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when(props.is_in_group, |this| {
-                            this.debug_selector(|| "group-back".into())
-                        })
-                        .when(props.can_go_back, |style| {
-                            style
-                                .cursor_pointer()
-                                .hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
-                                .on_click(on_back)
-                        })
-                        .tooltip(|window, cx| Tooltip::new("Back").build(window, cx))
-                        .child(Icon::new(IconName::ChevronLeft).size(px(16.)).text_color(
-                            if props.can_go_back {
-                                colors.foreground
-                            } else {
-                                colors.muted
-                            },
-                        )),
-                )
-                .child(
-                    div()
-                        .id("toolbar-nav-forward")
-                        .size(px(28.))
-                        .rounded(props.radius)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when(props.can_go_forward, |style| {
-                            style
-                                .cursor_pointer()
-                                .hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
-                                .on_click(on_forward)
-                        })
-                        .tooltip(|window, cx| Tooltip::new("Forward").build(window, cx))
-                        .child(Icon::new(IconName::ChevronRight).size(px(16.)).text_color(
-                            if props.can_go_forward {
-                                colors.foreground
-                            } else {
-                                colors.muted
-                            },
-                        )),
-                ),
+                .when(props.can_go_back, |this| {
+                    this.child(
+                        div()
+                            .id("toolbar-nav-back")
+                            .debug_selector(|| "group-back".into())
+                            .size(px(28.))
+                            .rounded(props.radius)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
+                            .on_click(on_back)
+                            .tooltip(|window, cx| Tooltip::new("Back to library").build(window, cx))
+                            .child(
+                                Icon::new(IconName::ChevronLeft)
+                                    .size(px(16.))
+                                    .text_color(colors.foreground),
+                            ),
+                    )
+                }),
         )
         // Center: Search input (adaptive, flex-1 with min/max bounds)
         .child(
@@ -170,183 +150,297 @@ pub fn render_main_toolbar(
                     div().into_any_element()
                 }),
         )
-        // Right: View toggles & Import button
+        // Right: Context-aware actions
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap_2p5()
-                // 1. Folder Grouping switch: Folders vs Individual Volumes (icon pair, no text)
-                .child(
-                    div()
-                        .id("toolbar-grouping-segmented")
-                        .h(px(28.))
-                        .flex()
-                        .items_center()
-                        .bg(with_alpha(colors.surface, 0.6))
-                        .border_1()
-                        .border_color(colors.border)
-                        .rounded(props.radius)
-                        .p(px(2.))
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .id("toolbar-group-folders-toggle")
-                                .h_full()
-                                .w(px(28.))
-                                .rounded(px((f32::from(props.radius) - 2.0).max(2.0)))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .bg(if props.is_group_series {
-                                    colors.accent.into()
-                                } else {
-                                    with_alpha(colors.foreground, 0.0)
-                                })
-                                .when(!props.is_group_series, |this| {
-                                    this.hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
-                                })
-                                .tooltip(|window, cx| {
-                                    Tooltip::new("Group by series folders").build(window, cx)
-                                })
-                                .on_click({
-                                    let on_toggle = on_toggle_group_series.clone();
-                                    move |_, window, cx| on_toggle(true, window, cx)
-                                })
-                                .child(Icon::new(IconName::Folder).size(px(14.)).text_color(
-                                    if props.is_group_series {
-                                        colors.accent_foreground
-                                    } else {
-                                        colors.muted
-                                    },
-                                )),
-                        )
-                        .child(
-                            div()
-                                .id("toolbar-group-volumes-toggle")
-                                .h_full()
-                                .w(px(28.))
-                                .rounded(px((f32::from(props.radius) - 2.0).max(2.0)))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .bg(if !props.is_group_series {
-                                    colors.accent.into()
-                                } else {
-                                    with_alpha(colors.foreground, 0.0)
-                                })
-                                .when(props.is_group_series, |this| {
-                                    this.hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
-                                })
-                                .tooltip(|window, cx| {
-                                    Tooltip::new("Show individual volumes").build(window, cx)
-                                })
-                                .on_click({
-                                    let on_toggle = on_toggle_group_series.clone();
-                                    move |_, window, cx| on_toggle(false, window, cx)
-                                })
-                                .child(Icon::new(IconName::BookOpen).size(px(14.)).text_color(
-                                    if !props.is_group_series {
-                                        colors.accent_foreground
-                                    } else {
-                                        colors.muted
-                                    },
-                                )),
+                .when(props.selection_count > 0, |this| {
+                    let on_select_all = props.on_select_all.clone();
+                    let on_remove_selected = props.on_remove_selected.clone();
+                    let on_cancel_selection = props.on_cancel_selection.clone();
+                    this.child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.foreground)
+                            .child(format!("{} selected", props.selection_count)),
+                    )
+                    .child(
+                        div().debug_selector(|| "select-all".into()).child(
+                            Button::new("select-all")
+                                .ghost()
+                                .small()
+                                .label("Select all")
+                                .on_click(move |e, window, cx| {
+                                    if let Some(f) = on_select_all.as_ref() {
+                                        f(e, window, cx);
+                                    }
+                                }),
                         ),
-                )
-                // 2. View Mode switch: Grid vs List (icon pair, no text)
-                .child(
-                    div()
-                        .id("toolbar-viewmode-segmented")
-                        .h(px(28.))
-                        .flex()
-                        .items_center()
-                        .bg(with_alpha(colors.surface, 0.6))
-                        .border_1()
-                        .border_color(colors.border)
-                        .rounded(props.radius)
-                        .p(px(2.))
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .id("view-mode-grid-toggle")
-                                .h_full()
-                                .w(px(28.))
-                                .rounded(px((f32::from(props.radius) - 2.0).max(2.0)))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .bg(if props.is_grid_mode {
-                                    colors.accent.into()
-                                } else {
-                                    with_alpha(colors.foreground, 0.0)
-                                })
-                                .when(!props.is_grid_mode, |this| {
-                                    this.hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
-                                })
-                                .tooltip(|window, cx| Tooltip::new("Grid view").build(window, cx))
-                                .on_click({
-                                    let on_toggle_grid = on_toggle_grid.clone();
-                                    move |_, window, cx| on_toggle_grid(true, window, cx)
-                                })
-                                .child(Icon::new(IconName::LayoutGrid).size(px(14.)).text_color(
-                                    if props.is_grid_mode {
-                                        colors.accent_foreground
-                                    } else {
-                                        colors.muted
-                                    },
-                                )),
-                        )
-                        .child(
-                            div()
-                                .id("view-mode-list-toggle")
-                                .h_full()
-                                .w(px(28.))
-                                .rounded(px((f32::from(props.radius) - 2.0).max(2.0)))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .bg(if !props.is_grid_mode {
-                                    colors.accent.into()
-                                } else {
-                                    with_alpha(colors.foreground, 0.0)
-                                })
-                                .when(props.is_grid_mode, |this| {
-                                    this.hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
-                                })
-                                .tooltip(|window, cx| Tooltip::new("List view").build(window, cx))
-                                .on_click({
-                                    let on_toggle_grid_false = on_toggle_grid_false.clone();
-                                    move |_, window, cx| on_toggle_grid_false(false, window, cx)
-                                })
-                                .child(Icon::new(IconName::List).size(px(14.)).text_color(
-                                    if !props.is_grid_mode {
-                                        colors.accent_foreground
-                                    } else {
-                                        colors.muted
-                                    },
-                                )),
+                    )
+                    .child(
+                        div().debug_selector(|| "select-remove".into()).child(
+                            Button::new("select-remove")
+                                .ghost()
+                                .small()
+                                .label("Remove")
+                                .on_click(move |e, window, cx| {
+                                    if let Some(f) = on_remove_selected.as_ref() {
+                                        f(e, window, cx);
+                                    }
+                                }),
                         ),
-                )
-                // 3. Import Button
-                .child(
-                    div().debug_selector(|| "add-files".into()).child(
-                        Button::new("add-files")
-                            .primary()
-                            .icon(IconName::Plus)
-                            .label("Import")
-                            .with_size(Size::Size(px(28.)))
-                            .rounded(ButtonRounded::Size(props.radius))
-                            .bg(colors.accent)
-                            .text_color(colors.accent_foreground)
-                            .tooltip(format!("Import manga ({})", open_shortcut_str()))
-                            .on_click(on_import),
-                    ),
-                ),
+                    )
+                    .child(
+                        div().debug_selector(|| "select-cancel".into()).child(
+                            Button::new("select-cancel")
+                                .ghost()
+                                .small()
+                                .label("Cancel")
+                                .on_click(move |e, window, cx| {
+                                    if let Some(f) = on_cancel_selection.as_ref() {
+                                        f(e, window, cx);
+                                    }
+                                }),
+                        ),
+                    )
+                })
+                .when(props.selection_count == 0, |this| {
+                    this
+                        // 1. Folder Grouping switch: Folders vs Individual Volumes (icon pair, no text)
+                        .child(
+                            div()
+                                .id("toolbar-grouping-segmented")
+                                .h(px(28.))
+                                .flex()
+                                .items_center()
+                                .bg(with_alpha(colors.surface, 0.6))
+                                .border_1()
+                                .border_color(colors.border)
+                                .rounded(props.radius)
+                                .p(px(2.))
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .id("toolbar-group-folders-toggle")
+                                        .h_full()
+                                        .w(px(28.))
+                                        .rounded(px((f32::from(props.radius) - 2.0).max(2.0)))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .bg(if props.is_group_series {
+                                            colors.accent.into()
+                                        } else {
+                                            with_alpha(colors.foreground, 0.0)
+                                        })
+                                        .when(!props.is_group_series, |this| {
+                                            this.hover(|s| {
+                                                s.bg(with_alpha(colors.foreground, 0.08))
+                                            })
+                                        })
+                                        .tooltip(|window, cx| {
+                                            Tooltip::new("Group by series folders")
+                                                .build(window, cx)
+                                        })
+                                        .on_click({
+                                            let on_toggle = on_toggle_group_series.clone();
+                                            move |_, window, cx| on_toggle(true, window, cx)
+                                        })
+                                        .child(
+                                            Icon::new(IconName::Folder).size(px(14.)).text_color(
+                                                if props.is_group_series {
+                                                    colors.accent_foreground
+                                                } else {
+                                                    colors.muted
+                                                },
+                                            ),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("toolbar-group-volumes-toggle")
+                                        .h_full()
+                                        .w(px(28.))
+                                        .rounded(px((f32::from(props.radius) - 2.0).max(2.0)))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .bg(if !props.is_group_series {
+                                            colors.accent.into()
+                                        } else {
+                                            with_alpha(colors.foreground, 0.0)
+                                        })
+                                        .when(props.is_group_series, |this| {
+                                            this.hover(|s| {
+                                                s.bg(with_alpha(colors.foreground, 0.08))
+                                            })
+                                        })
+                                        .tooltip(|window, cx| {
+                                            Tooltip::new("Show individual volumes")
+                                                .build(window, cx)
+                                        })
+                                        .on_click({
+                                            let on_toggle = on_toggle_group_series.clone();
+                                            move |_, window, cx| on_toggle(false, window, cx)
+                                        })
+                                        .child(
+                                            Icon::new(IconName::BookOpen).size(px(14.)).text_color(
+                                                if !props.is_group_series {
+                                                    colors.accent_foreground
+                                                } else {
+                                                    colors.muted
+                                                },
+                                            ),
+                                        ),
+                                ),
+                        )
+                        // 2. View Mode switch: Grid vs List (icon pair, no text)
+                        .child(
+                            div()
+                                .id("toolbar-viewmode-segmented")
+                                .h(px(28.))
+                                .flex()
+                                .items_center()
+                                .bg(with_alpha(colors.surface, 0.6))
+                                .border_1()
+                                .border_color(colors.border)
+                                .rounded(props.radius)
+                                .p(px(2.))
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .id("view-mode-grid-toggle")
+                                        .h_full()
+                                        .w(px(28.))
+                                        .rounded(px((f32::from(props.radius) - 2.0).max(2.0)))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .bg(if props.is_grid_mode {
+                                            colors.accent.into()
+                                        } else {
+                                            with_alpha(colors.foreground, 0.0)
+                                        })
+                                        .when(!props.is_grid_mode, |this| {
+                                            this.hover(|s| {
+                                                s.bg(with_alpha(colors.foreground, 0.08))
+                                            })
+                                        })
+                                        .tooltip(|window, cx| {
+                                            Tooltip::new("Grid view").build(window, cx)
+                                        })
+                                        .on_click({
+                                            let on_toggle_grid = on_toggle_grid.clone();
+                                            move |_, window, cx| on_toggle_grid(true, window, cx)
+                                        })
+                                        .child(
+                                            Icon::new(IconName::LayoutGrid)
+                                                .size(px(14.))
+                                                .text_color(if props.is_grid_mode {
+                                                    colors.accent_foreground
+                                                } else {
+                                                    colors.muted
+                                                }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("view-mode-list-toggle")
+                                        .h_full()
+                                        .w(px(28.))
+                                        .rounded(px((f32::from(props.radius) - 2.0).max(2.0)))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .bg(if !props.is_grid_mode {
+                                            colors.accent.into()
+                                        } else {
+                                            with_alpha(colors.foreground, 0.0)
+                                        })
+                                        .when(props.is_grid_mode, |this| {
+                                            this.hover(|s| {
+                                                s.bg(with_alpha(colors.foreground, 0.08))
+                                            })
+                                        })
+                                        .tooltip(|window, cx| {
+                                            Tooltip::new("List view").build(window, cx)
+                                        })
+                                        .on_click({
+                                            let on_toggle_grid_false = on_toggle_grid_false.clone();
+                                            move |_, window, cx| {
+                                                on_toggle_grid_false(false, window, cx)
+                                            }
+                                        })
+                                        .child(Icon::new(IconName::List).size(px(14.)).text_color(
+                                            if !props.is_grid_mode {
+                                                colors.accent_foreground
+                                            } else {
+                                                colors.muted
+                                            },
+                                        )),
+                                ),
+                        )
+                        // 3. Import Button: minimal plus (+) icon button matching view-switch controls
+                        .child(
+                            div()
+                                .id("toolbar-import-button")
+                                .debug_selector(|| "add-files".into())
+                                .size(px(28.))
+                                .rounded(props.radius)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .border_1()
+                                .border_color(colors.border)
+                                .bg(with_alpha(colors.surface, 0.6))
+                                .hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
+                                .active(|s| s.bg(with_alpha(colors.foreground, 0.14)))
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(format!("Import files ({})", open_shortcut_str()))
+                                        .build(window, cx)
+                                })
+                                .on_click(on_import)
+                                .child(
+                                    Icon::new(IconName::Plus)
+                                        .size(px(14.))
+                                        .text_color(colors.foreground),
+                                ),
+                        )
+                })
+                .when(props.is_client_decorated, |this| {
+                    this.child(
+                        div()
+                            .id("toolbar-csd-close")
+                            .ml_1()
+                            .size(px(24.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(with_alpha(colors.foreground, 0.12)))
+                            .active(|s| s.bg(with_alpha(colors.foreground, 0.20)))
+                            .tooltip(|window, cx| Tooltip::new("Close").build(window, cx))
+                            .on_click(move |e, window, cx| {
+                                if let Some(on_close) = on_close_window.as_ref() {
+                                    on_close(e, window, cx);
+                                }
+                            })
+                            .child(
+                                Icon::new(IconName::Close)
+                                    .size(px(14.))
+                                    .text_color(colors.foreground),
+                            ),
+                    )
+                }),
         )
         .into_any_element()
 }

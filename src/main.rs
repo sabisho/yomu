@@ -23,12 +23,13 @@ use gpui_kit::popup::{PopupAnchor, PopupConstraintAdjustment, PopupGravity, Popu
 #[allow(unused_imports)]
 use gpui_kit::{
     Anchor, Animation, AnimationExt, AnyElement, AnyWindowHandle, App, Bounds, ClickEvent, Context,
-    ElementId, Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyBinding, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, PathPromptOptions,
-    PinchEvent, Pixels, Point, RenderImage, Rgba, ScrollDelta, ScrollHandle, ScrollWheelEvent,
-    SharedString, Styled, Subscription, TitlebarOptions, TouchPhase, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, actions, anchored,
-    application, canvas, deferred, div, ease_out_quint, img, point, prelude::*, px, relative, size,
+    Decorations, ElementId, Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyBinding,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
+    PathPromptOptions, PinchEvent, Pixels, Point, RenderImage, Rgba, ScrollDelta, ScrollHandle,
+    ScrollWheelEvent, SharedString, Styled, Subscription, TitlebarOptions, TouchPhase, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
+    actions, anchored, application, canvas, deferred, div, ease_out_quint, img, point, prelude::*,
+    px, relative, size,
 };
 use image::Frame;
 use yomu::{
@@ -39,8 +40,7 @@ use yomu::{
         ThumbnailSize,
     },
     menu::{self, BookAction, Entry, Item},
-    motion::{self, InertialScroll, KineticScroll},
-    pagecache,
+    motion, pagecache,
     selection::Selection,
     util::{format_size, now_secs},
     vim::{self, Action, Amount, Dir, Vim},
@@ -159,119 +159,12 @@ fn directory_groups<'a>(books: impl IntoIterator<Item = &'a Book>) -> Vec<Librar
     groups
 }
 
-/// Native kinetic / inertial scroll controller for UI scrollable containers (e.g. library grid, settings).
-#[derive(Clone, Debug, Default)]
-pub struct UiScrollController {
-    pub handle: ScrollHandle,
-    pub kinetic: KineticScroll,
-}
-
-impl UiScrollController {
-    pub fn new() -> Self {
-        Self {
-            handle: ScrollHandle::new(),
-            kinetic: KineticScroll::new(),
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.kinetic.reset();
-    }
-
-    pub fn cancel_inertia(&mut self) {
-        self.kinetic.cancel_inertia();
-    }
-
-    pub fn has_active_inertia(&self) -> bool {
-        self.kinetic.has_active_inertia()
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.kinetic.is_active()
-    }
-
-    /// Process a scroll wheel event on this scrollable container.
-    pub fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, reduce_motion: bool) {
-        let discrete = matches!(event.delta, ScrollDelta::Lines(_));
-        if event.touch_phase == TouchPhase::Started || event.touch_phase == TouchPhase::Cancelled {
-            self.kinetic.reset();
-            return;
-        }
-
-        // Discrete mouse wheel notch smoothing:
-        // When using physical mouse wheel notches, convert discrete jumps into a smooth inertia impulse.
-        if discrete {
-            if reduce_motion {
-                self.kinetic.reset();
-                return;
-            }
-            let delta = event.delta.pixel_delta(px(16.0));
-            let dy = f32::from(delta.y);
-            let impulse_vy = dy * 450.0;
-            let current_vy = self
-                .kinetic
-                .inertia
-                .as_ref()
-                .map(|i| i.velocity.1)
-                .unwrap_or(0.0);
-            let combined_vy = (current_vy * 0.4 + impulse_vy).clamp(-3000.0, 3000.0);
-            self.kinetic.inertia = Some(InertialScroll {
-                velocity: (0.0, combined_vy),
-            });
-            return;
-        }
-
-        // Touch-catch: any new continuous scroll gesture cancels active inertia glide and resets momentum
-        if self.kinetic.has_active_inertia() {
-            self.kinetic.reset();
-        }
-
-        let now = Instant::now();
-        let delta = event.delta.pixel_delta(px(16.0));
-        let dy = f32::from(delta.y);
-        let dx = f32::from(delta.x);
-
-        if event.touch_phase == TouchPhase::Moved {
-            self.kinetic.push_motion(now, dx, dy);
-        } else if event.touch_phase == TouchPhase::Ended {
-            self.kinetic.end_touch(!reduce_motion);
-        }
-    }
-
-    /// Step kinetic momentum forward by `dt` seconds. Returns true if animation is still running.
-    pub fn step(&mut self, dt: f32, reduce_motion: bool) -> bool {
-        if reduce_motion {
-            self.kinetic.reset();
-            return false;
-        }
-
-        let now = Instant::now();
-        self.kinetic.check_stillness_timeout(now, !reduce_motion);
-
-        if let Some((_dx, dy)) = self.kinetic.step(dt) {
-            let current = self.handle.offset();
-            let max = self.handle.max_offset();
-
-            if max.y > px(0.) {
-                // In GPUI div: scrolling down makes offset.y negative, bounded in [-max.y, 0.0]
-                let target_y = current.y + px(dy);
-                let clamped_y = target_y.clamp(-max.y, px(0.));
-
-                self.handle.set_offset(Point {
-                    x: current.x,
-                    y: clamped_y,
-                });
-
-                let hit_boundary =
-                    (target_y >= px(0.) && dy > 0.0) || (target_y <= -max.y && dy < 0.0);
-                if hit_boundary {
-                    self.kinetic.cancel_inertia();
-                }
-            }
-        }
-
-        self.kinetic.is_active()
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NavDestination {
+    Section(ui::sidebar::SidebarSection),
+    Group { key: String, name: String },
+    Details(String),
+    AniListSearch,
 }
 
 struct Yomu {
@@ -320,17 +213,15 @@ struct Yomu {
     open_group: Option<String>,
     /// Which background appearance the window currently has (`None` before the first frame).
     applied_opaque: Option<bool>,
-    library_scroll: UiScrollController,
-    group_scroll: UiScrollController,
-    shortcuts_scroll: UiScrollController,
-    continue_reading_scroll: UiScrollController,
-    collections_scroll: UiScrollController,
-    details_scroll: UiScrollController,
-    settings_scroll: UiScrollController,
-    sidebar_scroll: UiScrollController,
-    anilist_search_scroll: UiScrollController,
-    anilist_category_scroll: UiScrollController,
-    scroll_caught_at: Option<Instant>,
+    library_scroll: ScrollHandle,
+    group_scroll: ScrollHandle,
+    continue_reading_scroll: ScrollHandle,
+    collections_scroll: ScrollHandle,
+    details_scroll: ScrollHandle,
+    settings_scroll: ScrollHandle,
+    sidebar_scroll: ScrollHandle,
+    anilist_search_scroll: ScrollHandle,
+    anilist_category_scroll: ScrollHandle,
     #[allow(dead_code)]
     library_pinch_accum: f32,
     cursor_pos: Option<(f32, f32)>,
@@ -353,11 +244,12 @@ struct Yomu {
     anilist_is_searching: bool,
     anilist_search_error: Option<String>,
     anilist_username_input: Option<Entity<InputState>>,
-    nav_history: Vec<ui::sidebar::MainView>,
+    nav_history: Vec<NavDestination>,
     nav_history_idx: usize,
     view_mode_grid: bool,
     selected_collection_id: Option<String>,
     sidebar_collapsed: bool,
+    pub vim_cli_override: bool,
 }
 
 impl Yomu {
@@ -454,17 +346,15 @@ impl Yomu {
             search_input: None,
             open_group: None,
             applied_opaque: None,
-            library_scroll: UiScrollController::new(),
-            group_scroll: UiScrollController::new(),
-            shortcuts_scroll: UiScrollController::new(),
-            continue_reading_scroll: UiScrollController::new(),
-            collections_scroll: UiScrollController::new(),
-            details_scroll: UiScrollController::new(),
-            settings_scroll: UiScrollController::new(),
-            sidebar_scroll: UiScrollController::new(),
-            anilist_search_scroll: UiScrollController::new(),
-            anilist_category_scroll: UiScrollController::new(),
-            scroll_caught_at: None,
+            library_scroll: ScrollHandle::new(),
+            group_scroll: ScrollHandle::new(),
+            continue_reading_scroll: ScrollHandle::new(),
+            collections_scroll: ScrollHandle::new(),
+            details_scroll: ScrollHandle::new(),
+            settings_scroll: ScrollHandle::new(),
+            sidebar_scroll: ScrollHandle::new(),
+            anilist_search_scroll: ScrollHandle::new(),
+            anilist_category_scroll: ScrollHandle::new(),
             library_pinch_accum: 0.0,
             cursor_pos: None,
             save_seq: 0,
@@ -484,11 +374,14 @@ impl Yomu {
             anilist_is_searching: false,
             anilist_search_error: None,
             anilist_username_input,
-            nav_history: vec![ui::sidebar::MainView::AllManga],
+            nav_history: vec![NavDestination::Section(
+                ui::sidebar::SidebarSection::AllManga,
+            )],
             nav_history_idx: 0,
             view_mode_grid,
             selected_collection_id: None,
             sidebar_collapsed: false,
+            vim_cli_override: false,
         };
 
         #[cfg(not(test))]
@@ -516,7 +409,20 @@ impl Yomu {
 
     /// Whether page turns and scrolling should animate right now.
     fn animations_enabled(&self) -> bool {
-        self.library.settings().animate && !self.reduce_motion
+        !self.reduce_motion && !self.library.settings().disable_animations
+    }
+
+    pub fn is_vim_enabled(&self) -> bool {
+        if self.vim_cli_override {
+            return true;
+        }
+        self.library.settings().vim_mode
+    }
+
+    fn toggle_vim_mode(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.library.settings_mut().vim_mode = enabled;
+        self.save_library();
+        cx.notify();
     }
 
     fn widget_surface(&self, color: gpui_kit::Hsla) -> gpui_kit::Hsla {
@@ -767,6 +673,7 @@ impl Yomu {
         let entries = menu::book_menu(book, book.path.exists());
         self.overlay = Some(Overlay::Menu(BookMenu {
             book_id: id.to_string(),
+            target_ids: vec![id.to_string()],
             entries,
             position,
             selected: None,
@@ -929,10 +836,10 @@ impl Yomu {
         &mut self,
         action: BookAction,
         id: &str,
+        target_ids: &[String],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Bulk actions work on the selection, not on the book that was right-clicked.
         match action {
             BookAction::Open => {
                 if let Some(group_key) = id.strip_prefix("group:") {
@@ -942,7 +849,9 @@ impl Yomu {
                 }
             }
             BookAction::SetSeries => {
-                let ids = if id.starts_with("group:")
+                let ids = if !target_ids.is_empty() {
+                    target_ids.to_vec()
+                } else if id.starts_with("group:")
                     || (self.selection.contains(id) && self.selection.len() > 1)
                 {
                     self.selected_ids()
@@ -953,10 +862,12 @@ impl Yomu {
                 return;
             }
             BookAction::MarkRead => {
-                if id.starts_with("group:")
-                    || (self.selection.contains(id) && self.selection.len() > 1)
-                {
-                    let ids = self.selected_ids();
+                let ids = if !target_ids.is_empty() {
+                    target_ids.to_vec()
+                } else {
+                    self.selected_ids()
+                };
+                if ids.len() > 1 || id.starts_with("group:") {
                     for bid in &ids {
                         if let Some(book) = self.library.get_mut(bid) {
                             book.mark_read();
@@ -964,17 +875,21 @@ impl Yomu {
                         self.sync_book_progress_to_anilist(bid, cx);
                     }
                     self.save_library();
-                    self.selection.clear();
+                    for bid in &ids {
+                        self.selection.remove(bid);
+                    }
                     self.dismiss();
                     self.show_toast(format!("Marked {} books as read", ids.len()), cx);
                     return;
                 }
             }
             BookAction::MarkUnread => {
-                if id.starts_with("group:")
-                    || (self.selection.contains(id) && self.selection.len() > 1)
-                {
-                    let ids = self.selected_ids();
+                let ids = if !target_ids.is_empty() {
+                    target_ids.to_vec()
+                } else {
+                    self.selected_ids()
+                };
+                if ids.len() > 1 || id.starts_with("group:") {
                     for bid in &ids {
                         if let Some(book) = self.library.get_mut(bid) {
                             book.reset_progress();
@@ -982,13 +897,19 @@ impl Yomu {
                         self.sync_book_progress_to_anilist(bid, cx);
                     }
                     self.save_library();
-                    self.selection.clear();
+                    for bid in &ids {
+                        self.selection.remove(bid);
+                    }
                     self.dismiss();
                     self.show_toast(format!("Marked {} books as unread", ids.len()), cx);
                     return;
                 }
             }
             BookAction::RemoveSelected => {
+                if id.starts_with("group:") || target_ids.len() > 1 {
+                    self.request_remove_books(target_ids, cx);
+                    return;
+                }
                 self.request_remove_selected(cx);
                 return;
             }
@@ -1087,6 +1008,7 @@ impl Yomu {
         self.overlay_closed_at = Some(Instant::now());
         match dialog.action {
             ConfirmAction::Book(action, id) => self.perform_book_action(action, &id, window, cx),
+            ConfirmAction::RemoveBooks(ids) => self.remove_books(&ids, cx),
             ConfirmAction::RemoveSelected => self.remove_selected(cx),
             ConfirmAction::ResetSettings => self.reset_settings(cx),
             ConfirmAction::ClearThumbnailCache => self.clear_thumbnail_cache(cx),
@@ -1297,13 +1219,13 @@ impl Yomu {
                     .background_executor()
                     .spawn(async move { client.sync_queued_updates(&token, &queue) })
                     .await;
-                if let Ok(synced) = res {
-                    if synced > 0 {
-                        let _ = this.update(cx, |this, _| {
-                            this.anilist_data.sync_queue.clear();
-                            let _ = this.anilist_data.save(&path);
-                        });
-                    }
+                if let Ok(synced) = res
+                    && synced > 0
+                {
+                    let _ = this.update(cx, |this, _| {
+                        this.anilist_data.sync_queue.clear();
+                        let _ = this.anilist_data.save(&path);
+                    });
                 }
             })
             .detach();
@@ -1409,7 +1331,7 @@ impl Yomu {
         self.reader = None;
         self.selection.clear();
         self.open_group = None;
-        self.group_scroll.reset();
+        self.group_scroll.set_offset(Point::default());
         let _ = self.library.clear_all_data(&self.dirs);
         self.overlay = Some(Overlay::Settings);
         cx.notify();
@@ -1499,10 +1421,10 @@ impl Yomu {
     }
 
     fn restore_theme_preview(&mut self, cx: &mut Context<Self>) {
-        if let Some(prev) = self.theme_before_preview.take() {
-            if self.library.settings().theme_name != prev {
-                self.preview_theme(&prev, cx);
-            }
+        if let Some(prev) = self.theme_before_preview.take()
+            && self.library.settings().theme_name != prev
+        {
+            self.preview_theme(&prev, cx);
         }
     }
 
@@ -1702,8 +1624,9 @@ impl Yomu {
                         _ => None,
                     });
                     let id = menu.book_id.clone();
+                    let target_ids = menu.target_ids.clone();
                     if let Some(action) = picked {
-                        self.run_book_action(action, &id, window, cx);
+                        self.run_book_action(action, &id, &target_ids, window, cx);
                     }
                 }
                 _ => {}
@@ -1773,7 +1696,7 @@ impl Yomu {
                 self.library.settings_mut().group_series = !self.library.settings().group_series;
                 self.selection.clear();
                 self.open_group = None;
-                self.group_scroll.reset();
+                self.group_scroll.set_offset(Point::default());
                 self.save_library();
                 cx.notify();
             }
@@ -1935,7 +1858,7 @@ impl Yomu {
                 });
             if !still_exists {
                 self.open_group = None;
-                self.group_scroll.reset();
+                self.group_scroll.set_offset(Point::default());
             }
         }
     }
@@ -1966,8 +1889,9 @@ impl Yomu {
         cx.notify();
     }
 
-    /// Right-click on a book: a book inside a multi-book selection gets the bulk menu; anywhere
-    /// else the selection is dropped (like a file manager) and the book gets its own menu.
+    /// Right-click on a book: a book inside an existing multi-selection preserves the multi-selection
+    /// and gets the bulk menu; right-clicking an unselected book drops previous selection (if any),
+    /// does not select the book or trigger selection mode, and opens the book's individual menu.
     fn open_context_menu(
         &mut self,
         id: &str,
@@ -1976,17 +1900,22 @@ impl Yomu {
         cx: &mut Context<Self>,
     ) {
         let selected_ids = self.selected_ids();
-        let entries = if selected_ids.contains(&id.to_string()) && selected_ids.len() > 1 {
-            menu::selection_menu(selected_ids.len())
-        } else {
-            self.selection.clear();
-            let Some(book) = self.library.get(id) else {
-                return;
+        let (entries, target_ids) =
+            if selected_ids.contains(&id.to_string()) && selected_ids.len() > 1 {
+                (menu::selection_menu(selected_ids.len()), selected_ids)
+            } else {
+                self.selection.clear();
+                let Some(book) = self.library.get(id) else {
+                    return;
+                };
+                (
+                    menu::book_menu(book, book.path.exists()),
+                    vec![id.to_string()],
+                )
             };
-            menu::book_menu(book, book.path.exists())
-        };
         let menu = BookMenu {
             book_id: id.to_string(),
+            target_ids,
             entries,
             position,
             selected: None,
@@ -2003,10 +1932,13 @@ impl Yomu {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.selection.select_all(book_ids);
+        // Right-clicking a folder or group opens its context menu for that folder's contents,
+        // without selecting all books or activating selection mode/toolbar.
+        self.selection.clear();
         let entries = menu::group_menu(group_name, book_ids.len());
         let menu = BookMenu {
             book_id: format!("group:{}", group_key),
+            target_ids: book_ids.to_vec(),
             entries,
             position,
             selected: None,
@@ -2025,10 +1957,8 @@ impl Yomu {
         cx.notify();
     }
 
-    /// Remove every selected book from the library, asking first only if progress or marks
-    /// would be lost. The comic files are never touched.
-    fn request_remove_selected(&mut self, cx: &mut Context<Self>) {
-        let ids = self.selected_ids();
+    /// Remove books from the library, asking first only if progress or marks would be lost.
+    fn request_remove_books(&mut self, ids: &[String], cx: &mut Context<Self>) {
         if ids.is_empty() {
             return;
         }
@@ -2042,21 +1972,20 @@ impl Yomu {
                     title: confirmation.title.into(),
                     message: confirmation.message.into(),
                     confirm_label: confirmation.confirm_label,
-                    action: ConfirmAction::RemoveSelected,
+                    action: ConfirmAction::RemoveBooks(ids.to_vec()),
                 }));
                 cx.notify();
             }
-            None => self.remove_selected(cx),
+            None => self.remove_books(ids, cx),
         }
     }
 
-    fn remove_selected(&mut self, cx: &mut Context<Self>) {
+    fn remove_books(&mut self, ids: &[String], cx: &mut Context<Self>) {
         self.dismiss();
-        let ids = self.selected_ids();
-        for id in &ids {
+        for id in ids {
             self.library.remove(id, &self.dirs);
+            self.selection.remove(id);
         }
-        self.selection.clear();
         self.prune_open_group();
         self.save_library();
         let message = if ids.len() == 1 {
@@ -2065,6 +1994,18 @@ impl Yomu {
             format!("Removed {} books from the library", ids.len())
         };
         self.show_toast(message, cx);
+    }
+
+    /// Remove every selected book from the library, asking first only if progress or marks
+    /// would be lost. The comic files are never touched.
+    fn request_remove_selected(&mut self, cx: &mut Context<Self>) {
+        let ids = self.selected_ids();
+        self.request_remove_books(&ids, cx);
+    }
+
+    fn remove_selected(&mut self, cx: &mut Context<Self>) {
+        let ids = self.selected_ids();
+        self.remove_books(&ids, cx);
     }
 
     fn on_library_key(
@@ -2123,18 +2064,28 @@ impl Yomu {
 
     #[allow(dead_code)]
     fn enter_group(&mut self, key: String, cx: &mut Context<Self>) {
+        let name = key.rsplit(['/', '\\']).next().unwrap_or(&key).to_string();
+        self.enter_group_named(key, name, cx);
+    }
+
+    fn enter_group_named(&mut self, key: String, name: String, cx: &mut Context<Self>) {
         self.selection.clear();
-        self.open_group = Some(key);
-        self.group_scroll.handle.set_offset(Point::default());
-        self.group_scroll.reset();
-        cx.notify();
+        self.group_scroll.set_offset(Point::default());
+        self.navigate_to_dest(NavDestination::Group { key, name }, cx);
     }
 
     fn exit_group(&mut self, cx: &mut Context<Self>) {
         self.selection.clear();
-        self.open_group = None;
-        self.group_scroll.reset();
-        cx.notify();
+        self.group_scroll.set_offset(Point::default());
+        if matches!(
+            self.nav_history.get(self.nav_history_idx),
+            Some(NavDestination::Group { .. })
+        ) {
+            self.navigate_back(cx);
+        } else {
+            self.open_group = None;
+            self.navigate_to_dest(NavDestination::Section(self.active_section), cx);
+        }
     }
 
     fn activate_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2474,11 +2425,11 @@ impl Yomu {
                 )
             }
         };
-        if self.library.settings().remember_zoom {
-            if let Some(reader) = self.reader.as_ref() {
-                self.library.settings_mut().zoom = reader.zoom;
-                self.save_library_debounced(cx);
-            }
+        if self.library.settings().remember_zoom
+            && let Some(reader) = self.reader.as_ref()
+        {
+            self.library.settings_mut().zoom = reader.zoom;
+            self.save_library_debounced(cx);
         }
         self.show_hud(message, cx);
     }
@@ -2519,10 +2470,8 @@ impl Yomu {
     fn set_remember_zoom(&mut self, value: Option<bool>, cx: &mut Context<Self>) {
         let next = value.unwrap_or(!self.library.settings().remember_zoom);
         self.library.settings_mut().remember_zoom = next;
-        if next {
-            if let Some(reader) = self.reader.as_ref() {
-                self.library.settings_mut().zoom = reader.zoom;
-            }
+        if next && let Some(reader) = self.reader.as_ref() {
+            self.library.settings_mut().zoom = reader.zoom;
         }
         self.save_library();
         self.show_hud(
@@ -2552,6 +2501,7 @@ impl Yomu {
     fn set_animations(&mut self, value: Option<bool>, cx: &mut Context<Self>) {
         let enabled = value.unwrap_or(!self.library.settings().animate);
         self.library.settings_mut().animate = enabled;
+        self.library.settings_mut().disable_animations = !enabled;
         self.save_library();
         let message = match (enabled, self.reduce_motion) {
             (true, true) => "animations on (the desktop asks for reduced motion, so they stay off)",
@@ -2559,6 +2509,19 @@ impl Yomu {
             (false, _) => "animations off",
         };
         self.show_hud(message, cx);
+    }
+
+    fn toggle_disable_animations(&mut self, disabled: bool, cx: &mut Context<Self>) {
+        self.library.settings_mut().disable_animations = disabled;
+        self.library.settings_mut().animate = !disabled;
+        self.save_library();
+        let message = match (!disabled, self.reduce_motion) {
+            (true, true) => "animations on (the desktop asks for reduced motion, so they stay off)",
+            (true, false) => "animations on",
+            (false, _) => "animations off",
+        };
+        self.show_hud(message, cx);
+        cx.notify();
     }
 
     fn set_continuous(&mut self, value: Option<bool>, cx: &mut Context<Self>) {
@@ -2632,9 +2595,11 @@ impl Yomu {
         };
 
         let now = Instant::now();
-        if touch_phase == TouchPhase::Started || touch_phase == TouchPhase::Cancelled || discrete {
-            reader.kinetic.reset();
-        } else if reader.kinetic.has_active_inertia() {
+        if touch_phase == TouchPhase::Started
+            || touch_phase == TouchPhase::Cancelled
+            || discrete
+            || reader.kinetic.has_active_inertia()
+        {
             reader.kinetic.reset();
         }
 
@@ -2667,15 +2632,14 @@ impl Yomu {
             reader.kinetic.push_motion(now, -dx, -dy);
         }
 
-        if touch_phase == TouchPhase::Ended {
-            if reader
+        if touch_phase == TouchPhase::Ended
+            && reader
                 .kinetic
                 .end_touch(reader.animate && !self.reduce_motion)
-            {
-                self.wake();
-                cx.notify();
-                return;
-            }
+        {
+            self.wake();
+            cx.notify();
+            return;
         }
 
         if reader.continuous {
@@ -2760,12 +2724,9 @@ impl Yomu {
         if self.library_pinch_accum > 0.35 {
             self.library_pinch_accum = 0.0;
             let next = match current {
-                ThumbnailSize::ExtraSmall => Some(ThumbnailSize::Small),
                 ThumbnailSize::Small => Some(ThumbnailSize::Medium),
                 ThumbnailSize::Medium => Some(ThumbnailSize::Large),
-                ThumbnailSize::Large => Some(ThumbnailSize::ExtraLarge),
-                ThumbnailSize::ExtraLarge => Some(ThumbnailSize::Huge),
-                ThumbnailSize::Huge => None,
+                ThumbnailSize::Large => None,
             };
             if let Some(new_size) = next {
                 self.library.settings_mut().thumbnail_size = new_size;
@@ -2776,12 +2737,9 @@ impl Yomu {
         } else if self.library_pinch_accum < -0.35 {
             self.library_pinch_accum = 0.0;
             let prev = match current {
-                ThumbnailSize::Huge => Some(ThumbnailSize::ExtraLarge),
-                ThumbnailSize::ExtraLarge => Some(ThumbnailSize::Large),
                 ThumbnailSize::Large => Some(ThumbnailSize::Medium),
                 ThumbnailSize::Medium => Some(ThumbnailSize::Small),
-                ThumbnailSize::Small => Some(ThumbnailSize::ExtraSmall),
-                ThumbnailSize::ExtraSmall => None,
+                ThumbnailSize::Small => None,
             };
             if let Some(new_size) = prev {
                 self.library.settings_mut().thumbnail_size = new_size;
@@ -2965,8 +2923,9 @@ impl Yomu {
             return;
         }
 
+        let vim_enabled = self.is_vim_enabled();
         let Some(reader) = self.reader.as_mut() else {
-            if token == ":" && !self.search_active {
+            if vim_enabled && token == ":" && !self.search_active {
                 self.library_vim.feed(":");
                 self.command_selection = 0;
                 cx.notify();
@@ -2990,11 +2949,75 @@ impl Yomu {
         }
 
         let vp = viewport_of(window);
-        let actions = reader.vim.feed(&token);
-        self.command_selection = 0;
-        cx.notify();
-        for action in actions {
-            self.apply(action, vp, window, cx);
+        if vim_enabled {
+            let actions = reader.vim.feed(&token);
+            self.command_selection = 0;
+            cx.notify();
+            for action in actions {
+                self.apply(action, vp, window, cx);
+            }
+        } else {
+            let center = (vp.width / 2.0, vp.height / 2.0);
+            let anchor = self.cursor_pos.unwrap_or(center);
+            match token.as_str() {
+                "escape" => {
+                    self.close_book(window, cx);
+                }
+                "?" => {
+                    reader.show_help = true;
+                    cx.notify();
+                }
+                "right" | "space" => {
+                    self.turn_by(true, 1, Arrive::Start, cx);
+                }
+                "left" | "S-space" => {
+                    self.turn_by(false, 1, Arrive::Start, cx);
+                }
+                "down" => {
+                    self.scroll(Dir::Down, Amount::Line, 1, vp, cx);
+                }
+                "up" => {
+                    self.scroll(Dir::Up, Amount::Line, 1, vp, cx);
+                }
+                "pagedown" => {
+                    self.scroll(Dir::Down, Amount::Page, 1, vp, cx);
+                }
+                "pageup" => {
+                    self.scroll(Dir::Up, Amount::Page, 1, vp, cx);
+                }
+                "home" => {
+                    self.jump_to(0, cx);
+                }
+                "end" => {
+                    self.jump_to(usize::MAX, cx);
+                }
+                "+" | "=" | "C-=" | "C-plus" => {
+                    self.zoom_by(layout::ZOOM_STEP, anchor, vp, cx);
+                }
+                "-" | "C-minus" => {
+                    self.zoom_by(layout::ZOOM_STEP.recip(), anchor, vp, cx);
+                }
+                "0" | "C-0" => {
+                    self.zoom_to(1.0, anchor, vp, cx);
+                }
+                "v" => {
+                    let next = !self.library.settings().continuous;
+                    self.set_continuous(Some(next), cx);
+                }
+                "w" => {
+                    let next = !self.library.settings().webcomics;
+                    self.set_webcomics(Some(next), cx);
+                }
+                "f" => {
+                    let next = self
+                        .reader
+                        .as_ref()
+                        .map(|r| r.fit.next())
+                        .unwrap_or(FitMode::Page);
+                    self.set_fit(next, cx);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -3403,7 +3426,7 @@ impl Yomu {
     // Rendering
     // ------------------------------------------------------------------------------------
 
-    fn render_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_overlay(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         Some(match self.overlay.as_ref()? {
             Overlay::Menu(menu) => self.render_menu(menu, cx),
             Overlay::LibraryMenu(menu) => self.render_library_menu(menu, cx),
@@ -3412,7 +3435,7 @@ impl Yomu {
             Overlay::Series(dialog) => self.render_series_dialog(dialog, cx),
             Overlay::Collection(dialog) => self.render_collection_dialog(dialog, cx),
             Overlay::AniListMatch(dialog) => self.render_anilist_match_dialog(dialog, cx),
-            Overlay::Settings => self.render_settings(cx),
+            Overlay::Settings => self.render_settings(window, cx),
         })
     }
 
@@ -3714,6 +3737,7 @@ impl Yomu {
 
         let action = item.action;
         let book_id = menu.book_id.clone();
+        let target_ids = menu.target_ids.clone();
         base.text_color(if is_selected {
             self.colors.accent_foreground
         } else if item.danger {
@@ -3728,7 +3752,7 @@ impl Yomu {
         })
         .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| this.menu_hover(ix, cx)))
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.run_book_action(action, &book_id, window, cx);
+            this.run_book_action(action, &book_id, &target_ids, window, cx);
         }))
         .into_any_element()
     }
@@ -4159,7 +4183,7 @@ impl Yomu {
             .into_any_element()
     }
 
-    fn render_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let border_px = self.border_px();
         let cache_bytes = self.dirs.cache_size_bytes();
         let anilist_username = self.anilist_data.user_name();
@@ -4170,9 +4194,10 @@ impl Yomu {
         let anilist_username_input = self.anilist_username_input.as_ref();
         let anilist_matched_count = self.anilist_data.matches.len();
         let anilist_sync_count = self.anilist_data.sync_queue.len();
+        let is_client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
 
         let props = ui::settings_view::SettingsViewProps {
-            scroll_handle: &self.settings_scroll.handle,
+            scroll_handle: &self.settings_scroll,
             current_tab: self.settings_tab,
             settings: self.library.settings(),
             available_schemes: ui::theme::available_color_schemes(&self.custom_themes),
@@ -4183,30 +4208,15 @@ impl Yomu {
             anilist_matched_count,
             anilist_sync_count,
             cache_size_str: format_size(cache_bytes),
+            is_client_decorated,
+            system_reduced_motion: self.reduce_motion,
+            vim_mode: self.is_vim_enabled(),
             colors: self.colors,
             radius: px(self.radius_xl_px()),
         };
 
         let view = ui::settings_view::render_settings_view(
             props,
-            {
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        this.settings_scroll.handle_scroll_wheel(e, reduce);
-                        cx.notify();
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        this.settings_scroll.cancel_inertia();
-                    });
-                }
-            },
             {
                 let yomu = yomu.clone();
                 move |tab, _, cx| {
@@ -4254,7 +4264,7 @@ impl Yomu {
                 let yomu = yomu.clone();
                 move |checked, _, cx| {
                     yomu.update(cx, |this, cx| {
-                        this.set_animations(Some(checked), cx);
+                        this.toggle_disable_animations(checked, cx);
                     });
                 }
             },
@@ -4265,6 +4275,14 @@ impl Yomu {
                         this.library.settings_mut().remember_zoom = checked;
                         this.save_library();
                         cx.notify();
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |checked, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.toggle_vim_mode(checked, cx);
                     });
                 }
             },
@@ -4436,7 +4454,7 @@ impl Yomu {
         ];
 
         let sidebar_props = ui::sidebar::SidebarProps {
-            scroll_handle: &self.sidebar_scroll.handle,
+            scroll_handle: &self.sidebar_scroll,
             current_section: self.active_section,
             continue_reading_count,
             all_manga_count,
@@ -4451,24 +4469,6 @@ impl Yomu {
 
         let sidebar = ui::sidebar::render_sidebar(
             sidebar_props,
-            {
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        this.sidebar_scroll.handle_scroll_wheel(e, reduce);
-                        cx.notify();
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        this.sidebar_scroll.cancel_inertia();
-                    });
-                }
-            },
             {
                 let yomu = yomu.clone();
                 move |sec, _, cx| {
@@ -4511,31 +4511,37 @@ impl Yomu {
                     });
                 }
             },
-            {
-                let _yomu = yomu.clone();
-                move |_, window, _| window.remove_window()
-            },
-            {
-                let _yomu = yomu.clone();
-                move |_, window, _| window.minimize_window()
-            },
-            {
-                let _yomu = yomu.clone();
-                move |_, window, _| window.toggle_fullscreen()
-            },
         );
 
         // 2. Toolbar Props
+        let is_client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
         let search_input = self.search_input.as_ref();
         let toolbar_props = ui::toolbar::MainToolbarProps {
-            can_go_back: self.open_group.is_some() || self.nav_history_idx > 0,
-            can_go_forward: self.nav_history_idx + 1 < self.nav_history.len(),
-            is_in_group: self.open_group.is_some(),
+            can_go_back: self.open_group.is_some(),
             sidebar_collapsed: is_collapsed,
             is_scrolled: self.is_current_view_scrolled(),
             search_input,
             is_grid_mode: self.view_mode_grid,
             is_group_series: self.library.settings().group_series,
+            is_client_decorated,
+            selection_count: self.selection.len(),
+            on_select_all: Some(Rc::new({
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.select_all(cx))
+            })),
+            on_remove_selected: Some(Rc::new({
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.request_remove_selected(cx))
+            })),
+            on_cancel_selection: Some(Rc::new({
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.selection.clear();
+                        cx.notify();
+                    })
+                }
+            })),
             colors,
             radius,
         };
@@ -4548,11 +4554,7 @@ impl Yomu {
             },
             {
                 let yomu = yomu.clone();
-                move |_, _, cx| yomu.update(cx, |this, cx| this.navigate_back(cx))
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| yomu.update(cx, |this, cx| this.navigate_forward(cx))
+                move |_, _, cx| yomu.update(cx, |this, cx| this.exit_group(cx))
             },
             {
                 let yomu = yomu.clone();
@@ -4579,6 +4581,7 @@ impl Yomu {
                 let yomu = yomu.clone();
                 move |_, _, cx| yomu.update(cx, |this, cx| this.import_dialog(false, cx))
             },
+            Some(Rc::new(|_, window, _| window.remove_window())),
         );
 
         // 3. Main Content
@@ -4596,7 +4599,7 @@ impl Yomu {
                 self.render_details_screen(&id, window, cx)
             }
             ui::sidebar::MainView::AniListSearch => self.render_anilist_search_screen(window, cx),
-            ui::sidebar::MainView::Settings => self.render_settings(cx),
+            ui::sidebar::MainView::Settings => self.render_settings(window, cx),
         };
 
         div()
@@ -4671,7 +4674,7 @@ impl Yomu {
         });
 
         let mut sorted_queue: Vec<&Book> = books.iter().filter(|b| b.has_progress()).collect();
-        sorted_queue.sort_by(|a, b| b.last_read.cmp(&a.last_read));
+        sorted_queue.sort_by_key(|a| std::cmp::Reverse(a.last_read));
 
         let queue: Vec<ui::continue_reading::ContinueReadingItem> = sorted_queue
             .iter()
@@ -4710,67 +4713,90 @@ impl Yomu {
         let card_w = grid.card_w;
         let cover_h = grid.cover_h;
 
-        let mut sorted_recent: Vec<&Book> = books.iter().collect();
-        sorted_recent.sort_by(|a, b| b.added_at.cmp(&a.added_at));
-
-        let recent: Vec<ui::continue_reading::ContinueReadingItem> = sorted_recent
-            .iter()
-            .take(6)
-            .map(|book| {
-                let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
-                let display_title = book.title.as_str();
-                let _total = book.page_count;
-                let current = if book.opened {
-                    book.current_page + 1
-                } else {
-                    0
-                };
-                let progress = book.progress();
-                let chapter_label = format!("Ch. {current}");
-
-                ui::continue_reading::ContinueReadingItem {
-                    book,
-                    cover_path,
-                    display_title,
-                    chapter_label,
-                    progress,
-                    genres: Vec::new(),
+        let mut cards: Vec<AnyElement> = Vec::new();
+        if self.library.settings().group_series {
+            let groups = directory_groups(books.iter());
+            let mut grouped_ids = HashSet::new();
+            for group in &groups {
+                for b in &group.books {
+                    grouped_ids.insert(b.id.clone());
                 }
-            })
-            .collect();
+            }
+
+            enum RecentEntry<'a> {
+                Group(&'a LibraryGroup<'a>, u64),
+                Book(&'a Book, u64),
+            }
+
+            let mut entries: Vec<RecentEntry> = Vec::new();
+            for group in &groups {
+                let latest_added = group.books.iter().map(|b| b.added_at).max().unwrap_or(0);
+                entries.push(RecentEntry::Group(group, latest_added));
+            }
+            for book in books.iter().filter(|b| !grouped_ids.contains(&b.id)) {
+                entries.push(RecentEntry::Book(book, book.added_at));
+            }
+
+            entries.sort_by(|a, b| {
+                let a_time = match a {
+                    RecentEntry::Group(_, t) => *t,
+                    RecentEntry::Book(_, t) => *t,
+                };
+                let b_time = match b {
+                    RecentEntry::Group(_, t) => *t,
+                    RecentEntry::Book(_, t) => *t,
+                };
+                b_time.cmp(&a_time)
+            });
+
+            for entry in entries.into_iter().take(6) {
+                match entry {
+                    RecentEntry::Group(group, _) => {
+                        let first = group.books[0];
+                        let cover_path = self.dirs.cover_for_size(&first.id, thumb_size);
+                        let book_ids: Vec<String> =
+                            group.books.iter().map(|b| b.id.clone()).collect();
+                        cards.push(self.render_folder_card(
+                            &group.key,
+                            &group.name,
+                            &book_ids,
+                            group.books.len(),
+                            cover_path,
+                            card_w,
+                            cover_h,
+                            radius,
+                            colors,
+                            &yomu,
+                        ));
+                    }
+                    RecentEntry::Book(book, _) => {
+                        cards.push(
+                            self.render_book_card(book, card_w, cover_h, radius, colors, &yomu),
+                        );
+                    }
+                }
+            }
+        } else {
+            let mut sorted_books: Vec<&Book> = books.iter().collect();
+            sorted_books.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+            for book in sorted_books.into_iter().take(6) {
+                cards.push(self.render_book_card(book, card_w, cover_h, radius, colors, &yomu));
+            }
+        }
 
         let props = ui::continue_reading::ContinueReadingProps {
-            scroll_handle: &self.continue_reading_scroll.handle,
+            scroll_handle: &self.continue_reading_scroll,
             hero,
             queue,
-            recent,
+            recent_cards: cards,
+            recent_gap: px(grid.gap),
             colors,
             radius,
             border_px: self.border_px(),
-            card_w,
-            cover_h,
         };
 
         ui::continue_reading::render_continue_reading_view(
             props,
-            {
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        this.continue_reading_scroll.handle_scroll_wheel(e, reduce);
-                        cx.notify();
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        this.continue_reading_scroll.cancel_inertia();
-                    });
-                }
-            },
             {
                 let yomu = yomu.clone();
                 move |id, window, cx| yomu.update(cx, |this, cx| this.open_book(id, window, cx))
@@ -4840,7 +4866,7 @@ impl Yomu {
             .count();
 
         let props = ui::collections_view::CollectionsProps {
-            scroll_handle: &self.collections_scroll.handle,
+            scroll_handle: &self.collections_scroll,
             favorites_count,
             reading_count,
             want_to_read_count,
@@ -4852,24 +4878,6 @@ impl Yomu {
 
         ui::collections_view::render_collections_view(
             props,
-            {
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        this.collections_scroll.handle_scroll_wheel(e, reduce);
-                        cx.notify();
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        this.collections_scroll.cancel_inertia();
-                    });
-                }
-            },
             {
                 let yomu = yomu.clone();
                 move |_, _, cx| {
@@ -4934,7 +4942,7 @@ impl Yomu {
             .iter()
             .filter(|b| b.has_progress())
             .collect();
-        history_books.sort_by(|a, b| b.last_read.cmp(&a.last_read));
+        history_books.sort_by_key(|a| std::cmp::Reverse(a.last_read));
 
         if history_books.is_empty() {
             return div()
@@ -5015,11 +5023,13 @@ impl Yomu {
                                 .relative()
                                 .w_full()
                                 .h(px(cover_h))
+                                .rounded_t(radius)
                                 .bg(with_alpha(colors.foreground, 0.04))
                                 .overflow_hidden()
                                 .child(
                                     img(cover_path)
                                         .size_full()
+                                        .rounded_t(radius)
                                         .object_fit(gpui_kit::ObjectFit::Cover),
                                 ),
                         )
@@ -5099,6 +5109,7 @@ impl Yomu {
                                         .child(
                                             img(cover_path)
                                                 .size_full()
+                                                .rounded(px(self.radius_px().min(4.)))
                                                 .object_fit(gpui_kit::ObjectFit::Cover),
                                         ),
                                 )
@@ -5174,128 +5185,39 @@ impl Yomu {
             })
             .collect();
 
-        let mut header = div().flex().items_center().gap_2();
-        if !self.selection.is_empty() {
-            header = header
-                .child(
+        gpui_kit::base::ScrollBounce::new(
+            "history-scroll-bounce",
+            &self.library_scroll,
+            div()
+                .id("history-container")
+                .track_scroll(&self.library_scroll)
+                .size_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .child(if is_grid {
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.foreground)
-                        .child(format!("{} selected", self.selection.len())),
-                )
-                .child(
-                    div().debug_selector(|| "select-all".into()).child(
-                        Button::new("select-all")
-                            .ghost()
-                            .small()
-                            .label("Select all")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.select_all(cx);
-                                    })
-                                }
-                            }),
-                    ),
-                )
-                .child(
-                    div().debug_selector(|| "select-remove".into()).child(
-                        Button::new("select-remove")
-                            .ghost()
-                            .small()
-                            .label("Remove")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.remove_selected(cx);
-                                    })
-                                }
-                            }),
-                    ),
-                )
-                .child(
-                    div().debug_selector(|| "select-cancel".into()).child(
-                        Button::new("select-cancel")
-                            .ghost()
-                            .small()
-                            .label("Cancel")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.selection.clear();
-                                        cx.notify();
-                                    })
-                                }
-                            }),
-                    ),
-                );
-        }
-
-        let show_header = !self.selection.is_empty();
-
-        div()
-            .id("history-container")
-            .track_scroll(&self.library_scroll.handle)
-            .on_scroll_wheel({
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        this.library_scroll.handle_scroll_wheel(e, reduce);
-                        cx.notify();
-                    });
-                }
-            })
-            .on_mouse_down(MouseButton::Left, {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        this.library_scroll.cancel_inertia();
-                    });
-                }
-            })
-            .size_full()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .when(show_header, |this| {
-                this.child(
+                        .px(px(grid.pad_x))
+                        .py_6()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(px(grid.gap))
+                        .children(cards)
+                } else {
                     div()
                         .w_full()
-                        .px_6()
-                        .py_2()
-                        .border_b_1()
-                        .border_color(colors.border)
-                        .bg(with_alpha(colors.surface, 0.4))
-                        .child(header),
-                )
-            })
-            .child(if is_grid {
-                div()
-                    .px(px(grid.pad_x))
-                    .py_6()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap(px(grid.gap))
-                    .children(cards)
-            } else {
-                div()
-                    .w_full()
-                    .max_w(px(1040.))
-                    .mx_auto()
-                    .px(px(grid.pad_x.max(16.0)))
-                    .py_4()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(cards)
-            })
-            .into_any_element()
+                        .max_w(px(1040.))
+                        .mx_auto()
+                        .px(px(grid.pad_x.max(16.0)))
+                        .py_4()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(cards)
+                }),
+        )
+        .into_any_element()
     }
 
     fn render_book_card(
@@ -5320,6 +5242,7 @@ impl Yomu {
         let progress = book.progress();
         let is_selected = self.selection.contains(&book.id);
         let border_px = self.border_px();
+        let inner_radius = (radius - px(border_px)).max(px(0.));
 
         div()
             .id(ElementId::from(SharedString::from(format!(
@@ -5383,11 +5306,13 @@ impl Yomu {
                     .relative()
                     .w_full()
                     .h(px(cover_h))
+                    .rounded_t(inner_radius)
                     .bg(with_alpha(colors.foreground, 0.04))
                     .overflow_hidden()
                     .child(
                         img(cover_path)
                             .size_full()
+                            .rounded_t(inner_radius)
                             .object_fit(gpui_kit::ObjectFit::Cover),
                     )
                     .children(is_selected.then(|| {
@@ -5557,6 +5482,7 @@ impl Yomu {
                             .child(
                                 img(cover_path)
                                     .size_full()
+                                    .rounded(px(self.radius_px().min(4.)))
                                     .object_fit(gpui_kit::ObjectFit::Cover),
                             ),
                     )
@@ -5672,6 +5598,7 @@ impl Yomu {
             .into_any_element()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_folder_list_row(
         &self,
         group_key: &str,
@@ -5751,6 +5678,7 @@ impl Yomu {
                             .child(
                                 img(cover_path)
                                     .size_full()
+                                    .rounded(px(self.radius_px().min(4.)))
                                     .object_fit(gpui_kit::ObjectFit::Cover),
                             ),
                     )
@@ -5794,23 +5722,118 @@ impl Yomu {
                     .items_center()
                     .gap_2p5()
                     .flex_none()
-                    .child(
-                        div()
-                            .px_2p5()
-                            .py_1()
-                            .rounded(radius)
-                            .bg(with_alpha(colors.foreground, 0.06))
-                            .border_1()
-                            .border_color(colors.border)
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.foreground)
-                            .child(format!("{count} vols")),
-                    )
+                    .child(ui::components::stat_badge(count, false, colors, radius))
                     .child(
                         Icon::new(IconName::ChevronRight)
                             .size(px(16.))
                             .text_color(colors.muted),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_folder_card(
+        &self,
+        group_key: &str,
+        group_name: &str,
+        book_ids: &[String],
+        count: usize,
+        cover_path: PathBuf,
+        card_w: f32,
+        cover_h: f32,
+        radius: Pixels,
+        colors: UiColors,
+        yomu: &Entity<Self>,
+    ) -> AnyElement {
+        let group_key = group_key.to_string();
+        let group_name = group_name.to_string();
+        let book_ids = book_ids.to_vec();
+        let border_px = self.border_px();
+        let inner_radius = (radius - px(border_px)).max(px(0.));
+
+        div()
+            .id(SharedString::from(format!("folder-{}", group_key)))
+            .w(px(card_w))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .rounded(radius)
+            .bg(with_alpha(colors.surface, 0.6))
+            .when(border_px > 0.0, |s| {
+                s.border(px(border_px)).border_color(colors.border)
+            })
+            .overflow_hidden()
+            .cursor_pointer()
+            .hover(|s| s.border_color(colors.accent).shadow_md())
+            .on_mouse_down(MouseButton::Right, {
+                let yomu = yomu.clone();
+                let group_key = group_key.clone();
+                let group_name = group_name.clone();
+                let book_ids = book_ids.clone();
+                move |event: &MouseDownEvent, _window, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.open_group_context_menu(
+                            &group_key,
+                            &group_name,
+                            &book_ids,
+                            event.position,
+                            cx,
+                        );
+                    });
+                }
+            })
+            .on_click({
+                let yomu = yomu.clone();
+                let group_key = group_key.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.enter_group(group_key.clone(), cx);
+                    });
+                }
+            })
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h(px(cover_h))
+                    .rounded_t(inner_radius)
+                    .bg(with_alpha(colors.foreground, 0.04))
+                    .overflow_hidden()
+                    .child(
+                        img(cover_path)
+                            .size_full()
+                            .rounded_t(inner_radius)
+                            .object_fit(gpui_kit::ObjectFit::Cover),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_2()
+                            .right_2()
+                            .child(ui::components::stat_badge(count, false, colors, radius)),
+                    ),
+            )
+            .child(
+                div()
+                    .p_2p5()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.foreground)
+                            .truncate()
+                            .child(group_name),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(colors.muted)
+                            .truncate()
+                            .child(format!("{count} volumes · Series")),
                     ),
             )
             .into_any_element()
@@ -5833,7 +5856,7 @@ impl Yomu {
                     b.title.to_lowercase().contains(&query)
                         || b.series
                             .as_ref()
-                            .map_or(false, |s| s.to_lowercase().contains(&query))
+                            .is_some_and(|s| s.to_lowercase().contains(&query))
                 }
             })
             .collect();
@@ -5885,101 +5908,19 @@ impl Yomu {
                 let cover_path = self.dirs.cover_for_size(&first.id, thumb_size);
 
                 if is_grid {
-                    cards.push(
-                        div()
-                            .id(SharedString::from(format!("folder-{}", group.key)))
-                            .w(px(card_w))
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .rounded(radius)
-                            .bg(with_alpha(colors.surface, 0.6))
-                            .when(border_px > 0.0, |s| {
-                                s.border(px(border_px)).border_color(colors.border)
-                            })
-                            .overflow_hidden()
-                            .cursor_pointer()
-                            .hover(|s| s.border_color(colors.accent).shadow_md())
-                            .on_mouse_down(MouseButton::Right, {
-                                let yomu = yomu.clone();
-                                let group_key = group_key.clone();
-                                let group_name = group_name.clone();
-                                let book_ids: Vec<String> =
-                                    group.books.iter().map(|b| b.id.clone()).collect();
-                                move |event: &MouseDownEvent, _window, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.open_group_context_menu(
-                                            &group_key,
-                                            &group_name,
-                                            &book_ids,
-                                            event.position,
-                                            cx,
-                                        );
-                                    });
-                                }
-                            })
-                            .on_click({
-                                let yomu = yomu.clone();
-                                let group_key = group_key.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.enter_group(group_key.clone(), cx);
-                                    });
-                                }
-                            })
-                            .child(
-                                div()
-                                    .relative()
-                                    .w_full()
-                                    .h(px(cover_h))
-                                    .bg(with_alpha(colors.foreground, 0.04))
-                                    .overflow_hidden()
-                                    .child(
-                                        img(cover_path)
-                                            .size_full()
-                                            .object_fit(gpui_kit::ObjectFit::Cover),
-                                    )
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .top_2()
-                                            .right_2()
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded(radius)
-                                            .bg(with_alpha(colors.background, 0.85))
-                                            .border_1()
-                                            .border_color(colors.border)
-                                            .text_xs()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(colors.foreground)
-                                            .child(format!("{count} vols")),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .p_2p5()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(colors.foreground)
-                                            .truncate()
-                                            .child(group_name),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(colors.muted)
-                                            .truncate()
-                                            .child(format!("{count} volumes · Series")),
-                                    ),
-                            )
-                            .into_any_element(),
-                    );
+                    let book_ids: Vec<String> = group.books.iter().map(|b| b.id.clone()).collect();
+                    cards.push(self.render_folder_card(
+                        &group_key,
+                        &group_name,
+                        &book_ids,
+                        count,
+                        cover_path,
+                        card_w,
+                        cover_h,
+                        radius,
+                        colors,
+                        &yomu,
+                    ));
                 } else {
                     let book_ids: Vec<String> = group.books.iter().map(|b| b.id.clone()).collect();
                     cards.push(self.render_folder_list_row(
@@ -6013,146 +5954,55 @@ impl Yomu {
             }
         }
 
-        let mut header = div().flex().items_center().gap_2();
-        if !self.selection.is_empty() {
-            header = header
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.foreground)
-                        .child(format!("{} selected", self.selection.len())),
-                )
-                .child(
-                    div().debug_selector(|| "select-all".into()).child(
-                        Button::new("select-all")
-                            .ghost()
-                            .small()
-                            .label("Select all")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.select_all(cx);
-                                    })
-                                }
-                            }),
-                    ),
-                )
-                .child(
-                    div().debug_selector(|| "select-remove".into()).child(
-                        Button::new("select-remove")
-                            .ghost()
-                            .small()
-                            .label("Remove")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.request_remove_selected(cx);
-                                    })
-                                }
-                            }),
-                    ),
-                )
-                .child(
-                    div().debug_selector(|| "select-cancel".into()).child(
-                        Button::new("select-cancel")
-                            .ghost()
-                            .small()
-                            .label("Cancel")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.selection.clear();
-                                        cx.notify();
-                                    })
-                                }
-                            }),
-                    ),
-                );
-        }
-
-        let show_header = !self.selection.is_empty();
         let in_group = self.open_group.is_some();
         let scroll_handle = if in_group {
-            &self.group_scroll.handle
+            &self.group_scroll
         } else {
-            &self.library_scroll.handle
+            &self.library_scroll
+        };
+        let bounce_id = if in_group {
+            "group-grid-bounce"
+        } else {
+            "all-manga-bounce"
         };
 
-        div()
-            .id(if in_group {
-                "group-grid"
-            } else {
-                "all-manga-container"
-            })
-            .track_scroll(scroll_handle)
-            .on_scroll_wheel({
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        if this.open_group.is_some() {
-                            this.group_scroll.handle_scroll_wheel(e, reduce);
-                        } else {
-                            this.library_scroll.handle_scroll_wheel(e, reduce);
-                        }
-                        cx.notify();
-                    });
-                }
-            })
-            .on_mouse_down(MouseButton::Left, {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        if this.open_group.is_some() {
-                            this.group_scroll.cancel_inertia();
-                        } else {
-                            this.library_scroll.cancel_inertia();
-                        }
-                    });
-                }
-            })
-            .size_full()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .when(show_header, |this| {
-                this.child(
+        gpui_kit::base::ScrollBounce::new(
+            bounce_id,
+            scroll_handle,
+            div()
+                .id(if in_group {
+                    "group-grid"
+                } else {
+                    "all-manga-container"
+                })
+                .track_scroll(scroll_handle)
+                .size_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .child(if is_grid {
+                    div()
+                        .px(px(grid.pad_x))
+                        .py_6()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(px(grid.gap))
+                        .children(cards)
+                } else {
                     div()
                         .w_full()
-                        .px_6()
-                        .py_2()
-                        .border_b_1()
-                        .border_color(colors.border)
-                        .bg(with_alpha(colors.surface, 0.4))
-                        .child(header),
-                )
-            })
-            .child(if is_grid {
-                div()
-                    .px(px(grid.pad_x))
-                    .py_6()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap(px(grid.gap))
-                    .children(cards)
-            } else {
-                div()
-                    .w_full()
-                    .max_w(px(1040.))
-                    .mx_auto()
-                    .px(px(grid.pad_x.max(16.0)))
-                    .py_4()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(cards)
-            })
-            .into_any_element()
+                        .max_w(px(1040.))
+                        .mx_auto()
+                        .px(px(grid.pad_x.max(16.0)))
+                        .py_4()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(cards)
+                }),
+        )
+        .into_any_element()
     }
 
     fn render_downloads_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -6183,10 +6033,10 @@ impl Yomu {
             .books()
             .iter()
             .filter(|b| {
-                if let Some(media) = self.anilist_data.get_media_for_book(&b.id) {
-                    if let Some(user_status) = &media.user_status {
-                        return *user_status == status;
-                    }
+                if let Some(media) = self.anilist_data.get_media_for_book(&b.id)
+                    && let Some(user_status) = &media.user_status
+                {
+                    return *user_status == status;
                 }
                 false
             })
@@ -6264,11 +6114,13 @@ impl Yomu {
                                 .relative()
                                 .w_full()
                                 .h(px(cover_h))
+                                .rounded_t(radius)
                                 .bg(with_alpha(colors.foreground, 0.04))
                                 .overflow_hidden()
                                 .child(
                                     img(cover_path)
                                         .size_full()
+                                        .rounded_t(radius)
                                         .object_fit(gpui_kit::ObjectFit::Cover),
                                 ),
                         )
@@ -6340,6 +6192,7 @@ impl Yomu {
                                         .child(
                                             img(cover_path)
                                                 .size_full()
+                                                .rounded(px(self.radius_px().min(4.)))
                                                 .object_fit(gpui_kit::ObjectFit::Cover),
                                         ),
                                 )
@@ -6376,128 +6229,39 @@ impl Yomu {
             })
             .collect();
 
-        let mut header = div().flex().items_center().gap_2();
-        if !self.selection.is_empty() {
-            header = header
-                .child(
+        gpui_kit::base::ScrollBounce::new(
+            "anilist-category-bounce",
+            &self.anilist_category_scroll,
+            div()
+                .id("anilist-category-container")
+                .track_scroll(&self.anilist_category_scroll)
+                .size_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .child(if is_grid {
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.foreground)
-                        .child(format!("{} selected", self.selection.len())),
-                )
-                .child(
-                    div().debug_selector(|| "select-all".into()).child(
-                        Button::new("select-all")
-                            .ghost()
-                            .small()
-                            .label("Select all")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.select_all(cx);
-                                    })
-                                }
-                            }),
-                    ),
-                )
-                .child(
-                    div().debug_selector(|| "select-remove".into()).child(
-                        Button::new("select-remove")
-                            .ghost()
-                            .small()
-                            .label("Remove")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.remove_selected(cx);
-                                    })
-                                }
-                            }),
-                    ),
-                )
-                .child(
-                    div().debug_selector(|| "select-cancel".into()).child(
-                        Button::new("select-cancel")
-                            .ghost()
-                            .small()
-                            .label("Cancel")
-                            .on_click({
-                                let yomu = yomu.clone();
-                                move |_, _, cx| {
-                                    yomu.update(cx, |this, cx| {
-                                        this.selection.clear();
-                                        cx.notify();
-                                    })
-                                }
-                            }),
-                    ),
-                );
-        }
-
-        let show_header = !self.selection.is_empty();
-
-        div()
-            .id("anilist-category-container")
-            .track_scroll(&self.anilist_category_scroll.handle)
-            .on_scroll_wheel({
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        this.anilist_category_scroll.handle_scroll_wheel(e, reduce);
-                        cx.notify();
-                    });
-                }
-            })
-            .on_mouse_down(MouseButton::Left, {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        this.anilist_category_scroll.cancel_inertia();
-                    });
-                }
-            })
-            .size_full()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .when(show_header, |this| {
-                this.child(
+                        .px(px(grid.pad_x))
+                        .py_6()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(px(grid.gap))
+                        .children(cards)
+                } else {
                     div()
                         .w_full()
-                        .px_6()
-                        .py_2()
-                        .border_b_1()
-                        .border_color(colors.border)
-                        .bg(with_alpha(colors.surface, 0.4))
-                        .child(header),
-                )
-            })
-            .child(if is_grid {
-                div()
-                    .px(px(grid.pad_x))
-                    .py_6()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap(px(grid.gap))
-                    .children(cards)
-            } else {
-                div()
-                    .w_full()
-                    .max_w(px(1040.))
-                    .mx_auto()
-                    .px(px(grid.pad_x.max(16.0)))
-                    .py_4()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(cards)
-            })
-            .into_any_element()
+                        .max_w(px(1040.))
+                        .mx_auto()
+                        .px(px(grid.pad_x.max(16.0)))
+                        .py_4()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(cards)
+                }),
+        )
+        .into_any_element()
     }
 
     fn render_details_screen(
@@ -6523,7 +6287,7 @@ impl Yomu {
         let anilist_meta = self.anilist_data.get_media_for_book(&book.id);
 
         let props = ui::details::MangaDetailsProps {
-            scroll_handle: &self.details_scroll.handle,
+            scroll_handle: &self.details_scroll,
             book,
             cover_path,
             anilist_meta,
@@ -6535,24 +6299,6 @@ impl Yomu {
 
         ui::details::render_manga_details(
             props,
-            {
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        this.details_scroll.handle_scroll_wheel(e, reduce);
-                        cx.notify();
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        this.details_scroll.cancel_inertia();
-                    });
-                }
-            },
             {
                 let yomu = yomu.clone();
                 move |_, _, cx| yomu.update(cx, |this, cx| this.navigate_back(cx))
@@ -6656,7 +6402,7 @@ impl Yomu {
         let search_input = self.anilist_search_input.as_ref().unwrap();
 
         let props = ui::anilist_search::AniListSearchProps {
-            scroll_handle: &self.anilist_search_scroll.handle,
+            scroll_handle: &self.anilist_search_scroll,
             search_input,
             selected_filter: 0,
             results: &self.anilist_search_results,
@@ -6667,24 +6413,6 @@ impl Yomu {
 
         ui::anilist_search::render_anilist_search(
             props,
-            {
-                let yomu = yomu.clone();
-                move |e, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let reduce = this.reduce_motion;
-                        this.anilist_search_scroll.handle_scroll_wheel(e, reduce);
-                        cx.notify();
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, _| {
-                        this.anilist_search_scroll.cancel_inertia();
-                    });
-                }
-            },
             {
                 let yomu = yomu.clone();
                 move |_idx, _, cx| {
@@ -6717,39 +6445,82 @@ impl Yomu {
     }
 
     fn navigate_to(&mut self, view: ui::sidebar::MainView, cx: &mut Context<Self>) {
-        if self.active_view == view {
+        let dest = match view {
+            ui::sidebar::MainView::ContinueReading => {
+                NavDestination::Section(ui::sidebar::SidebarSection::ContinueReading)
+            }
+            ui::sidebar::MainView::AllManga => {
+                NavDestination::Section(ui::sidebar::SidebarSection::AllManga)
+            }
+            ui::sidebar::MainView::Collections => {
+                NavDestination::Section(ui::sidebar::SidebarSection::Collections)
+            }
+            ui::sidebar::MainView::History => {
+                NavDestination::Section(ui::sidebar::SidebarSection::History)
+            }
+            ui::sidebar::MainView::Downloads => {
+                NavDestination::Section(ui::sidebar::SidebarSection::Downloads)
+            }
+            ui::sidebar::MainView::AniListCategory(cat) => {
+                NavDestination::Section(ui::sidebar::SidebarSection::AniList(cat))
+            }
+            ui::sidebar::MainView::Details(id) => NavDestination::Details(id),
+            ui::sidebar::MainView::AniListSearch => NavDestination::AniListSearch,
+            ui::sidebar::MainView::Settings => {
+                self.active_view = ui::sidebar::MainView::Settings;
+                cx.notify();
+                return;
+            }
+        };
+        self.navigate_to_dest(dest, cx);
+    }
+
+    fn navigate_to_dest(&mut self, dest: NavDestination, cx: &mut Context<Self>) {
+        if let Some(current) = self.nav_history.get(self.nav_history_idx)
+            && current == &dest
+        {
+            self.apply_destination(&dest, cx);
             return;
         }
         if self.nav_history_idx + 1 < self.nav_history.len() {
             self.nav_history.truncate(self.nav_history_idx + 1);
         }
-        self.nav_history.push(view.clone());
+        self.nav_history.push(dest.clone());
         self.nav_history_idx = self.nav_history.len() - 1;
-        self.active_view = view.clone();
+        self.apply_destination(&dest, cx);
+    }
 
-        match &view {
-            ui::sidebar::MainView::ContinueReading => {
-                self.active_section = ui::sidebar::SidebarSection::ContinueReading;
+    fn apply_destination(&mut self, dest: &NavDestination, cx: &mut Context<Self>) {
+        match dest {
+            NavDestination::Section(sec) => {
+                self.open_group = None;
+                self.active_section = *sec;
+                self.active_view = match sec {
+                    ui::sidebar::SidebarSection::ContinueReading => {
+                        ui::sidebar::MainView::ContinueReading
+                    }
+                    ui::sidebar::SidebarSection::AllManga => ui::sidebar::MainView::AllManga,
+                    ui::sidebar::SidebarSection::Collections => ui::sidebar::MainView::Collections,
+                    ui::sidebar::SidebarSection::History => ui::sidebar::MainView::History,
+                    ui::sidebar::SidebarSection::Downloads => ui::sidebar::MainView::Downloads,
+                    ui::sidebar::SidebarSection::AniList(cat) => {
+                        ui::sidebar::MainView::AniListCategory(*cat)
+                    }
+                };
             }
-            ui::sidebar::MainView::AllManga => {
+            NavDestination::Group { key, .. } => {
+                self.open_group = Some(key.clone());
                 self.active_section = ui::sidebar::SidebarSection::AllManga;
+                self.active_view = ui::sidebar::MainView::AllManga;
             }
-            ui::sidebar::MainView::Collections => {
-                self.active_section = ui::sidebar::SidebarSection::Collections;
-            }
-            ui::sidebar::MainView::History => {
-                self.active_section = ui::sidebar::SidebarSection::History;
-            }
-            ui::sidebar::MainView::Downloads => {
-                self.active_section = ui::sidebar::SidebarSection::Downloads;
-            }
-            ui::sidebar::MainView::AniListCategory(cat) => {
-                self.active_section = ui::sidebar::SidebarSection::AniList(*cat);
-            }
-            ui::sidebar::MainView::Details(id) => {
+            NavDestination::Details(id) => {
                 self.selected_book_id = Some(id.clone());
+                self.active_view = ui::sidebar::MainView::Details(id.clone());
             }
-            _ => {}
+            NavDestination::AniListSearch => {
+                self.open_group = None;
+                self.active_view = ui::sidebar::MainView::AniListSearch;
+            }
         }
         cx.notify();
     }
@@ -6760,18 +6531,18 @@ impl Yomu {
 
     fn is_current_view_scrolled(&self) -> bool {
         let scroll_handle = if self.open_group.is_some() {
-            &self.group_scroll.handle
+            &self.group_scroll
         } else {
             match self.active_view {
-                ui::sidebar::MainView::ContinueReading => &self.continue_reading_scroll.handle,
-                ui::sidebar::MainView::AllManga => &self.library_scroll.handle,
-                ui::sidebar::MainView::Collections => &self.collections_scroll.handle,
-                ui::sidebar::MainView::History => &self.library_scroll.handle,
-                ui::sidebar::MainView::Downloads => &self.library_scroll.handle,
-                ui::sidebar::MainView::AniListCategory(_) => &self.anilist_category_scroll.handle,
-                ui::sidebar::MainView::Details(_) => &self.details_scroll.handle,
-                ui::sidebar::MainView::AniListSearch => &self.anilist_search_scroll.handle,
-                ui::sidebar::MainView::Settings => &self.settings_scroll.handle,
+                ui::sidebar::MainView::ContinueReading => &self.continue_reading_scroll,
+                ui::sidebar::MainView::AllManga => &self.library_scroll,
+                ui::sidebar::MainView::Collections => &self.collections_scroll,
+                ui::sidebar::MainView::History => &self.library_scroll,
+                ui::sidebar::MainView::Downloads => &self.library_scroll,
+                ui::sidebar::MainView::AniListCategory(_) => &self.anilist_category_scroll,
+                ui::sidebar::MainView::Details(_) => &self.details_scroll,
+                ui::sidebar::MainView::AniListSearch => &self.anilist_search_scroll,
+                ui::sidebar::MainView::Settings => &self.settings_scroll,
             }
         };
         scroll_handle.offset().y < px(-2.0)
@@ -6783,24 +6554,23 @@ impl Yomu {
     }
 
     fn navigate_back(&mut self, cx: &mut Context<Self>) {
-        if self.open_group.is_some() {
-            self.exit_group(cx);
-            return;
-        }
         if self.nav_history_idx > 0 {
             self.nav_history_idx -= 1;
-            let view = self.nav_history[self.nav_history_idx].clone();
-            self.active_view = view;
+            let dest = self.nav_history[self.nav_history_idx].clone();
+            self.apply_destination(&dest, cx);
+        } else if self.open_group.is_some() {
+            self.open_group = None;
+            self.group_scroll.set_offset(Point::default());
             cx.notify();
         }
     }
 
+    #[allow(dead_code)]
     fn navigate_forward(&mut self, cx: &mut Context<Self>) {
         if self.nav_history_idx + 1 < self.nav_history.len() {
             self.nav_history_idx += 1;
-            let view = self.nav_history[self.nav_history_idx].clone();
-            self.active_view = view;
-            cx.notify();
+            let dest = self.nav_history[self.nav_history_idx].clone();
+            self.apply_destination(&dest, cx);
         }
     }
 
@@ -7271,89 +7041,6 @@ impl Yomu {
             .into_any_element()
     }
 
-    fn sync_ui_scroll(&mut self, dt: f32) -> bool {
-        let mut moving = false;
-        if self.library_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.group_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.shortcuts_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.continue_reading_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.collections_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.details_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.settings_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.sidebar_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.anilist_search_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        if self.anilist_category_scroll.step(dt, self.reduce_motion) {
-            moving = true;
-        }
-        moving
-    }
-
-    fn catch_ui_inertia(&mut self) -> bool {
-        let mut caught = false;
-        if self.library_scroll.has_active_inertia() {
-            self.library_scroll.reset();
-            caught = true;
-        }
-        if self.group_scroll.has_active_inertia() {
-            self.group_scroll.reset();
-            caught = true;
-        }
-        if self.shortcuts_scroll.has_active_inertia() {
-            self.shortcuts_scroll.reset();
-            caught = true;
-        }
-        if self.continue_reading_scroll.has_active_inertia() {
-            self.continue_reading_scroll.reset();
-            caught = true;
-        }
-        if self.collections_scroll.has_active_inertia() {
-            self.collections_scroll.reset();
-            caught = true;
-        }
-        if self.details_scroll.has_active_inertia() {
-            self.details_scroll.reset();
-            caught = true;
-        }
-        if self.settings_scroll.has_active_inertia() {
-            self.settings_scroll.reset();
-            caught = true;
-        }
-        if self.sidebar_scroll.has_active_inertia() {
-            self.sidebar_scroll.reset();
-            caught = true;
-        }
-        if self.anilist_search_scroll.has_active_inertia() {
-            self.anilist_search_scroll.reset();
-            caught = true;
-        }
-        if self.anilist_category_scroll.has_active_inertia() {
-            self.anilist_category_scroll.reset();
-            caught = true;
-        }
-        if caught {
-            self.scroll_caught_at = Some(Instant::now());
-        }
-        caught
-    }
-
     fn render_command_box(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let input = self.cmdline_text()?;
         let suggestions = command_suggestions(input, &self.custom_themes);
@@ -7612,7 +7299,7 @@ fn command_suggestions(
                     themes.push((name.clone(), desc));
                 }
             }
-            themes.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+            themes.sort_by_key(|a| a.0.to_lowercase());
             return themes
                 .into_iter()
                 .filter(|(name, _)| {
@@ -7668,10 +7355,7 @@ impl Render for Yomu {
         // ask for another frame while something is actually moving.
         let now = Instant::now();
         let dt = self.frame_delta(now);
-        let mut animating = self.sync_reader(window, cx, dt);
-        if self.sync_ui_scroll(dt) {
-            animating = true;
-        }
+        let animating = self.sync_reader(window, cx, dt);
         if animating {
             self.last_frame = Some(now);
             window.request_animation_frame();
@@ -7713,7 +7397,7 @@ impl Render for Yomu {
         };
 
         let root_bg = self.colors.background;
-        let overlay = self.render_overlay(cx);
+        let overlay = self.render_overlay(window, cx);
         let cmd_box = self.render_command_box(cx);
 
         div()
@@ -7729,7 +7413,6 @@ impl Render for Yomu {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                    this.catch_ui_inertia();
                     if this.search_active {
                         this.deactivate_search(cx);
                     }
@@ -8026,11 +7709,14 @@ fn ensure_desktop_icon() {
 
 fn main() {
     ensure_desktop_icon();
+    let args: Vec<String> = std::env::args().collect();
+    let vim_cli_override = args.iter().any(|arg| arg == "--vim" || arg == "--vim-mode");
+
     application()
         // GPUI Kit icons are SVG asset paths. Without registering this source,
         // custom-rendered toolbar and context-menu icons resolve to empty images.
         .with_assets(gpui_kit::assets::AllAssets)
-        .run(|cx: &mut App| {
+        .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             let mut bindings = vec![
                 KeyBinding::new("ctrl-o", ImportFiles, Some("Library")),
@@ -8064,16 +7750,23 @@ fn main() {
                     window_background: WindowBackgroundAppearance::Opaque,
                     titlebar: Some(TitlebarOptions {
                         title: Some("yomu".into()),
-                        ..Default::default()
+                        appears_transparent: cfg!(target_os = "macos"),
+                        traffic_light_position: if cfg!(target_os = "macos") {
+                            Some(point(px(16.), px(18.)))
+                        } else {
+                            None
+                        },
                     }),
                     // Compositors match window rules (Niri, Hyprland, Sway…) on the app id.
                     app_id: Some("yomu".into()),
                     window_min_size: Some(size(px(480.), px(360.))),
+                    window_decorations: Some(WindowDecorations::Server),
                     icon: app_icon(),
                     ..Default::default()
                 },
-                |window, cx| {
+                move |window, cx| {
                     let view = cx.new(Yomu::new);
+                    view.update(cx, |this, _| this.vim_cli_override = vim_cli_override);
                     let focus = view.read(cx).focus_handle.clone();
                     window.focus(&focus, cx);
                     view

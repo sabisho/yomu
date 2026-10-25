@@ -87,10 +87,10 @@ struct CachedArchive {
 static ARCHIVE_POOL: Mutex<Vec<CachedArchive>> = Mutex::new(Vec::new());
 
 fn checkout_archive(path: &Path) -> Result<zip::ZipArchive<BufReader<File>>> {
-    if let Ok(mut pool) = ARCHIVE_POOL.lock() {
-        if let Some(idx) = pool.iter().position(|c| c.path == path) {
-            return Ok(pool.swap_remove(idx).archive);
-        }
+    if let Ok(mut pool) = ARCHIVE_POOL.lock()
+        && let Some(idx) = pool.iter().position(|c| c.path == path)
+    {
+        return Ok(pool.swap_remove(idx).archive);
     }
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = BufReader::with_capacity(64 * 1024, file);
