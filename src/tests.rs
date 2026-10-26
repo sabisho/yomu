@@ -95,7 +95,6 @@ fn overlay_kind(view: &Entity<Yomu>, cx: &mut VisualTestContext) -> &'static str
         Some(Overlay::Properties(_)) => "properties",
         Some(Overlay::Series(_)) => "series",
         Some(Overlay::Collection(_)) => "collection",
-        Some(Overlay::AniListMatch(_)) => "anilist-match",
         Some(Overlay::Settings) => "settings",
     })
 }

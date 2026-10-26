@@ -6,12 +6,10 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
-    SharedString, Styled, Window, div, px,
+    Styled, Window, div, px,
 };
 
-use super::components::{
-    macos_sidebar_bg, section_header, settings_shortcut_str, stat_badge, with_alpha,
-};
+use super::components::{macos_sidebar_bg, settings_shortcut_str, stat_badge, with_alpha};
 use super::theme::UiColors;
 
 #[allow(dead_code)]
@@ -22,9 +20,7 @@ pub enum MainView {
     Collections,
     History,
     Downloads,
-    AniListCategory(AniListCategory),
     Details(String),
-    AniListSearch,
     Settings,
 }
 
@@ -36,50 +32,6 @@ pub enum SidebarSection {
     Collections,
     History,
     Downloads,
-    AniList(AniListCategory),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AniListCategory {
-    MyList,
-    Planning,
-    Reading,
-    Completed,
-    Paused,
-    Dropped,
-}
-
-impl AniListCategory {
-    pub const ALL: [AniListCategory; 6] = [
-        AniListCategory::MyList,
-        AniListCategory::Planning,
-        AniListCategory::Reading,
-        AniListCategory::Completed,
-        AniListCategory::Paused,
-        AniListCategory::Dropped,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::MyList => "My List",
-            Self::Planning => "Planning",
-            Self::Reading => "Reading",
-            Self::Completed => "Completed",
-            Self::Paused => "Paused",
-            Self::Dropped => "Dropped",
-        }
-    }
-
-    pub fn icon(self) -> IconName {
-        match self {
-            Self::MyList => IconName::List,
-            Self::Planning => IconName::Bookmark,
-            Self::Reading => IconName::BookOpen,
-            Self::Completed => IconName::Check,
-            Self::Paused => IconName::Pause,
-            Self::Dropped => IconName::Clock,
-        }
-    }
 }
 
 pub struct SidebarProps<'a> {
@@ -89,9 +41,6 @@ pub struct SidebarProps<'a> {
     pub all_manga_count: usize,
     pub collections_count: usize,
     pub downloads_count: usize,
-    pub anilist_counts: [usize; 6],
-    pub user_name: SharedString,
-    pub anilist_connected: bool,
     pub colors: UiColors,
     pub radius: Pixels,
 }
@@ -100,7 +49,6 @@ pub fn render_sidebar(
     props: SidebarProps,
     on_select: impl Fn(SidebarSection, &mut Window, &mut App) + 'static,
     on_settings: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_open_anilist: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let on_select = std::rc::Rc::new(on_select);
     let colors = props.colors;
@@ -252,105 +200,31 @@ pub fn render_sidebar(
                     "Downloads",
                     Some(props.downloads_count),
                     props.current_section == SidebarSection::Downloads,
-                ))
-                // AniList Section
-                .child(section_header("ANILIST", colors))
-                .children(AniListCategory::ALL.iter().enumerate().map(|(idx, &cat)| {
-                    let active = props.current_section == SidebarSection::AniList(cat);
-                    nav_item(
-                        SidebarSection::AniList(cat),
-                        cat.icon(),
-                        cat.label(),
-                        Some(props.anilist_counts[idx]),
-                        active,
-                    )
-                })),
+                )),
         ))
-        // User Profile & Settings bar at the bottom
+        // Settings bar at the bottom
         .child(
-            div()
-                .p_3()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .id("sidebar-profile-card")
-                        .flex()
-                        .items_center()
-                        .gap_2p5()
-                        .cursor_pointer()
-                        .rounded(props.radius)
-                        .p_1()
-                        .hover(|style| style.bg(with_alpha(colors.foreground, 0.06)))
-                        .tooltip(|window, cx| {
-                            Tooltip::new("AniList integration & profile").build(window, cx)
-                        })
-                        .on_click(on_open_anilist)
-                        .child(
-                            div()
-                                .size(px(32.))
-                                .rounded(props.radius)
-                                .bg(with_alpha(colors.accent, 0.2))
-                                .border_1()
-                                .border_color(colors.accent)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    Icon::new(IconName::User)
-                                        .size(px(16.))
-                                        .text_color(colors.accent),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(colors.foreground)
-                                        .child(props.user_name),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(if props.anilist_connected {
-                                            gpui_kit::rgb(0x34C759)
-                                        } else {
-                                            colors.muted.into()
-                                        })
-                                        .child(if props.anilist_connected {
-                                            "AniList Connected"
-                                        } else {
-                                            "Connect AniList"
-                                        }),
-                                ),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("sidebar-settings-btn")
-                        .size(px(28.))
-                        .rounded(props.radius)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(|style| style.bg(with_alpha(colors.foreground, 0.08)))
-                        .tooltip(|window, cx| {
-                            Tooltip::new(format!("Settings ({})", settings_shortcut_str()))
-                                .build(window, cx)
-                        })
-                        .on_click(on_settings)
-                        .child(
-                            Icon::new(IconName::Settings)
-                                .size(px(16.))
-                                .text_color(colors.muted),
-                        ),
-                ),
+            div().p_3().flex().items_center().justify_end().child(
+                div()
+                    .id("sidebar-settings-btn")
+                    .size(px(28.))
+                    .rounded(props.radius)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(with_alpha(colors.foreground, 0.08)))
+                    .tooltip(|window, cx| {
+                        Tooltip::new(format!("Settings ({})", settings_shortcut_str()))
+                            .build(window, cx)
+                    })
+                    .on_click(on_settings)
+                    .child(
+                        Icon::new(IconName::Settings)
+                            .size(px(16.))
+                            .text_color(colors.muted),
+                    ),
+            ),
         )
         .into_any_element()
 }

@@ -231,7 +231,7 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - Converted Settings Appearance dropdowns (Color Scheme, Thumbnail Size, Corner Rounding, Border Thickness), Reader Settings (Reading Direction), and Reader Bottom Bar controls (Fit Mode, Reading Direction) to native popovers.
   - Eliminated scrim event collision bugs where opening dropdowns inside modal dialogs immediately dismissed the menu or failed to register selections.
 - **Inertial Scrolling Across All Views (`src/main.rs`, `src/motion.rs`):**
-  - Restored `UiScrollController` and `KineticScroll` physics across all application views: `AllManga`, `ContinueReading`, `Collections`, `MangaDetails`, `AniListSearch`, `AniListCategory`, `Sidebar`, and `Settings`.
+  - Restored `UiScrollController` and `KineticScroll` physics across all application views: `AllManga`, `ContinueReading`, `Collections`, `MangaDetails`, `Sidebar`, and `Settings`.
   - Mouse-wheel notches trigger smooth inertial glides; touchpad flicks trigger kinetic deceleration with touch-down catch-interruption.
 - **macOS Window Controls & UI Consistency:**
   - Removed redundant secondary back buttons; integrated seamless unified top navigation with titlebar traffic light controls.
@@ -250,7 +250,7 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - Controls default to `opacity(0.0)` for an unobstructed, immersive comic reading experience and smoothly reveal on hover over their top or side zones.
 
 ### 17. OS-Aware Shortcut Keybindings, Functional List View, Separated Icon-Pair Switches, and Native Tooltips
-- **Dynamic OS Keybindings (`src/ui/components.rs`, `src/ui/toolbar.rs`, `src/ui/settings_view.rs`, `src/ui/anilist_search.rs`):**
+- **Dynamic OS Keybindings (`src/ui/components.rs`, `src/ui/toolbar.rs`, `src/ui/settings_view.rs`):**
   - Added OS shortcut string helpers (`search_shortcut_str`, `settings_shortcut_str`, `open_shortcut_str`, `zoom_shortcut_str`).
   - Displays macOS symbols (`⌘K`, `⌘,`, `⌘O`, `Cmd+Wheel`) strictly on macOS; displays native Linux/Windows equivalents (`Ctrl+K`, `Ctrl+,`, `Ctrl+O`, `Ctrl+Wheel`) on Linux and Windows.
   - Updated search bar badges, shortcuts settings table, import tooltips, and sidebar settings hints to dynamically adapt to the running host OS.
@@ -258,14 +258,14 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - Added `view_mode_grid: bool` to `Settings` (persisted in `library.json`, defaults to `true`).
   - Implemented `render_book_list_row`: 64px row displaying thumbnail cover, title, series badge, progress status, mini progress bar, and completion badges.
   - Implemented `render_folder_list_row`: 64px series folder row with cover, folder icon, volume count badge, and chevron navigation.
-  - Seamlessly supported across `AllManga`, `History`, and `AniListCategory` views, maintaining selection and context-menu interactions in both grid and list modes.
+  - Seamlessly supported across `AllManga` and `History` views, maintaining selection and context-menu interactions in both grid and list modes.
 - **Separated Icon-Pair Switches in Toolbar (`src/ui/toolbar.rs`):**
   - Separated folder grouping from view mode with a 10px spacing gap.
   - Grouping Switch: icon pair `Folder` (series folders) vs `BookOpen` (individual volumes) with no text.
   - View Mode Switch: icon pair `LayoutGrid` (grid view) vs `List` (list view) with no text.
   - Interactive segmented controls with active accent fill, hover states, and native GPUI Kit tooltips.
 - **Native GPUI Kit Tooltips Throughout the Entire UI:**
-  - Integrated `gpui_kit::component::tooltip::Tooltip` across window traffic lights (close, minimize, zoom), toolbar controls (sidebar toggle, navigation back/forward, grouping toggles, view mode toggles, import button), manga details actions (back to library, continue reading, link AniList, more options), settings traffic light, and reader navigation chevrons.
+  - Integrated `gpui_kit::component::tooltip::Tooltip` across window traffic lights (close, minimize, zoom), toolbar controls (sidebar toggle, navigation back/forward, grouping toggles, view mode toggles, import button), manga details actions (back to library, continue reading, more options), settings traffic light, and reader navigation chevrons.
 
 ### 18. Native UX Refinement, Cross-Platform Polish, and GPUI Kit 0.8 Architecture
 - **Platform-Native Window Decorations & Dynamic Insets:**
@@ -289,7 +289,7 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - Identified root cause: GPUI's `overflow_hidden()` on parent divs clips to an axis-aligned bounding box, not rounded corners.
   - Added `.rounded_t(radius)` directly to grid card cover containers and `img(cover_path)` elements, and `.rounded(px(radius.min(4.)))` to list items. Covers now smoothly follow the card border without corner bleeding or flat cutoffs.
 - **Symmetrical Destination-Based Navigation Model:**
-  - Implemented `NavDestination` enum (`Section(SidebarSection)`, `Group { key, name }`, `Details(id)`, `AniListSearch`).
+  - Implemented `NavDestination` enum (`Section(SidebarSection)`, `Group { key, name }`, `Details(id)`).
   - Fixed asymmetric Back/Forward navigation: entering a group now records a first-class navigation destination, allowing Forward to re-enter the group, and Back from nested views (Details) to return to the group rather than popping to root.
   - Toolbar `can_go_back` and `can_go_forward` update immediately and reliably based on stack index.
 

@@ -13,9 +13,8 @@ All redesigned UI components reside in `src/ui/`:
 - `src/ui/continue_reading.rs`: Hero manga banner, Up Next queue, and Recently Added cover cards.
 - `src/ui/details.rs`: Manga details inspector with 4x2 metadata grid, synopsis toggle, tabs, and sync card.
 - `src/ui/collections_view.rs`: Smart collections (Favorites, Reading, Want to Read, Completed) and user custom collections.
-- `src/ui/anilist_search.rs`: AniList GraphQL search view with real-time query inputs and filter chips.
-- `src/ui/settings_view.rs`: Split-pane macOS preferences with 7 dedicated categories.
-- `src/ui/components.rs`: Reusable atomic primitives (window controls, badges, genre tags, star ratings).
+- `src/ui/settings_view.rs`: Split-pane macOS preferences with 6 dedicated categories.
+- `src/ui/components.rs`: Reusable atomic primitives (window controls, badges, genre tags).
 - `src/ui/overlays.rs`: Modal overlays, confirmation dialogs, and popups.
 
 ---
@@ -31,9 +30,6 @@ pub struct SidebarProps {
     pub all_manga_count: usize,
     pub collections_count: usize,
     pub downloads_count: usize,
-    pub anilist_counts: [usize; 6],
-    pub user_name: SharedString,
-    pub anilist_connected: bool,
     pub colors: UiColors,
     pub radius: Pixels,
 }
@@ -41,8 +37,7 @@ pub struct SidebarProps {
 
 - **Traffic Light Controls**: Custom-rendered red, yellow, and green window management buttons mapped to `remove_window`, `minimize_window`, and `toggle_fullscreen`.
 - **Primary Navigation**: Continue Reading, All Manga, Collections, History, Downloads.
-- **AniList Section**: Real-time count badges for My List, Planning, Reading, Completed, Paused, and Dropped.
-- **Footer**: Current AniList connection badge and direct link to Settings.
+- **Footer**: Direct link to Settings.
 
 ### 2.2 Main Toolbar (`ui::toolbar`)
 
@@ -70,10 +65,9 @@ pub struct MainToolbarProps<'a> {
 
 ### 2.4 Manga Details View (`ui::details`)
 
-- **Header Section**: Full-height high-resolution cover preview, title, alternate romaji/native titles, publication year, serialization, and star rating.
-- **Underline Tab Bar**: Overview, Chapters, Characters, and Related works.
-- **4x2 Metadata Matrix**: Structured cards showing Chapters, Publication Status, Release Date, Authors, Artists, and Serialization.
-- **Tracking & Sync Card**: Local progress bar, AniList status dropdown, chapters read counter, and offline synchronization queue trigger.
+- **Header Section**: Full-height high-resolution cover preview, title, series, format, and reading status.
+- **Underline Tab Bar**: Overview, Chapters, and Details.
+- **4x2 Metadata Matrix**: Structured cards showing Chapters, Reading Status, Pages, Format, and Storage Info.
 
 ### 2.5 Collections View (`ui::collections_view`)
 
@@ -83,18 +77,16 @@ pub struct MainToolbarProps<'a> {
 
 ### 2.6 Split-Pane Settings (`ui::settings_view`)
 
-Implements 7 settings tabs in a macOS-standard 200px sidebar + scrollable content pane:
+Implements 6 settings tabs in a macOS-standard 200px sidebar + scrollable content pane:
 1. **General**: Startup behavior, update checks, default directories.
 2. **Appearance**: Theme selection (macOS Light, Dark, Catppuccin, Noctalia), corner rounding, border thickness.
 3. **Reader**: Reading direction (LTR vs RTL), Continuous vertical scroll toggle, Webcomics mode, page turn animations.
 4. **Library**: Folder & series grouping, thumbnail size cycle.
-5. **AniList**: Account status, manual username linking, auto-sync toggle, offline queue status.
-6. **Shortcuts**: Keybindings table for reader, library, and vim navigation.
-7. **Advanced**: Cache size calculation, clear cache action, settings reset, and full data wipe with safety confirmation.
+5. **Shortcuts**: Keybindings table for reader, library, and vim navigation.
+6. **Advanced**: Cache size calculation, clear cache action, settings reset, and full data wipe with safety confirmation.
 
 ### 2.7 Atomic Visual Components (`ui::components`)
 
 - `mac_window_controls(on_close, on_min, on_zoom)`: Pixel-precise window controls with hover states.
 - `stat_badge(count, active, colors)`: Pill counter with inverted active color schemes.
 - `genre_tag(label, colors)`: Compact chip for manga categories.
-- `star_rating(score_pct, popularity, colors)`: Star iconography with numeric score and community popularity indicators.

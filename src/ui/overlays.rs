@@ -22,7 +22,6 @@ pub enum ConfirmAction {
     ClearThumbnailCache,
     ClearAllData,
     DeleteCollection(String),
-    DisconnectAniList,
 }
 
 pub struct ConfirmDialog {
@@ -40,21 +39,12 @@ pub struct PropertiesDialog {
 pub struct SeriesDialog {
     pub book_ids: Vec<String>,
     pub input: Entity<InputState>,
-    pub anilist_input: Entity<InputState>,
 }
 
 pub struct CollectionDialog {
     pub is_new: bool,
     pub collection_id: Option<String>,
     pub input: Entity<InputState>,
-}
-
-#[allow(dead_code)]
-pub struct AniListMatchDialog {
-    pub book_id: String,
-    pub input: Entity<InputState>,
-    pub results: Vec<yomu::anilist::AniListMedia>,
-    pub is_searching: bool,
 }
 
 #[derive(Default)]
@@ -71,7 +61,6 @@ pub enum Overlay {
     Properties(PropertiesDialog),
     Series(SeriesDialog),
     Collection(CollectionDialog),
-    AniListMatch(AniListMatchDialog),
     Settings,
 }
 
@@ -82,7 +71,6 @@ pub enum SettingsTab {
     Appearance,
     Reader,
     Library,
-    AniList,
     Shortcuts,
     Advanced,
 }
@@ -95,9 +83,8 @@ impl SettingsTab {
             1 => Self::Appearance,
             2 => Self::Reader,
             3 => Self::Library,
-            4 => Self::AniList,
-            5 => Self::Shortcuts,
-            6 => Self::Advanced,
+            4 => Self::Shortcuts,
+            5 => Self::Advanced,
             _ => Self::General,
         }
     }
@@ -109,9 +96,8 @@ impl SettingsTab {
             Self::Appearance => 1,
             Self::Reader => 2,
             Self::Library => 3,
-            Self::AniList => 4,
-            Self::Shortcuts => 5,
-            Self::Advanced => 6,
+            Self::Shortcuts => 4,
+            Self::Advanced => 5,
         }
     }
 
@@ -121,7 +107,6 @@ impl SettingsTab {
             Self::Appearance => "Appearance",
             Self::Reader => "Reader",
             Self::Library => "Library",
-            Self::AniList => "AniList",
             Self::Shortcuts => "Shortcuts",
             Self::Advanced => "Advanced",
         }

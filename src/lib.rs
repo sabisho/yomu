@@ -3,7 +3,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod anilist;
 pub mod archive;
 pub mod collections;
 pub mod imaging;

@@ -12,17 +12,16 @@ use gpui_kit::{
     AnyElement, App, ClickEvent, Div, FontWeight, InteractiveElement, Pixels, ScrollHandle,
     SharedString, Styled, Window, div, img, px,
 };
-use yomu::anilist::AniListMedia;
+use yomu::archive::SourceKind;
 use yomu::library::Book;
 
-use super::components::{genre_tag, star_rating, with_alpha};
+use super::components::{genre_tag, with_alpha};
 use super::theme::UiColors;
 
 pub struct MangaDetailsProps<'a> {
     pub scroll_handle: &'a ScrollHandle,
     pub book: &'a Book,
     pub cover_path: PathBuf,
-    pub anilist_meta: Option<&'a AniListMedia>,
     pub selected_tab: usize,
     pub synopsis_expanded: bool,
     pub colors: UiColors,
@@ -36,52 +35,48 @@ pub fn render_manga_details(
     on_continue_reading: impl Fn(&str, &mut Window, &mut App) + 'static,
     on_select_tab: impl Fn(usize, &mut Window, &mut App) + 'static,
     on_toggle_synopsis: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_anilist_action: impl Fn(&str, &mut Window, &mut App) + 'static,
-    on_sync_progress: impl Fn(&str, &mut Window, &mut App) + 'static,
     on_more_menu: impl Fn(&str, (f32, f32), &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let colors = props.colors;
     let book = props.book;
     let book_id = book.id.clone();
-    let book_id_clone2 = book_id.clone();
-    let book_id_clone3 = book_id.clone();
+    let book_id_clone = book_id.clone();
 
-    let display_title = props
-        .anilist_meta
-        .map(|m| m.title.preferred())
-        .unwrap_or(book.title.as_str());
+    let display_title = book.title.as_str();
+    let subtitle = book.series.as_deref();
 
-    let subtitle = props.anilist_meta.and_then(|m| m.title.subtitle());
+    let status_str = if book.is_finished() {
+        "Completed"
+    } else if book.opened {
+        "Reading"
+    } else {
+        "Unread"
+    };
 
-    let year_str = props
-        .anilist_meta
-        .and_then(|m| m.start_year)
-        .map(|y| y.to_string())
-        .unwrap_or_else(|| "2024".to_string());
+    let kind_str = match book.kind {
+        SourceKind::Archive => "Archive",
+        SourceKind::Folder => "Folder",
+    };
 
-    let status_str = props
-        .anilist_meta
-        .and_then(|m| m.status.as_deref())
-        .unwrap_or("Ongoing");
+    let metadata_line = format!("Local · {kind_str} · {status_str}");
 
-    let metadata_line = format!("Manga · {year_str} · {status_str}");
+    let genres = if let Some(series) = book.series.as_ref() {
+        vec![series.clone(), kind_str.to_string()]
+    } else {
+        vec!["Manga".to_string(), kind_str.to_string()]
+    };
 
-    let genres = props
-        .anilist_meta
-        .map(|m| m.genres.clone())
-        .unwrap_or_else(|| vec!["Manga".to_string(), "Comics".to_string()]);
+    let synopsis = if let Some(series) = book.series.as_ref() {
+        format!("Part of the {series} series. {} pages.", book.page_count)
+    } else {
+        format!("Imported local comic book. {} pages.", book.page_count)
+    };
 
-    let synopsis = props
-        .anilist_meta
-        .map(|m| m.clean_description())
-        .unwrap_or_else(|| "Imported local manga volume. Synopsis unavailable.".to_string());
-
-    let chapters_total = props
-        .anilist_meta
-        .and_then(|m| m.chapters)
-        .unwrap_or(book.page_count as i32);
-
-    let current_pos = book.current_page as i32 + 1;
+    let current_pos = if book.opened {
+        (book.current_page + 1).min(book.page_count)
+    } else {
+        0
+    };
     let progress_val = book.progress();
 
     gpui_kit::base::ScrollBounce::new(
@@ -96,64 +91,63 @@ pub fn render_manga_details(
             .flex()
             .flex_col()
             .gap_6()
-            // Top Back navigation bar
+            // Top Back Navigation
             .child(
                 div().flex().items_center().gap_2().child(
                     Button::new("details-back-btn")
                         .ghost()
-                        .label("← Back to Library")
-                        .rounded(ButtonRounded::Medium)
                         .small()
-                        .tooltip("Back to library")
+                        .label("← Back to Library")
                         .on_click(on_back),
                 ),
             )
-            // Main Upper Layout: Left Cover + Right Information
+            // Hero section: Left cover, right rich information
             .child(
                 div()
-                    .w_full()
                     .flex()
                     .flex_row()
-                    .flex_wrap()
                     .gap_8()
-                    // Left Column: Cover artwork
-                    .child({
-                        let inner_radius = if props.radius > px(0.) {
-                            (props.radius - px(1.0)).max(px(0.))
-                        } else {
-                            px(0.)
-                        };
+                    .child(
+                        // Left: Cover Preview Card
                         div()
-                            .w(px(240.))
-                            .h(px(340.))
+                            .w(px(200.))
+                            .h(px(290.))
                             .flex_none()
                             .rounded(props.radius)
                             .overflow_hidden()
-                            .border_1()
-                            .border_color(colors.border)
                             .shadow_lg()
-                            .bg(with_alpha(colors.surface, 0.7))
-                            .child(
-                                img(props.cover_path)
+                            .border_1()
+                            .border_color(with_alpha(colors.border, 0.6))
+                            .bg(with_alpha(colors.surface, 0.4))
+                            .child(if props.cover_path.exists() {
+                                img(props.cover_path.clone()).size_full().into_any_element()
+                            } else {
+                                div()
                                     .size_full()
-                                    .rounded(inner_radius)
-                                    .object_fit(gpui_kit::ObjectFit::Cover),
-                            )
-                    })
-                    // Right Column: Details & Actions
+                                    .bg(with_alpha(colors.foreground, 0.04))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Icon::new(IconName::BookOpen)
+                                            .size(px(48.))
+                                            .text_color(colors.muted),
+                                    )
+                                    .into_any_element()
+                            }),
+                    )
                     .child(
+                        // Right: Title, Metadata, Synopsis, Action Buttons
                         div()
                             .flex_1()
-                            .min_w(px(260.))
                             .flex()
                             .flex_col()
                             .justify_between()
-                            .gap_3()
                             .child(
                                 div()
                                     .flex()
                                     .flex_col()
-                                    .gap_1p5()
+                                    .gap_2()
                                     .child(
                                         div()
                                             .text_2xl()
@@ -174,16 +168,6 @@ pub fn render_manga_details(
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(colors.muted)
                                             .child(metadata_line),
-                                    )
-                                    .child(
-                                        div().pt_1().child(star_rating(
-                                            props
-                                                .anilist_meta
-                                                .and_then(|m| m.average_score)
-                                                .unwrap_or(85),
-                                            props.anilist_meta.and_then(|m| m.popularity),
-                                            colors,
-                                        )),
                                     )
                                     .child(
                                         div().flex().flex_wrap().gap_1p5().pt_1().children(
@@ -244,25 +228,6 @@ pub fn render_manga_details(
                                             }),
                                     )
                                     .child(
-                                        Button::new("details-anilist-btn")
-                                            .secondary()
-                                            .outline()
-                                            .label(if props.anilist_meta.is_some() {
-                                                "✓ In AniList"
-                                            } else {
-                                                "+ Link AniList"
-                                            })
-                                            .rounded(ButtonRounded::Medium)
-                                            .tooltip(if props.anilist_meta.is_some() {
-                                                "Linked with AniList"
-                                            } else {
-                                                "Link with AniList"
-                                            })
-                                            .on_click(move |_, window, cx| {
-                                                on_anilist_action(&book_id_clone2, window, cx)
-                                            }),
-                                    )
-                                    .child(
                                         div()
                                             .id("details-more-menu-btn")
                                             .size(px(32.))
@@ -280,7 +245,7 @@ pub fn render_manga_details(
                                                     event.position().x.into(),
                                                     event.position().y.into(),
                                                 );
-                                                on_more_menu(&book_id_clone3, pos, window, cx);
+                                                on_more_menu(&book_id_clone, pos, window, cx);
                                             })
                                             .child(
                                                 Icon::new(IconName::Ellipsis)
@@ -298,11 +263,9 @@ pub fn render_manga_details(
                     .selected_index(props.selected_tab)
                     .on_click(move |idx, window, cx| on_select_tab(*idx, window, cx))
                     .child(Tab::new().label("Overview"))
-                    .child(Tab::new().label("Chapters"))
-                    .child(Tab::new().label("Characters"))
-                    .child(Tab::new().label("Related")),
+                    .child(Tab::new().label("Info")),
             )
-            // Tab Content: Overview Metadata Grid (4 cols x 2 rows)
+            // Tab Content: Overview Metadata Grid (4 cols x 1 row)
             .child(
                 div()
                     .w_full()
@@ -318,39 +281,20 @@ pub fn render_manga_details(
                             .grid_cols(4u16)
                             .gap_4()
                             .child(metadata_cell(
-                                "Chapters",
-                                format!("{chapters_total}+"),
+                                "Pages",
+                                format!("{}", book.page_count),
                                 colors,
                             ))
                             .child(metadata_cell("Status", status_str, colors))
-                            .child(metadata_cell("Published", year_str, colors))
                             .child(metadata_cell(
-                                "Authors",
-                                props
-                                    .anilist_meta
-                                    .and_then(|m| m.author.as_deref())
-                                    .unwrap_or("Kanehito Yamada"),
+                                "Series",
+                                book.series.as_deref().unwrap_or("None"),
                                 colors,
                             ))
-                            .child(metadata_cell(
-                                "Artists",
-                                props
-                                    .anilist_meta
-                                    .and_then(|m| m.artist.as_deref())
-                                    .unwrap_or("Tsukasa Abe"),
-                                colors,
-                            ))
-                            .child(metadata_cell(
-                                "Serialization",
-                                props
-                                    .anilist_meta
-                                    .and_then(|m| m.serialization.as_deref())
-                                    .unwrap_or("Weekly Shōnen"),
-                                colors,
-                            )),
+                            .child(metadata_cell("Format", kind_str, colors)),
                     ),
             )
-            // Bottom Tracking Card (My Progress, AniList Status, Chapters Read + Sync)
+            // Bottom Progress Card (Local Progress & Pages Read)
             .child(
                 div()
                     .w_full()
@@ -395,78 +339,30 @@ pub fn render_manga_details(
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted)
-                                    .child(format!("{current_pos} / {chapters_total}")),
+                                    .child(format!("{current_pos} / {}", book.page_count)),
                             ),
                     )
-                    // Center: AniList Status
+                    // Right: Pages Read
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(colors.foreground)
-                                    .child("AniList Status"),
-                            )
-                            .child(
-                                div()
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded(props.radius)
-                                    .bg(with_alpha(colors.foreground, 0.06))
-                                    .border_1()
-                                    .border_color(colors.border)
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(colors.foreground)
-                                    .child(
-                                        props
-                                            .anilist_meta
-                                            .and_then(|m| m.user_status.as_ref())
-                                            .map(|s| s.label())
-                                            .unwrap_or("Reading ⌵"),
-                                    ),
-                            ),
-                    )
-                    // Right: Chapters Read + Sync Button
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(colors.foreground)
-                                            .child("Chapters Read"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_base()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(colors.foreground)
-                                            .child(current_pos.to_string()),
-                                    ),
-                            )
-                            .child({
-                                let sync_book_id = props.book.id.clone();
-                                Button::new("details-sync-btn")
-                                    .secondary()
-                                    .label("🔄 Sync")
-                                    .rounded(ButtonRounded::Medium)
-                                    .small()
-                                    .on_click(move |_, window, cx| {
-                                        on_sync_progress(&sync_book_id, window, cx)
-                                    })
-                            }),
+                        div().flex().items_center().gap_3().child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(colors.foreground)
+                                        .child("Pages Read"),
+                                )
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(colors.foreground)
+                                        .child(current_pos.to_string()),
+                                ),
+                        ),
                     ),
             ),
     )

@@ -164,7 +164,6 @@ pub enum NavDestination {
     Section(ui::sidebar::SidebarSection),
     Group { key: String, name: String },
     Details(String),
-    AniListSearch,
 }
 
 struct Yomu {
@@ -220,8 +219,6 @@ struct Yomu {
     details_scroll: ScrollHandle,
     settings_scroll: ScrollHandle,
     sidebar_scroll: ScrollHandle,
-    anilist_search_scroll: ScrollHandle,
-    anilist_category_scroll: ScrollHandle,
     #[allow(dead_code)]
     library_pinch_accum: f32,
     cursor_pos: Option<(f32, f32)>,
@@ -235,15 +232,6 @@ struct Yomu {
     selected_book_id: Option<String>,
     details_tab_index: usize,
     details_synopsis_expanded: bool,
-    anilist_data: yomu::anilist::AniListData,
-    anilist_client: yomu::anilist::AniListClient,
-    anilist_search_results: Vec<yomu::anilist::AniListMedia>,
-    #[allow(dead_code)]
-    anilist_search_filter: String,
-    anilist_search_input: Option<Entity<InputState>>,
-    anilist_is_searching: bool,
-    anilist_search_error: Option<String>,
-    anilist_username_input: Option<Entity<InputState>>,
     nav_history: Vec<NavDestination>,
     nav_history_idx: usize,
     view_mode_grid: bool,
@@ -307,10 +295,13 @@ impl Yomu {
         let mut colors = UiColors::from_app(cx);
         colors.widget_opacity = library.settings().opacity;
         let view_mode_grid = library.settings().view_mode_grid;
-        let anilist_data =
-            yomu::anilist::AniListData::load_or_default(&dirs.root().join("anilist.json"));
-        let anilist_client = yomu::anilist::AniListClient::new();
-        let anilist_username_input = None;
+
+        // Clean up obsolete tracking persistence file if present
+        let obsolete_tracking_file = dirs.root().join("anilist.json");
+        if obsolete_tracking_file.exists() {
+            let _ = std::fs::remove_file(obsolete_tracking_file);
+        }
+
         let state = Self {
             focus_handle: cx.focus_handle(),
             dirs,
@@ -353,8 +344,6 @@ impl Yomu {
             details_scroll: ScrollHandle::new(),
             settings_scroll: ScrollHandle::new(),
             sidebar_scroll: ScrollHandle::new(),
-            anilist_search_scroll: ScrollHandle::new(),
-            anilist_category_scroll: ScrollHandle::new(),
             library_pinch_accum: 0.0,
             cursor_pos: None,
             save_seq: 0,
@@ -366,14 +355,6 @@ impl Yomu {
             selected_book_id: None,
             details_tab_index: 0,
             details_synopsis_expanded: false,
-            anilist_data,
-            anilist_client,
-            anilist_search_results: Vec::new(),
-            anilist_search_filter: "All".to_string(),
-            anilist_search_input: None,
-            anilist_is_searching: false,
-            anilist_search_error: None,
-            anilist_username_input,
             nav_history: vec![NavDestination::Section(
                 ui::sidebar::SidebarSection::AllManga,
             )],
@@ -727,26 +708,12 @@ impl Yomu {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
             });
-        let existing_anilist = books
-            .iter()
-            .find_map(|book| {
-                self.anilist_data
-                    .matches
-                    .get(&book.id)
-                    .map(|id| id.to_string())
-            })
-            .unwrap_or_default();
         let value = existing.or(common_parent).unwrap_or_default();
         self.dismiss();
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(value)
                 .placeholder("Type a series name…")
-        });
-        let anilist_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(existing_anilist)
-                .placeholder("AniList ID or URL (e.g. 101517)…")
         });
         let focus_handle = input.read(cx).focus_handle(cx);
         window.focus(&focus_handle, cx);
@@ -756,17 +723,7 @@ impl Yomu {
             }
         })
         .detach();
-        cx.subscribe(&anilist_input, |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                this.save_series_dialog(cx);
-            }
-        })
-        .detach();
-        self.overlay = Some(Overlay::Series(SeriesDialog {
-            book_ids,
-            input,
-            anilist_input,
-        }));
+        self.overlay = Some(Overlay::Series(SeriesDialog { book_ids, input }));
         cx.notify();
     }
 
@@ -778,8 +735,6 @@ impl Yomu {
         let count = dialog.book_ids.len();
         let value = dialog.input.read(cx).value().to_string();
         let series = (!value.trim().is_empty()).then_some(value);
-        let anilist_str = dialog.anilist_input.read(cx).value().to_string();
-        let parsed_id = yomu::anilist::parse_anilist_id(&anilist_str);
 
         self.library.set_series(&dialog.book_ids, series.clone());
         self.prune_open_group();
@@ -791,44 +746,6 @@ impl Yomu {
             (None, _) => format!("Removed {count} books from their series"),
         };
         self.show_toast(message, cx);
-
-        if let Some(id) = parsed_id {
-            let client = self.anilist_client.clone();
-            let book_ids = dialog.book_ids.clone();
-            let path = self.dirs.root().join("anilist.json");
-            let had_series = series.is_some();
-            cx.spawn(async move |this, cx| {
-                let res = cx
-                    .background_executor()
-                    .spawn(async move { client.fetch_media_by_id(id) })
-                    .await;
-                let _ = this.update(cx, |this, cx| match res {
-                    Ok(media) => {
-                        let pref_title = media.title.preferred().to_string();
-                        for bid in &book_ids {
-                            this.anilist_data.matches.insert(bid.clone(), media.id);
-                        }
-                        this.anilist_data.cache.insert(media.id, media);
-                        let _ = this.anilist_data.save(&path);
-
-                        if !had_series {
-                            this.library.set_series(&book_ids, Some(pref_title.clone()));
-                            this.save_library();
-                        }
-                        for bid in &book_ids {
-                            this.sync_book_progress_to_anilist(bid, cx);
-                        }
-                        this.show_toast(format!("Linked series to AniList: {pref_title}"), cx);
-                        cx.notify();
-                    }
-                    Err(err) => {
-                        this.show_toast(format!("AniList lookup note: {err}"), cx);
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
         cx.notify();
     }
 
@@ -882,7 +799,6 @@ impl Yomu {
                         if let Some(book) = self.library.get_mut(bid) {
                             book.mark_read();
                         }
-                        self.sync_book_progress_to_anilist(bid, cx);
                     }
                     self.save_library();
                     for bid in &ids {
@@ -904,7 +820,6 @@ impl Yomu {
                         if let Some(book) = self.library.get_mut(bid) {
                             book.reset_progress();
                         }
-                        self.sync_book_progress_to_anilist(bid, cx);
                     }
                     self.save_library();
                     for bid in &ids {
@@ -975,7 +890,6 @@ impl Yomu {
                     book.mark_read();
                 }
                 self.save_library();
-                self.sync_book_progress_to_anilist(id, cx);
                 self.show_toast(format!("Marked “{title}” as read"), cx);
             }
             BookAction::MarkUnread | BookAction::ResetProgress => {
@@ -983,7 +897,6 @@ impl Yomu {
                     book.reset_progress();
                 }
                 self.save_library();
-                self.sync_book_progress_to_anilist(id, cx);
                 let message = if action == BookAction::ResetProgress {
                     format!("Progress reset for “{title}”")
                 } else {
@@ -1028,13 +941,6 @@ impl Yomu {
                 self.save_library();
                 self.show_toast("Collection deleted", cx);
             }
-            ConfirmAction::DisconnectAniList => {
-                self.anilist_data.disconnect();
-                let _ = self
-                    .anilist_data
-                    .save(&self.dirs.root().join("anilist.json"));
-                self.show_toast("AniList disconnected", cx);
-            }
         }
     }
 
@@ -1051,195 +957,8 @@ impl Yomu {
         cx.notify();
     }
 
-    fn open_settings_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.anilist_username_input.is_none() {
-            let default_val = self
-                .anilist_data
-                .user
-                .as_ref()
-                .map(|u| u.name.clone())
-                .unwrap_or_default();
-            self.anilist_username_input = Some(cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(default_val)
-                    .placeholder("Enter AniList username…")
-            }));
-        }
+    fn open_settings_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.open_settings(cx);
-    }
-
-    fn open_anilist_settings(&mut self, cx: &mut Context<Self>) {
-        self.settings_tab = SettingsTab::AniList;
-        self.overlay = Some(Overlay::Settings);
-        cx.notify();
-    }
-
-    fn connect_anilist(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let username = if let Some(input) = self.anilist_username_input.as_ref() {
-            input.read(cx).value().trim().to_string()
-        } else {
-            String::new()
-        };
-        if username.is_empty() {
-            return;
-        }
-
-        self.anilist_data.user = Some(yomu::anilist::AniListUser {
-            id: 0,
-            name: username.clone(),
-            avatar_url: None,
-            token: None,
-        });
-        let _ = self
-            .anilist_data
-            .save(&self.dirs.root().join("anilist.json"));
-        self.show_toast(format!("Connecting to AniList as {}...", username), cx);
-        cx.notify();
-
-        let client = self.anilist_client.clone();
-        let path = self.dirs.root().join("anilist.json");
-        let uname = username.clone();
-        cx.spawn(async move |this, cx| {
-            let u = uname.clone();
-            let res = cx
-                .background_executor()
-                .spawn(async move { client.fetch_user_lists(&u) })
-                .await;
-            let _ = this.update(cx, |this, cx| match res {
-                Ok(media_list) => {
-                    let count = media_list.len();
-                    for media in media_list {
-                        this.anilist_data.cache.insert(media.id, media);
-                    }
-                    this.auto_match_all_manga();
-                    let _ = this.anilist_data.save(&path);
-                    this.show_toast(format!("Connected! Synced {} AniList manga", count), cx);
-                    cx.notify();
-                }
-                Err(err) => {
-                    this.show_toast(format!("Connected as {} (sync note: {})", uname, err), cx);
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
-    fn disconnect_anilist(&mut self, cx: &mut Context<Self>) {
-        self.anilist_data.disconnect();
-        let _ = self
-            .anilist_data
-            .save(&self.dirs.root().join("anilist.json"));
-        self.anilist_username_input = None;
-        self.show_toast("Disconnected from AniList", cx);
-        cx.notify();
-    }
-
-    fn sync_anilist(&mut self, cx: &mut Context<Self>) {
-        let username = self.anilist_data.user_name().to_string();
-        if !self.anilist_data.is_connected() {
-            return;
-        }
-        self.show_toast("Syncing with AniList...", cx);
-        cx.notify();
-
-        let client = self.anilist_client.clone();
-        let path = self.dirs.root().join("anilist.json");
-        cx.spawn(async move |this, cx| {
-            let res = cx
-                .background_executor()
-                .spawn(async move { client.fetch_user_lists(&username) })
-                .await;
-            let _ = this.update(cx, |this, cx| match res {
-                Ok(media_list) => {
-                    let count = media_list.len();
-                    for media in media_list {
-                        this.anilist_data.cache.insert(media.id, media);
-                    }
-                    this.auto_match_all_manga();
-                    let _ = this.anilist_data.save(&path);
-                    this.show_toast(format!("Sync complete: {} manga updated", count), cx);
-                    cx.notify();
-                }
-                Err(err) => {
-                    this.show_toast(format!("Sync failed: {}", err), cx);
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
-    fn auto_match_all_manga(&mut self) {
-        for book in self.library.books() {
-            if self.anilist_data.matches.contains_key(&book.id) {
-                continue;
-            }
-            let best = self
-                .anilist_data
-                .cache
-                .values()
-                .filter_map(|m| {
-                    let score = yomu::anilist::title_match_score(&book.title, m);
-                    if score >= 0.75 {
-                        Some((m.id, score))
-                    } else {
-                        None
-                    }
-                })
-                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-            if let Some((media_id, _)) = best {
-                self.anilist_data.matches.insert(book.id.clone(), media_id);
-            }
-        }
-    }
-
-    fn sync_book_progress_to_anilist(&mut self, book_id: &str, cx: &mut Context<Self>) {
-        let Some(&media_id) = self.anilist_data.matches.get(book_id) else {
-            return;
-        };
-        let Some(book) = self.library.get(book_id) else {
-            return;
-        };
-        let current_page = book.current_page + 1;
-        let is_completed = book.is_finished();
-        let status = if is_completed {
-            yomu::anilist::MediaListStatus::Completed
-        } else {
-            yomu::anilist::MediaListStatus::Current
-        };
-        let progress = current_page as i32;
-        self.anilist_data
-            .queue_progress_update(media_id, progress, Some(status));
-        let _ = self
-            .anilist_data
-            .save(&self.dirs.root().join("anilist.json"));
-
-        if let Some(user) = &self.anilist_data.user
-            && let Some(token) = &user.token
-            && !token.is_empty()
-        {
-            let client = self.anilist_client.clone();
-            let token = token.clone();
-            let queue = self.anilist_data.sync_queue.clone();
-            let path = self.dirs.root().join("anilist.json");
-            cx.spawn(async move |this, cx| {
-                let res = cx
-                    .background_executor()
-                    .spawn(async move { client.sync_queued_updates(&token, &queue) })
-                    .await;
-                if let Ok(synced) = res
-                    && synced > 0
-                {
-                    let _ = this.update(cx, |this, _| {
-                        this.anilist_data.sync_queue.clear();
-                        let _ = this.anilist_data.save(&path);
-                    });
-                }
-            })
-            .detach();
-        }
     }
 
     fn set_thumbnail_size(&mut self, size: ThumbnailSize, cx: &mut Context<Self>) {
@@ -1673,11 +1392,6 @@ impl Yomu {
             }
             Some(Overlay::Series(_)) => {}
             Some(Overlay::Collection(_)) => {
-                if matches!(token, "escape") {
-                    self.close_overlay(cx);
-                }
-            }
-            Some(Overlay::AniListMatch(_)) => {
                 if matches!(token, "escape") {
                     self.close_overlay(cx);
                 }
@@ -2193,7 +1907,6 @@ impl Yomu {
     }
 
     fn close_book(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let closed_book_id = self.reader.as_ref().map(|r| r.book_id.clone());
         if let Some(reader) = self.reader.take() {
             for token in reader.cancellations.values() {
                 token.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2206,9 +1919,6 @@ impl Yomu {
         window.set_window_title("yomu");
         window.focus(&self.focus_handle, cx);
         self.save_library();
-        if let Some(id) = closed_book_id {
-            self.sync_book_progress_to_anilist(&id, cx);
-        }
         cx.notify();
     }
 
@@ -3446,7 +3156,6 @@ impl Yomu {
             Overlay::Properties(dialog) => self.render_properties(dialog, cx),
             Overlay::Series(dialog) => self.render_series_dialog(dialog, cx),
             Overlay::Collection(dialog) => self.render_collection_dialog(dialog, cx),
-            Overlay::AniListMatch(dialog) => self.render_anilist_match_dialog(dialog, cx),
             Overlay::Settings => self.render_settings(window, cx),
         })
     }
@@ -3915,14 +3624,17 @@ impl Yomu {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(self.colors.foreground)
                             .child(if dialog.book_ids.len() == 1 {
-                                "Set Series & AniList Info"
+                                "Set Series"
                             } else {
                                 "Set Series for Selected Books"
                             }),
                     )
-                    .child(div().text_xs().text_color(self.colors.muted).child(
-                        "Assign a series name to group these volumes, or link to AniList by ID/URL to sync cover art, metadata, and reading progress.",
-                    ))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(self.colors.muted)
+                            .child("Assign a series name to group these volumes."),
+                    )
                     .child(
                         div()
                             .flex()
@@ -3954,46 +3666,15 @@ impl Yomu {
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(self.colors.foreground)
-                                    .child("AniList ID or Manga URL (optional):"),
-                            )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .rounded(px(self.radius_px()))
-                                    .border_1()
-                                    .border_color(with_alpha(self.colors.border, 0.8))
-                                    .child(
-                                        Input::new(&dialog.anilist_input)
-                                            .id("series-anilist-input")
-                                            .cleanable(true)
-                                            .bordered(false)
-                                            .focus_bordered(false)
-                                            .w_full(),
-                                    ),
-                            )
+                            .flex_row()
+                            .justify_between()
+                            .items_center()
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(self.colors.muted)
-                                    .child("e.g. 101517 or https://anilist.co/manga/101517"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .justify_between()
-                            .items_center()
-                            .child(div().text_xs().text_color(self.colors.muted).child(
-                                "Enter to save · Esc to cancel",
-                            ))
+                                    .child("Enter to save · Esc to cancel"),
+                            )
                             .child(
                                 div()
                                     .flex()
@@ -4114,98 +3795,11 @@ impl Yomu {
             .into_any_element()
     }
 
-    fn render_anilist_match_dialog(
-        &self,
-        dialog: &ui::overlays::AniListMatchDialog,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let border_px = self.border_px();
-        let rounding_xl = self.radius_xl_px();
-        let yomu = cx.entity();
-        let input_state = dialog.input.clone();
-
-        self.scrim(true, cx)
-            .child(
-                div()
-                    .w(px(420.))
-                    .rounded(px(rounding_xl))
-                    .when(border_px > 0.0, |this| {
-                        this.border(px(border_px)).border_color(self.colors.border)
-                    })
-                    .bg(self.colors.background)
-                    .p_5()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .shadow_xl()
-                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation()
-                    })
-                    .child(
-                        div()
-                            .text_base()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(self.colors.foreground)
-                            .child("Match with AniList"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(self.colors.muted)
-                            .child("Enter the manga title or Romanized name to search AniList:"),
-                    )
-                    .child(Input::new(&dialog.input))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap_2()
-                            .child(
-                                Button::new("anilist-match-cancel")
-                                    .label("Cancel")
-                                    .rounded(ButtonRounded::Medium)
-                                    .outline()
-                                    .on_click({
-                                        let yomu = yomu.clone();
-                                        move |_, _, cx| {
-                                            yomu.update(cx, |this, cx| this.close_overlay(cx))
-                                        }
-                                    }),
-                            )
-                            .child(
-                                Button::new("anilist-match-search")
-                                    .primary()
-                                    .label("Search")
-                                    .rounded(ButtonRounded::Medium)
-                                    .bg(self.colors.accent)
-                                    .text_color(self.colors.accent_foreground)
-                                    .on_click({
-                                        let yomu = yomu.clone();
-                                        move |_, _, cx| {
-                                            let query = input_state.read(cx).value().to_string();
-                                            yomu.update(cx, |this, cx| {
-                                                this.close_overlay(cx);
-                                                this.start_anilist_search(&query, cx);
-                                            });
-                                        }
-                                    }),
-                            ),
-                    ),
-            )
-            .into_any_element()
-    }
-
     fn render_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let border_px = self.border_px();
         let cache_bytes = self.dirs.cache_size_bytes();
-        let anilist_username = self.anilist_data.user_name();
-        let anilist_connected = self.anilist_data.is_connected();
-        let auto_sync = false;
         let yomu = cx.entity();
 
-        let anilist_username_input = self.anilist_username_input.as_ref();
-        let anilist_matched_count = self.anilist_data.matches.len();
-        let anilist_sync_count = self.anilist_data.sync_queue.len();
         let is_client_decorated = cfg!(target_os = "linux")
             && matches!(window.window_decorations(), Decorations::Client { .. });
 
@@ -4214,12 +3808,6 @@ impl Yomu {
             current_tab: self.settings_tab,
             settings: self.library.settings(),
             available_schemes: ui::theme::available_color_schemes(&self.custom_themes),
-            anilist_username,
-            anilist_connected,
-            auto_sync_anilist: auto_sync,
-            anilist_username_input,
-            anilist_matched_count,
-            anilist_sync_count,
             cache_size_str: format_size(cache_bytes),
             is_client_decorated,
             system_reduced_motion: self.reduce_motion,
@@ -4361,30 +3949,6 @@ impl Yomu {
                     });
                 }
             },
-            {
-                let yomu = yomu.clone();
-                move |_, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.disconnect_anilist(cx);
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.sync_anilist(cx);
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |window, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.connect_anilist(window, cx);
-                    });
-                }
-            },
         );
 
         self.scrim(true, cx)
@@ -4419,20 +3983,6 @@ impl Yomu {
         let auto_collapse = window.viewport_size().width < px(720.);
         let is_collapsed = self.sidebar_collapsed || auto_collapse;
 
-        if self.anilist_username_input.is_none() {
-            let default_val = self
-                .anilist_data
-                .user
-                .as_ref()
-                .map(|u| u.name.clone())
-                .unwrap_or_default();
-            self.anilist_username_input = Some(cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(default_val)
-                    .placeholder("Enter AniList username…")
-            }));
-        }
-
         // 1. Sidebar Props
         let continue_reading_count = self
             .library
@@ -4448,21 +3998,6 @@ impl Yomu {
             .iter()
             .filter(|b| b.path.exists())
             .count();
-        let anilist_connected = self.anilist_data.is_connected();
-        let user_name = self.anilist_data.user_name();
-        let anilist_counts = [
-            self.anilist_data.count_by_status(None),
-            self.anilist_data
-                .count_by_status(Some(yomu::anilist::MediaListStatus::Planning)),
-            self.anilist_data
-                .count_by_status(Some(yomu::anilist::MediaListStatus::Current)),
-            self.anilist_data
-                .count_by_status(Some(yomu::anilist::MediaListStatus::Completed)),
-            self.anilist_data
-                .count_by_status(Some(yomu::anilist::MediaListStatus::Paused)),
-            self.anilist_data
-                .count_by_status(Some(yomu::anilist::MediaListStatus::Dropped)),
-        ];
 
         let sidebar_props = ui::sidebar::SidebarProps {
             scroll_handle: &self.sidebar_scroll,
@@ -4471,9 +4006,6 @@ impl Yomu {
             all_manga_count,
             collections_count,
             downloads_count,
-            anilist_counts,
-            user_name: user_name.into(),
-            anilist_connected,
             colors,
             radius,
         };
@@ -4498,9 +4030,6 @@ impl Yomu {
                             ui::sidebar::SidebarSection::Downloads => {
                                 ui::sidebar::MainView::Downloads
                             }
-                            ui::sidebar::SidebarSection::AniList(cat) => {
-                                ui::sidebar::MainView::AniListCategory(cat)
-                            }
                         };
                         this.navigate_to(view, cx);
                     });
@@ -4514,14 +4043,6 @@ impl Yomu {
                     });
                 }
             },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.open_anilist_settings(cx);
-                    });
-                }
-            },
         );
 
         // 2. Toolbar Props
@@ -4532,7 +4053,6 @@ impl Yomu {
             ui::sidebar::MainView::AllManga
                 | ui::sidebar::MainView::History
                 | ui::sidebar::MainView::Downloads
-                | ui::sidebar::MainView::AniListCategory(_)
         );
         let is_browsing =
             is_library_view || matches!(self.active_view, ui::sidebar::MainView::ContinueReading);
@@ -4623,14 +4143,10 @@ impl Yomu {
             ui::sidebar::MainView::Collections => self.render_collections_screen(window, cx),
             ui::sidebar::MainView::History => self.render_history_view(window, cx),
             ui::sidebar::MainView::Downloads => self.render_downloads_view(window, cx),
-            ui::sidebar::MainView::AniListCategory(cat) => {
-                self.render_anilist_category_view(*cat, window, cx)
-            }
             ui::sidebar::MainView::Details(book_id) => {
                 let id = book_id.clone();
                 self.render_details_screen(&id, window, cx)
             }
-            ui::sidebar::MainView::AniListSearch => self.render_anilist_search_screen(window, cx),
             ui::sidebar::MainView::Settings => self.render_settings(window, cx),
         };
 
@@ -6046,261 +5562,6 @@ impl Yomu {
         self.render_all_manga_view(window, cx)
     }
 
-    fn render_anilist_category_view(
-        &self,
-        cat: ui::sidebar::AniListCategory,
-        window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let colors = self.colors;
-        let radius = px(self.radius_px());
-        let yomu = _cx.entity();
-
-        let status = match cat {
-            ui::sidebar::AniListCategory::MyList => yomu::anilist::MediaListStatus::Current,
-            ui::sidebar::AniListCategory::Planning => yomu::anilist::MediaListStatus::Planning,
-            ui::sidebar::AniListCategory::Reading => yomu::anilist::MediaListStatus::Current,
-            ui::sidebar::AniListCategory::Completed => yomu::anilist::MediaListStatus::Completed,
-            ui::sidebar::AniListCategory::Paused => yomu::anilist::MediaListStatus::Paused,
-            ui::sidebar::AniListCategory::Dropped => yomu::anilist::MediaListStatus::Dropped,
-        };
-
-        let books: Vec<&Book> = self
-            .library
-            .books()
-            .iter()
-            .filter(|b| {
-                if let Some(media) = self.anilist_data.get_media_for_book(&b.id)
-                    && let Some(user_status) = &media.user_status
-                {
-                    return *user_status == status;
-                }
-                false
-            })
-            .collect();
-
-        if books.is_empty() {
-            return div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .text_color(colors.muted)
-                .child(Icon::new(IconName::Bookmark).size(px(48.)))
-                .child(div().text_base().child("No manga tracked in this category"))
-                .into_any_element();
-        }
-
-        let thumb_size = self.library.settings().thumbnail_size;
-        let sidebar_collapsed = self.is_sidebar_collapsed(window);
-        let grid = ui::components::compute_responsive_grid(
-            f32::from(window.viewport_size().width),
-            !sidebar_collapsed,
-            thumb_size,
-        );
-        let card_w = grid.card_w;
-        let cover_h = grid.cover_h;
-
-        let border_px = self.border_px();
-        let is_grid = self.view_mode_grid;
-        let cards: Vec<AnyElement> = books
-            .iter()
-            .map(|book| {
-                let book_id = book.id.clone();
-                let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
-                let display_title = book.title.clone();
-
-                if is_grid {
-                    div()
-                        .id(ElementId::from(SharedString::from(format!(
-                            "cat-item-{}",
-                            book.id
-                        ))))
-                        .w(px(card_w))
-                        .flex_none()
-                        .flex()
-                        .flex_col()
-                        .rounded(radius)
-                        .bg(with_alpha(colors.surface, 0.6))
-                        .when(border_px > 0.0, |s| {
-                            s.border(px(border_px)).border_color(colors.border)
-                        })
-                        .overflow_hidden()
-                        .cursor_pointer()
-                        .hover(|s| s.border_color(colors.accent).shadow_md())
-                        .on_click({
-                            let yomu = yomu.clone();
-                            let book_id = book_id.clone();
-                            move |_, _, cx| {
-                                yomu.update(cx, |this, cx| {
-                                    this.navigate_to(
-                                        ui::sidebar::MainView::Details(book_id.clone()),
-                                        cx,
-                                    );
-                                });
-                            }
-                        })
-                        .child(
-                            div()
-                                .id(ElementId::from(SharedString::from(format!(
-                                    "cat-cover-{}",
-                                    book.id
-                                ))))
-                                .relative()
-                                .w_full()
-                                .h(px(cover_h))
-                                .rounded_t(radius)
-                                .bg(with_alpha(colors.foreground, 0.04))
-                                .overflow_hidden()
-                                .child(
-                                    img(cover_path)
-                                        .size_full()
-                                        .rounded_t(radius)
-                                        .object_fit(gpui_kit::ObjectFit::Cover),
-                                ),
-                        )
-                        .child(
-                            div().p_2p5().flex().flex_col().gap_1().child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(colors.foreground)
-                                    .truncate()
-                                    .child(display_title),
-                            ),
-                        )
-                        .into_any_element()
-                } else {
-                    div()
-                        .id(ElementId::from(SharedString::from(format!(
-                            "cat-item-{}",
-                            book.id
-                        ))))
-                        .w_full()
-                        .h(px(64.))
-                        .px_3p5()
-                        .rounded(radius)
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .bg(with_alpha(colors.surface, 0.5))
-                        .when(border_px > 0.0, |s| {
-                            s.border(px(border_px)).border_color(colors.border)
-                        })
-                        .cursor_pointer()
-                        .hover(|s| {
-                            s.bg(with_alpha(colors.surface, 0.8))
-                                .border_color(colors.accent)
-                        })
-                        .on_click({
-                            let yomu = yomu.clone();
-                            let book_id = book_id.clone();
-                            move |_, _, cx| {
-                                yomu.update(cx, |this, cx| {
-                                    this.navigate_to(
-                                        ui::sidebar::MainView::Details(book_id.clone()),
-                                        cx,
-                                    );
-                                });
-                            }
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .min_w_0()
-                                .flex_1()
-                                .child(
-                                    div()
-                                        .id(ElementId::from(SharedString::from(format!(
-                                            "cat-cover-{}",
-                                            book.id
-                                        ))))
-                                        .w(px(36.))
-                                        .h(px(50.))
-                                        .flex_none()
-                                        .rounded(px(self.radius_px().min(4.)))
-                                        .bg(with_alpha(colors.foreground, 0.04))
-                                        .overflow_hidden()
-                                        .child(
-                                            img(cover_path)
-                                                .size_full()
-                                                .rounded(px(self.radius_px().min(4.)))
-                                                .object_fit(gpui_kit::ObjectFit::Cover),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .min_w_0()
-                                        .flex_1()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(colors.foreground)
-                                                .truncate()
-                                                .child(display_title),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(colors.muted)
-                                                .child(format!("{} pages", book.page_count)),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            Icon::new(IconName::ChevronRight)
-                                .size(px(16.))
-                                .text_color(colors.muted),
-                        )
-                        .into_any_element()
-                }
-            })
-            .collect();
-
-        gpui_kit::base::ScrollBounce::new(
-            "anilist-category-bounce",
-            &self.anilist_category_scroll,
-            div()
-                .id("anilist-category-container")
-                .track_scroll(&self.anilist_category_scroll)
-                .size_full()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .child(if is_grid {
-                    div()
-                        .px(px(grid.pad_x))
-                        .py_6()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap(px(grid.gap))
-                        .children(cards)
-                } else {
-                    div()
-                        .w_full()
-                        .max_w(px(1040.))
-                        .mx_auto()
-                        .px(px(grid.pad_x.max(16.0)))
-                        .py_4()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .children(cards)
-                }),
-        )
-        .into_any_element()
-    }
-
     fn render_details_screen(
         &self,
         book_id: &str,
@@ -6321,13 +5582,11 @@ impl Yomu {
         let radius = px(self.radius_px());
         let yomu = cx.entity();
         let cover_path = self.dirs.cover(&book.id);
-        let anilist_meta = self.anilist_data.get_media_for_book(&book.id);
 
         let props = ui::details::MangaDetailsProps {
             scroll_handle: &self.details_scroll,
             book,
             cover_path,
-            anilist_meta,
             selected_tab: self.details_tab_index,
             synopsis_expanded: self.details_synopsis_expanded,
             colors,
@@ -6368,115 +5627,11 @@ impl Yomu {
             {
                 let yomu = yomu.clone();
                 let book_id = book.id.clone();
-                move |_, window, cx| {
-                    yomu.update(cx, |this, cx| {
-                        let input =
-                            cx.new(|cx| InputState::new(window, cx).default_value(book_id.clone()));
-                        this.overlay = Some(ui::overlays::Overlay::AniListMatch(
-                            ui::overlays::AniListMatchDialog {
-                                book_id: book_id.clone(),
-                                input,
-                                results: Vec::new(),
-                                is_searching: false,
-                            },
-                        ));
-                        cx.notify();
-                    })
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                let book_id = book.id.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        if let Some(media) = this.anilist_data.get_media_for_book(&book_id) {
-                            let media_id = media.id;
-                            let current_page = this
-                                .library
-                                .get(&book_id)
-                                .map(|b| b.current_page)
-                                .unwrap_or(0)
-                                + 1;
-                            this.anilist_data.queue_progress_update(
-                                media_id,
-                                current_page as i32,
-                                Some(yomu::anilist::MediaListStatus::Current),
-                            );
-                            let _ = this
-                                .anilist_data
-                                .save(&this.dirs.root().join("anilist.json"));
-                            this.show_toast("Reading progress queued for AniList sync", cx);
-                        }
-                    })
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                let book_id = book.id.clone();
                 move |_, pos, _, cx| {
                     yomu.update(cx, |this, cx| {
                         this.open_book_menu(&book_id, point(px(pos.0), px(pos.1)), cx)
                     })
                 }
-            },
-        )
-    }
-
-    fn render_anilist_search_screen(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let colors = self.colors;
-        let radius = px(self.radius_px());
-        let yomu = cx.entity();
-
-        if self.anilist_search_input.is_none() {
-            let state =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search manga on AniList…"));
-            self.anilist_search_input = Some(state);
-        }
-        let search_input = self.anilist_search_input.as_ref().unwrap();
-
-        let props = ui::anilist_search::AniListSearchProps {
-            scroll_handle: &self.anilist_search_scroll,
-            search_input,
-            selected_filter: 0,
-            results: &self.anilist_search_results,
-            is_searching: self.anilist_is_searching,
-            colors,
-            radius,
-        };
-
-        ui::anilist_search::render_anilist_search(
-            props,
-            {
-                let yomu = yomu.clone();
-                move |_idx, _, cx| {
-                    yomu.update(cx, |_this, cx| {
-                        cx.notify();
-                    })
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |media_id, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.anilist_data.queue_progress_update(
-                            media_id,
-                            0,
-                            Some(yomu::anilist::MediaListStatus::Planning),
-                        );
-                        let _ = this
-                            .anilist_data
-                            .save(&this.dirs.root().join("anilist.json"));
-                        this.show_toast("Added to AniList Planning list", cx);
-                    })
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| yomu.update(cx, |this, cx| this.navigate_back(cx))
             },
         )
     }
@@ -6498,11 +5653,7 @@ impl Yomu {
             ui::sidebar::MainView::Downloads => {
                 NavDestination::Section(ui::sidebar::SidebarSection::Downloads)
             }
-            ui::sidebar::MainView::AniListCategory(cat) => {
-                NavDestination::Section(ui::sidebar::SidebarSection::AniList(cat))
-            }
             ui::sidebar::MainView::Details(id) => NavDestination::Details(id),
-            ui::sidebar::MainView::AniListSearch => NavDestination::AniListSearch,
             ui::sidebar::MainView::Settings => {
                 self.active_view = ui::sidebar::MainView::Settings;
                 cx.notify();
@@ -6540,9 +5691,6 @@ impl Yomu {
                     ui::sidebar::SidebarSection::Collections => ui::sidebar::MainView::Collections,
                     ui::sidebar::SidebarSection::History => ui::sidebar::MainView::History,
                     ui::sidebar::SidebarSection::Downloads => ui::sidebar::MainView::Downloads,
-                    ui::sidebar::SidebarSection::AniList(cat) => {
-                        ui::sidebar::MainView::AniListCategory(*cat)
-                    }
                 };
             }
             NavDestination::Group { key, .. } => {
@@ -6553,10 +5701,6 @@ impl Yomu {
             NavDestination::Details(id) => {
                 self.selected_book_id = Some(id.clone());
                 self.active_view = ui::sidebar::MainView::Details(id.clone());
-            }
-            NavDestination::AniListSearch => {
-                self.open_group = None;
-                self.active_view = ui::sidebar::MainView::AniListSearch;
             }
         }
         cx.notify();
@@ -6576,9 +5720,7 @@ impl Yomu {
                 ui::sidebar::MainView::Collections => &self.collections_scroll,
                 ui::sidebar::MainView::History => &self.library_scroll,
                 ui::sidebar::MainView::Downloads => &self.library_scroll,
-                ui::sidebar::MainView::AniListCategory(_) => &self.anilist_category_scroll,
                 ui::sidebar::MainView::Details(_) => &self.details_scroll,
-                ui::sidebar::MainView::AniListSearch => &self.anilist_search_scroll,
                 ui::sidebar::MainView::Settings => &self.settings_scroll,
             }
         };
@@ -6619,50 +5761,9 @@ impl Yomu {
             ui::sidebar::MainView::Collections => "Collections",
             ui::sidebar::MainView::History => "History",
             ui::sidebar::MainView::Downloads => "Downloads",
-            ui::sidebar::MainView::AniListCategory(cat) => match cat {
-                ui::sidebar::AniListCategory::MyList => "My List",
-                ui::sidebar::AniListCategory::Planning => "Planning",
-                ui::sidebar::AniListCategory::Reading => "Reading",
-                ui::sidebar::AniListCategory::Completed => "Completed",
-                ui::sidebar::AniListCategory::Paused => "Paused",
-                ui::sidebar::AniListCategory::Dropped => "Dropped",
-            },
             ui::sidebar::MainView::Details(_) => "Manga Details",
-            ui::sidebar::MainView::AniListSearch => "AniList Search",
             ui::sidebar::MainView::Settings => "Settings",
         }
-    }
-
-    fn start_anilist_search(&mut self, query: &str, cx: &mut Context<Self>) {
-        if query.trim().is_empty() {
-            return;
-        }
-        self.anilist_is_searching = true;
-        self.anilist_search_error = None;
-        self.navigate_to(ui::sidebar::MainView::AniListSearch, cx);
-
-        let client = self.anilist_client.clone();
-        let query_str = query.trim().to_string();
-
-        cx.spawn(async move |this, cx| {
-            let res = cx
-                .background_executor()
-                .spawn(async move { client.search_manga(&query_str) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.anilist_is_searching = false;
-                match res {
-                    Ok(media_list) => {
-                        this.anilist_search_results = media_list;
-                    }
-                    Err(err) => {
-                        this.anilist_search_error = Some(err.to_string());
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     fn render_reader(&self, reader: &Reader, cx: &mut Context<Self>) -> AnyElement {

@@ -149,7 +149,7 @@ pub fn selection_menu(count: usize) -> Vec<Entry> {
 pub fn group_menu(_name: &str, count: usize) -> Vec<Entry> {
     vec![
         item(BookAction::Open, "Open Series", true),
-        item(BookAction::SetSeries, "Set Series / AniList…", true),
+        item(BookAction::SetSeries, "Set Series…", true),
         Entry::Separator,
         item(BookAction::MarkRead, "Mark All as Read", true),
         item(BookAction::MarkUnread, "Mark All as Unread", true),

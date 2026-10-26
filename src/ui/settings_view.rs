@@ -4,7 +4,6 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
-use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
@@ -12,7 +11,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Disableable, Icon, Side, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, ElementId, Entity, FontWeight, InteractiveElement, Pixels,
+    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, Pixels,
     ScrollHandle, SharedString, Styled, Window, div, px,
 };
 
@@ -28,12 +27,6 @@ pub struct SettingsViewProps<'a> {
     pub current_tab: SettingsTab,
     pub settings: &'a Settings,
     pub available_schemes: Vec<String>,
-    pub anilist_username: &'a str,
-    pub anilist_connected: bool,
-    pub auto_sync_anilist: bool,
-    pub anilist_username_input: Option<&'a Entity<InputState>>,
-    pub anilist_matched_count: usize,
-    pub anilist_sync_count: usize,
     pub cache_size_str: String,
     pub is_client_decorated: bool,
     pub system_reduced_motion: bool,
@@ -60,9 +53,6 @@ pub fn render_settings_view(
     on_clear_cache: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_reset_settings: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_reset_all_data: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_connect_anilist: impl Fn(&mut Window, &mut App) + 'static,
-    on_disconnect_anilist: impl Fn(&mut Window, &mut App) + 'static,
-    on_sync_anilist: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let on_select_tab = std::rc::Rc::new(on_select_tab);
     let on_close = std::rc::Rc::new(on_close);
@@ -78,7 +68,6 @@ pub fn render_settings_view(
         (SettingsTab::Appearance, IconName::Palette, "Appearance"),
         (SettingsTab::Reader, IconName::BookOpen, "Reader"),
         (SettingsTab::Library, IconName::Library, "Library"),
-        (SettingsTab::AniList, IconName::User, "AniList"),
         (SettingsTab::Shortcuts, IconName::Keyboard, "Shortcuts"),
         (SettingsTab::Advanced, IconName::Database, "Advanced"),
     ];
@@ -268,9 +257,6 @@ pub fn render_settings_view(
                                     SettingsTab::Library => {
                                         "Manage library organization, folder grouping, and cover size presets."
                                     }
-                                    SettingsTab::AniList => {
-                                        "Connect your AniList profile to sync progress and fetch manga database metadata."
-                                    }
                                     SettingsTab::Shortcuts => {
                                         "Quick keyboard shortcut reference for navigation and reading controls."
                                     }
@@ -308,18 +294,6 @@ pub fn render_settings_view(
                             colors,
                             on_toggle_group_series,
                             on_set_thumbnail_size,
-                        ),
-                        SettingsTab::AniList => render_tab_anilist(
-                            props.anilist_username,
-                            props.anilist_connected,
-                            props.auto_sync_anilist,
-                            props.anilist_username_input,
-                            props.anilist_sync_count,
-                            props.anilist_matched_count,
-                            colors,
-                            on_connect_anilist,
-                            on_disconnect_anilist,
-                            on_sync_anilist,
                         ),
                         SettingsTab::Shortcuts => {
                             render_tab_shortcuts(colors, props.vim_mode)
@@ -846,197 +820,6 @@ fn render_tab_library(
     )
 }
 
-fn render_tab_anilist(
-    username: &str,
-    connected: bool,
-    auto_sync: bool,
-    username_input: Option<&Entity<InputState>>,
-    sync_count: usize,
-    matched_count: usize,
-    colors: UiColors,
-    on_connect: impl Fn(&mut Window, &mut App) + 'static,
-    on_disconnect: impl Fn(&mut Window, &mut App) + 'static,
-    on_sync: impl Fn(&mut Window, &mut App) + 'static,
-) -> Div {
-    let on_connect = std::rc::Rc::new(on_connect);
-    let on_disconnect = std::rc::Rc::new(on_disconnect);
-    let on_sync = std::rc::Rc::new(on_sync);
-
-    let mut col = div().flex().flex_col().gap_4();
-
-    if !connected {
-        // Disconnected state: Connect Card
-        col = col.child(
-            settings_card(colors).child(
-                div()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(colors.foreground)
-                                    .child("Connect AniList Account"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(colors.muted)
-                                    .child("Link your AniList profile to sync reading lists, track chapters read, and automatically fetch rich manga metadata."),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(if let Some(input) = username_input {
-                                        Input::new(input)
-                                            .cleanable(true)
-                                            .w_full()
-                                            .into_any_element()
-                                    } else {
-                                        div().into_any_element()
-                                    }),
-                            )
-                            .child(
-                                Button::new("anilist-connect-btn")
-                                    .primary()
-                                    .label("Connect")
-                                    .rounded(ButtonRounded::Size(px(6.)))
-                                    .small()
-                                    .bg(colors.accent)
-                                    .text_color(colors.accent_foreground)
-                                    .on_click({
-                                        let on_connect = on_connect.clone();
-                                        move |_, window, cx| on_connect(window, cx)
-                                    }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(colors.muted)
-                            .child("ℹ Public profiles fetch lists and match manga automatically without needing an account password."),
-                    ),
-            ),
-        );
-    } else {
-        // Connected state
-        col = col.child(
-            settings_card(colors)
-                .child(
-                    settings_row(
-                        "AniList Account",
-                        format!("Connected as {username}. Lists and progress synced with AniList GraphQL API."),
-                        colors,
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Button::new("anilist-sync-now-btn")
-                                    .secondary()
-                                    .outline()
-                                    .label("Sync Now")
-                                    .rounded(ButtonRounded::Size(px(6.)))
-                                    .small()
-                                    .on_click({
-                                        let on_sync = on_sync.clone();
-                                        move |_, window, cx| on_sync(window, cx)
-                                    }),
-                            )
-                            .child(
-                                Button::new("anilist-disconnect-btn")
-                                    .danger()
-                                    .outline()
-                                    .label("Disconnect")
-                                    .rounded(ButtonRounded::Size(px(6.)))
-                                    .small()
-                                    .on_click({
-                                        let on_disconnect = on_disconnect.clone();
-                                        move |_, window, cx| on_disconnect(window, cx)
-                                    }),
-                            ),
-                    ),
-                )
-                .child(settings_divider(colors))
-                .child(
-                    settings_row(
-                        "Synchronized Manga Titles",
-                        format!("{matched_count} library titles matched to official AniList database entries."),
-                        colors,
-                    )
-                    .child(
-                        div()
-                            .px_3()
-                            .py_1()
-                            .rounded(px(6.))
-                            .bg(with_alpha(colors.foreground, 0.08))
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(colors.foreground)
-                            .child(format!("{matched_count} Linked")),
-                    ),
-                )
-                .child(settings_divider(colors))
-                .child(
-                    settings_row(
-                        "Offline Sync Queue",
-                        if sync_count == 0 {
-                            "All reading progress is up to date.".to_string()
-                        } else {
-                            format!("{sync_count} progress updates queued for upload.")
-                        },
-                        colors,
-                    )
-                    .child(
-                        div()
-                            .px_3()
-                            .py_1()
-                            .rounded(px(6.))
-                            .bg(with_alpha(colors.foreground, 0.08))
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(colors.foreground)
-                            .child(if sync_count == 0 { "Up to date" } else { "Pending" }),
-                    ),
-                ),
-        );
-    }
-
-    col.child(
-        settings_card(colors).child(
-            settings_row(
-                "Auto-sync Reading Progress",
-                "Automatically update chapter/volume progress on AniList as you read.",
-                colors,
-            )
-            .child(
-                div().cursor_pointer().child(
-                    Switch::new("auto-sync-anilist")
-                        .accessibility_label("Auto-sync AniList reading progress")
-                        .small()
-                        .checked(auto_sync),
-                ),
-            ),
-        ),
-    )
-}
-
 fn render_tab_shortcuts(colors: UiColors, vim_mode: bool) -> Div {
     let search_sc = if cfg!(target_os = "macos") {
         if vim_mode {
@@ -1056,7 +839,7 @@ fn render_tab_shortcuts(colors: UiColors, vim_mode: bool) -> Div {
     let mut shortcuts: Vec<(&'static str, String)> = Vec::new();
     shortcuts.push(("Continue / Open Manga", "Enter or Left Click".to_string()));
     shortcuts.push(("Import Manga Files / Folder", open_sc.to_string()));
-    shortcuts.push(("Search Library or AniList", search_sc.to_string()));
+    shortcuts.push(("Search Library", search_sc.to_string()));
     if vim_mode {
         shortcuts.push(("Command Prompt", ":".to_string()));
     }

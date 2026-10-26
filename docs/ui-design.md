@@ -63,11 +63,10 @@ Corner radii adaptively follow user settings (`CornerRounding`) with standard de
 | ⏱ History         |            [▶ Continue Reading]    [Item 3]             |
 | ⬇ Downloads       |                                                         |
 |                   |  RECENTLY ADDED                                         |
-| ANILIST           |  [Cover]    [Cover]    [Cover]    [Cover]               |
-| 📋 My List (142)  |  Ch. 12     Ch. 5      Ch. 1      Ch. 84                |
-| 🔖 Planning (24)  |                                                         |
-| 📖 Reading (12)   +---------------------------------------------------------+
-| [Profile / Config]| Status bar / Sync indicator                             |
+|                   |  [Cover]    [Cover]    [Cover]    [Cover]               |
+|                   |  Ch. 12     Ch. 5      Ch. 1      Ch. 84                |
+|                   |                                                         |
+| [Settings]        +---------------------------------------------------------+
 +-------------------+---------------------------------------------------------+
 ```
 

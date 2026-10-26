@@ -249,36 +249,3 @@ pub fn genre_tag(
 ) -> impl IntoElement {
     Tag::secondary().small().child(label.into())
 }
-
-/// Star rating pill.
-pub fn star_rating(score: i32, popularity: Option<i32>, colors: UiColors) -> Div {
-    let score_str = format!("★ {:.2}", score as f32 / 10.0);
-    let mut row = div().flex().items_center().gap_2().child(
-        div()
-            .text_sm()
-            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-            .text_color(gpui_kit::rgb(0xF5A623))
-            .child(score_str),
-    );
-    if let Some(pop) = popularity {
-        row = row.child(
-            div()
-                .text_xs()
-                .text_color(colors.muted)
-                .child(format!("#{pop} Popularity")),
-        );
-    }
-    row
-}
-
-/// Section header for sidebars and content groupings.
-pub fn section_header(title: impl Into<SharedString>, colors: UiColors) -> Div {
-    div()
-        .px_3()
-        .pt_4()
-        .pb_1p5()
-        .text_xs()
-        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-        .text_color(colors.muted)
-        .child(title.into())
-}

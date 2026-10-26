@@ -40,8 +40,7 @@ The last command runs opt-in performance measurements, not the normal suite. UI 
 ## Working conventions
 
 - The UI follows a macOS HIG two-pane design (`src/ui/sidebar.rs` + `src/ui/toolbar.rs` + content router `MainView`). Persistent sidebar width is 240px; UI integration tests clicking library cards must offset mouse coordinates accordingly (`x = 240.0 + padding + card_offset`).
-- Views are modularized under `src/ui/`: `sidebar`, `toolbar`, `continue_reading`, `details`, `collections_view`, `anilist_search`, `settings_view`, `components`, `overlays`.
-- AniList metadata tracking and progress sync live in `src/anilist.rs` using official GraphQL queries. Cache and queues persist in `anilist.json`.
+- Views are modularized under `src/ui/`: `sidebar`, `toolbar`, `continue_reading`, `details`, `collections_view`, `settings_view`, `components`, `overlays`.
 - Collections management lives in `src/collections.rs` and `src/library.rs`. Deleting collections or library entries must never remove user source files from disk.
 - Keep reusable logic independent of gpui. Put parsing, persistence, archive handling, geometry, selection rules, animation math, and cache planning in their existing core modules.
 - Keep filesystem, archive, image decode, and resize failures as `anyhow::Result` with useful context. Avoid silently replacing unreadable user data; library loading preserves a corrupt file as a backup.
