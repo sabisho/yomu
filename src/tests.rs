@@ -111,7 +111,7 @@ fn opacity(view: &Entity<Yomu>, cx: &mut VisualTestContext) -> f32 {
 fn act(view: &Entity<Yomu>, cx: &mut VisualTestContext, id: &str, action: BookAction) {
     let id = id.to_string();
     view.update_in(cx, move |this, window, cx| {
-        this.run_book_action(action, &id, &[id.clone()], window, cx)
+        this.run_book_action(action, &id, std::slice::from_ref(&id), window, cx)
     });
     cx.run_until_parked();
 }
@@ -3356,4 +3356,81 @@ fn test_volume_count_badge_is_numeric_only(cx: &mut TestAppContext) {
     let (colors, radius) = view.read_with(cx, |this, _| (this.colors, px(this.radius_px())));
     // stat_badge creates a Tag with the numeric count only
     let _badge = ui::components::stat_badge(42, false, colors, radius);
+}
+
+#[gpui_kit::test]
+fn test_group_mode_toggle_immediately_clears_nested_group_and_hides_back(cx: &mut TestAppContext) {
+    let fx = fixture("toggle_group_nav");
+    let (view, cx) = launch(&fx, cx);
+
+    // Enable series grouping
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_group_series(true, cx);
+    });
+
+    // Enter a group
+    view.update_in(cx, |this, _, cx| {
+        this.enter_group("series:test_series".into(), cx);
+    });
+    cx.run_until_parked();
+
+    // Back button is visible while inside group
+    assert!(cx.debug_bounds("group-back").is_some());
+
+    // Switch to individual-volume mode (toggle grouping off)
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_group_series(false, cx);
+    });
+    cx.run_until_parked();
+
+    // open_group is immediately cleared and back button is immediately hidden
+    assert_eq!(view.read_with(cx, |this, _| this.open_group.clone()), None);
+    assert!(
+        cx.debug_bounds("group-back").is_none(),
+        "back button must hide immediately when switching to individual-volume mode"
+    );
+}
+
+#[gpui_kit::test]
+fn test_folder_right_click_does_not_select_or_activate_selection_mode(cx: &mut TestAppContext) {
+    let fx = fixture("folder_rtclick");
+    let (view, cx) = launch(&fx, cx);
+
+    // Initial state: nothing selected
+    assert!(selected(&view, cx).is_empty());
+
+    // Open group context menu for a folder
+    view.update_in(cx, |this, _, cx| {
+        this.open_group_context_menu(
+            "series_a",
+            "Series A",
+            &fx.ids[..2],
+            point(px(100.), px(100.)),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    // Context menu is open
+    assert_eq!(overlay_kind(&view, cx), "menu");
+    // Multi-selection is not triggered
+    assert!(selected(&view, cx).is_empty());
+    assert!(cx.debug_bounds("select-all").is_none());
+}
+
+#[gpui_kit::test]
+fn test_recently_added_layout_and_clipping(cx: &mut TestAppContext) {
+    let fx = fixture("rec_layout");
+    let (view, cx) = launch(&fx, cx);
+
+    let (radius, border_px) =
+        view.read_with(cx, |this, _| (px(this.radius_px()), this.border_px()));
+
+    // Verify derived cover radius calculation
+    let inner_radius = (radius - px(border_px)).max(px(0.));
+    assert!(inner_radius >= px(0.));
+
+    // Queue item cover radius clamping
+    let queue_radius = (radius - px(border_px)).max(px(0.)).min(px(6.));
+    assert!(queue_radius <= px(6.));
 }

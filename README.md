@@ -107,9 +107,7 @@ environment.systemPackages = [ (pkgs.callPackage /home/you/Projects/yomu/nix/pac
 
 ## Keys
 
-The reader is modal in the vim sense: counts (`5j`), two-key sequences (`gg`, `zw`, `ma`) and a `:`
-command line all work, and the usual keys (arrows, PageUp/PageDown, Space, Home/End, `+`/`-`,
-Ctrl+wheel) work too. Press `?` in the reader for a cheat sheet.
+Vim keybindings (motions like `j`/`k`/`gg`/`G`, marks, counts, and `:`) are opt-in via Settings → Reader or the `--vim` / `--vim-mode` command-line flag. When Vim mode is off (the default), standard desktop navigation shortcuts (arrows, PageUp/PageDown, Space, Home/End, `+`/`-`, Ctrl+wheel) operate cleanly without interception. When Vim mode is enabled, Vim motions take precedence for reading actions while preserving standard text editing in input fields. Press `?` in the reader for a cheat sheet.
 
 **Library**
 

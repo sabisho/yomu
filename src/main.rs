@@ -425,6 +425,16 @@ impl Yomu {
         cx.notify();
     }
 
+    pub fn toggle_group_series(&mut self, group: bool, cx: &mut Context<Self>) {
+        self.library.settings_mut().group_series = group;
+        if !group {
+            self.open_group = None;
+            self.group_scroll.set_offset(Point::default());
+        }
+        self.save_library();
+        cx.notify();
+    }
+
     fn widget_surface(&self, color: gpui_kit::Hsla) -> gpui_kit::Hsla {
         color
     }
@@ -2590,6 +2600,7 @@ impl Yomu {
             vp,
         } = params;
         let (dx, dy) = delta;
+        let animations_enabled = self.animations_enabled();
         let Some(reader) = self.reader.as_mut() else {
             return;
         };
@@ -2635,7 +2646,7 @@ impl Yomu {
         if touch_phase == TouchPhase::Ended
             && reader
                 .kinetic
-                .end_touch(reader.animate && !self.reduce_motion)
+                .end_touch(reader.animate && animations_enabled)
         {
             self.wake();
             cx.notify();
@@ -2810,6 +2821,7 @@ impl Yomu {
 
     /// Mouse released: if it was a drag flick, launch inertial glide; otherwise click.
     fn drag_end(&mut self, x: f32, vp: Viewport, cx: &mut Context<Self>) {
+        let animations_enabled = self.animations_enabled();
         let Some(reader) = self.reader.as_mut() else {
             return;
         };
@@ -2819,7 +2831,7 @@ impl Yomu {
         if drag.moved {
             if reader
                 .kinetic
-                .end_touch(reader.animate && !self.reduce_motion)
+                .end_touch(reader.animate && animations_enabled)
             {
                 self.wake();
                 cx.notify();
@@ -3791,7 +3803,7 @@ impl Yomu {
     {
         surface.with_animation(
             id,
-            Animation::new(Duration::from_millis(if self.reduce_motion {
+            Animation::new(Duration::from_millis(if !self.animations_enabled() {
                 1
             } else {
                 180
@@ -4194,7 +4206,8 @@ impl Yomu {
         let anilist_username_input = self.anilist_username_input.as_ref();
         let anilist_matched_count = self.anilist_data.matches.len();
         let anilist_sync_count = self.anilist_data.sync_queue.len();
-        let is_client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
+        let is_client_decorated = cfg!(target_os = "linux")
+            && matches!(window.window_decorations(), Decorations::Client { .. });
 
         let props = ui::settings_view::SettingsViewProps {
             scroll_handle: &self.settings_scroll,
@@ -4254,9 +4267,7 @@ impl Yomu {
                 let yomu = yomu.clone();
                 move |checked, _, cx| {
                     yomu.update(cx, |this, cx| {
-                        this.library.settings_mut().group_series = checked;
-                        this.save_library();
-                        cx.notify();
+                        this.toggle_group_series(checked, cx);
                     });
                 }
             },
@@ -4514,15 +4525,34 @@ impl Yomu {
         );
 
         // 2. Toolbar Props
-        let is_client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
+        let is_client_decorated = cfg!(target_os = "linux")
+            && matches!(window.window_decorations(), Decorations::Client { .. });
+        let is_library_view = matches!(
+            self.active_view,
+            ui::sidebar::MainView::AllManga
+                | ui::sidebar::MainView::History
+                | ui::sidebar::MainView::Downloads
+                | ui::sidebar::MainView::AniListCategory(_)
+        );
+        let is_browsing =
+            is_library_view || matches!(self.active_view, ui::sidebar::MainView::ContinueReading);
+        let show_search = is_library_view;
+        let show_view_switches = is_library_view;
+        let show_grouping = is_library_view;
+        let show_import = is_browsing;
+
         let search_input = self.search_input.as_ref();
         let toolbar_props = ui::toolbar::MainToolbarProps {
             can_go_back: self.open_group.is_some(),
             sidebar_collapsed: is_collapsed,
             is_scrolled: self.is_current_view_scrolled(),
+            show_search,
             search_input,
+            show_view_switches,
             is_grid_mode: self.view_mode_grid,
+            show_grouping,
             is_group_series: self.library.settings().group_series,
+            show_import,
             is_client_decorated,
             selection_count: self.selection.len(),
             on_select_all: Some(Rc::new({
@@ -4571,15 +4601,17 @@ impl Yomu {
                 let yomu = yomu.clone();
                 move |group, _, cx| {
                     yomu.update(cx, |this, cx| {
-                        this.library.settings_mut().group_series = group;
-                        this.save_library();
-                        cx.notify();
+                        this.toggle_group_series(group, cx);
                     })
                 }
             },
             {
                 let yomu = yomu.clone();
                 move |_, _, cx| yomu.update(cx, |this, cx| this.import_dialog(false, cx))
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.import_dialog(true, cx))
             },
             Some(Rc::new(|_, window, _| window.remove_window())),
         );
@@ -4749,7 +4781,7 @@ impl Yomu {
                 b_time.cmp(&a_time)
             });
 
-            for entry in entries.into_iter().take(6) {
+            for entry in entries.into_iter().take(grid.cols) {
                 match entry {
                     RecentEntry::Group(group, _) => {
                         let first = group.books[0];
@@ -4778,8 +4810,8 @@ impl Yomu {
             }
         } else {
             let mut sorted_books: Vec<&Book> = books.iter().collect();
-            sorted_books.sort_by(|a, b| b.added_at.cmp(&a.added_at));
-            for book in sorted_books.into_iter().take(6) {
+            sorted_books.sort_by_key(|a| std::cmp::Reverse(a.added_at));
+            for book in sorted_books.into_iter().take(grid.cols) {
                 cards.push(self.render_book_card(book, card_w, cover_h, radius, colors, &yomu));
             }
         }
@@ -4790,6 +4822,7 @@ impl Yomu {
             queue,
             recent_cards: cards,
             recent_gap: px(grid.gap),
+            pad_x: px(grid.pad_x),
             colors,
             radius,
             border_px: self.border_px(),
@@ -5278,6 +5311,7 @@ impl Yomu {
                 let yomu = yomu.clone();
                 let book_id = book_id.clone();
                 move |event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
                     yomu.update(cx, |this, cx| {
                         this.open_context_menu(&book_id, event.position, window, cx);
                     });
@@ -5427,6 +5461,7 @@ impl Yomu {
                 let yomu = yomu.clone();
                 let book_id = book_id.clone();
                 move |event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
                     yomu.update(cx, |this, cx| {
                         this.open_context_menu(&book_id, event.position, window, cx);
                     });
@@ -5640,6 +5675,7 @@ impl Yomu {
                 let group_name = group_name.clone();
                 let book_ids = book_ids.clone();
                 move |event: &MouseDownEvent, _window, cx| {
+                    cx.stop_propagation();
                     yomu.update(cx, |this, cx| {
                         this.open_group_context_menu(
                             &group_key,
@@ -5772,6 +5808,7 @@ impl Yomu {
                 let group_name = group_name.clone();
                 let book_ids = book_ids.clone();
                 move |event: &MouseDownEvent, _window, cx| {
+                    cx.stop_propagation();
                     yomu.update(cx, |this, cx| {
                         this.open_group_context_menu(
                             &group_key,

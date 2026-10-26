@@ -299,43 +299,27 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - `BookMenu` now carries `target_ids: Vec<String>` explicitly. Context menu operations (e.g. Remove, Mark Read, Mark Unread) operate directly on `target_ids` rather than requiring items to be in the global selection.
   - Right-clicking an already-selected item preserves the existing multi-selection and offers batch actions on all selected items.
   - Right-clicking an unselected item drops any active selection without selecting the clicked item, opening the context menu cleanly targeted to that item.
-- **Single Contextual Toolbar (`src/ui/toolbar.rs`, `src/main.rs`):**
-  - Excised the secondary toolbar row (`show_header`) from `render_all_manga_view`, `render_history_view`, and `render_anilist_category_view`.
-  - Consolidated selection controls directly into the primary top toolbar:
+- **Import & Contextual Toolbars (`src/ui/toolbar.rs`, `src/main.rs`):**
+  - Minimal plus (+) icon button matching grid/list switches with a native GPUI Kit `DropdownMenu` anchored top-right.
+  - Dropdown options: **Import Files…** (`⌘O` / `Ctrl+O`) and **Import Folder…** (`⇧⌘O` / `Ctrl+Shift+O`).
+  - Single context-aware top toolbar:
     - Browsing Mode (`selection_count == 0`): displays search bar, grouping switch, view mode switch, and import button.
     - Selection Mode (`selection_count > 0`): replaces browsing controls with `N selected` badge, `Select all`, `Remove`, and `Cancel` in the exact same 52px header area without height jumps or layout shifts.
-- **Platform-Aware Settings Panel Window Controls (`src/ui/settings_view.rs`):**
-  - On macOS: displays close button on the top-left (`settings-close-macos`), matching native macOS window conventions.
-  - On Windows: displays close button on the top-right (`settings-close-win`).
-  - On Linux with CSD (`Decorations::Client`): displays Libadwaita-inspired close button on the top-right (`settings-close-csd`).
-  - On Linux with SSD (`Decorations::Server`): omits in-window close button, letting the compositor handle decorations.
+  - Right-click mouse-down handlers on book cards, list rows, folder cards, and folder rows call `cx.stop_propagation()`, ensuring right-clicking to open a context menu never accidentally triggers card selection, enters selection mode, or navigates into a folder.
 - **Simplified Back-Only Navigation (`src/ui/toolbar.rs`, `src/main.rs`):**
   - Forward navigation button removed entirely from the toolbar.
-  - Back button (`toolbar-nav-back`) is visible strictly when viewing inside an open series group (`open_group.is_some()`). In library root or individual volume modes, the Back button is hidden.
+  - Back button (`group-back`) is visible strictly when inside an open series group (`open_group.is_some()`). In library root or individual volume modes, the Back button is hidden.
+  - Toggling grouping mode off immediately clears `open_group = None` and resets group scroll offset, updating Back button visibility instantly without requiring a click or refresh.
   - Activating Back exits the group back to the library view cleanly.
-- **Opt-In Vim Navigation (`src/library.rs`, `src/main.rs`, `src/ui/settings_view.rs`):**
-  - Vim mode is disabled by default (`Settings.vim_mode = false`, with `#[serde(default)]` backward compatibility).
-  - Reader settings tab provides a toggle switch (`vim-mode-switch`) under "Vim Keybindings".
-  - Added CLI flags `--vim` and `--vim-mode` in `main.rs` to override Vim mode for the current session without modifying saved settings.
-  - When disabled, Vim keys (`j`, `k`, `h`, `l`, `gg`, `G`, `:`) do not intercept desktop navigation, allowing standard arrow and modifier keys to function predictably.
-- **Theme-Aware Collection Icons (`src/ui/collections_view.rs`):**
-  - Replaced hard-coded RGB hex colors with semantic GPUI Kit design tokens (`colors.accent` and `colors.foreground`), ensuring visual consistency across all themes and appearance modes.
-- **Recently Added & Library Grid Consistency (`src/ui/continue_reading.rs`, `src/main.rs`):**
-  - Aligned Recently Added layout with All Manga: dynamically interprets folder cards when `group_series` is enabled and individual volume cards when disabled.
-  - Eliminated uneven margin/whitespace on the right by passing the dynamically calculated `grid.gap` (`recent_gap`) and responsive card width into Recently Added.
-- **Numeric-Only Volume Badges (`src/main.rs`, `src/ui/components.rs`):**
-  - Replaced hard-coded `"vols"` strings with `ui::components::stat_badge(count, false, colors, radius)`.
-  - Badges are squircle-shaped, theme-aware, and display strictly the numeric volume count matching the sidebar count badges.
-- **Thumbnail Inner Corner Radius Derivation (`src/main.rs`, `src/ui/continue_reading.rs`):**
-  - Solved corner overflow where square cover images poked past rounded card borders.
-  - Cards now compute `inner_radius = (radius - px(border_px)).max(px(0.))` derived from the configured corner radius and border thickness, applied to both the cover container and image with top rounding.
-- **Dynamic Shortcuts Settings Pane (`src/ui/settings_view.rs`):**
-  - Shortcuts tab in the Settings panel dynamically checks the active `vim_mode` state (including session CLI flags).
-  - Displays standard desktop navigation shortcuts (Arrow keys, Space, PageDown) when Vim mode is disabled, and displays Vim keybindings (`j`, `k`, `gg`, `G`, `:`) when Vim mode is enabled.
-- **Application-Wide Disable Animations Setting (`src/library.rs`, `src/ui/settings_view.rs`, `src/main.rs`):**
-  - Added persistent `disable_animations` switch to Settings Reader tab.
-  - When system reduced motion is active, the switch is forced on, disabled (greyed out), and displays an informative helper message.
-  - Enforced a centralized animation policy: `animations_enabled = !system_reduced_motion && !user_disable_animations`.
+- **Unified Library Layout & Corner Clipping (`src/ui/continue_reading.rs`, `src/ui/details.rs`, `src/main.rs`):**
+  - Recently Added cards align with All Manga grid insets (`pad_x: px(grid.pad_x)` and `grid.gap`), eliminating trailing empty void/whitespace and strictly capping cards to `take(grid.cols)`.
+  - Cover image corner clipping derives `inner_radius = (radius - px(border_px)).max(px(0.))` and applies `.rounded_t(inner_radius)` or `.rounded(inner_radius)` directly to every `img(...)` element (grid cards, list rows, details, queue items) to eliminate GPUI quad renderer image corner overflow at all radii (0, small, large).
+  - Consolidated duplicate thumbnail settings into one authoritative Library setting with exactly **Small, Medium, Large** choices.
+  - Badges are squircle-shaped, theme-aware, and display strictly numeric volume counts without "vols".
+  - Standardized collection icons to theme-aware semantic tokens.
+- **Centralized Motion Policy (`src/main.rs`):**
+  - Enforced `self.animations_enabled()` (`!self.reduce_motion && !self.library.settings().disable_animations`) across popups (`animate_popup`), dialogs, and reader kinetic momentum gliding (`end_touch`). Essential scrolling functionality is never disabled.
+  - System reduced-motion preference overrides user settings, greys out the toggle, and restores user preference when the system preference is removed.
 
 ## Build and verification
 

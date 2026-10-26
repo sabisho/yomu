@@ -31,6 +31,7 @@ pub struct ContinueReadingProps<'a> {
     pub queue: Vec<ContinueReadingItem<'a>>,
     pub recent_cards: Vec<AnyElement>,
     pub recent_gap: Pixels,
+    pub pad_x: Pixels,
     pub colors: UiColors,
     pub radius: Pixels,
     pub border_px: f32,
@@ -92,7 +93,8 @@ pub fn render_continue_reading_view(
             .track_scroll(props.scroll_handle)
             .size_full()
             .overflow_y_scroll()
-            .p_6()
+            .px(props.pad_x)
+            .py_6()
             .flex()
             .flex_col()
             .gap_6()
@@ -263,6 +265,11 @@ pub fn render_continue_reading_view(
                                 .children(props.queue.iter().map(|item| {
                                     let on_open_details = on_open_details.clone();
                                     let book_id = item.book.id.clone();
+                                    let queue_radius = if props.radius > px(0.) {
+                                        (props.radius - px(props.border_px)).max(px(0.)).min(px(6.))
+                                    } else {
+                                        px(0.)
+                                    };
                                     div()
                                         .id(ElementId::from(SharedString::from(format!("queue-item-{}", item.book.id))))
                                         .h(px(68.))
@@ -284,13 +291,13 @@ pub fn render_continue_reading_view(
                                             div()
                                                 .w(px(46.))
                                                 .h_full()
-                                                .rounded(px(4.))
+                                                .rounded(queue_radius)
                                                 .overflow_hidden()
                                                 .bg(with_alpha(colors.foreground, 0.05))
                                                 .child(
                                                     img(item.cover_path.clone())
                                                         .size_full()
-                                                        .rounded(px(4.))
+                                                        .rounded(queue_radius)
                                                         .object_fit(gpui_kit::ObjectFit::Cover),
                                                 ),
                                         )

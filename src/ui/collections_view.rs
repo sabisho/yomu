@@ -36,64 +36,60 @@ pub fn render_collections_view(
     let on_collection_menu = std::rc::Rc::new(on_collection_menu);
     let colors = props.colors;
 
-    let smart_card = |id: &'static str,
-                      title: &'static str,
-                      count: usize,
-                      icon: IconName,
-                      icon_color: gpui_kit::Hsla|
-     -> AnyElement {
-        let on_select_smart = on_select_smart.clone();
-        div()
-            .id(ElementId::from(id))
-            .flex_1()
-            .h(px(84.))
-            .p_4()
-            .rounded(props.radius)
-            .bg(with_alpha(colors.surface, 0.65))
-            .border_1()
-            .border_color(colors.border)
-            .cursor_pointer()
-            .hover(|style| {
-                style
-                    .bg(with_alpha(colors.foreground, 0.05))
-                    .border_color(colors.accent)
-            })
-            .on_click(move |_, window, cx| on_select_smart(id, window, cx))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_4()
-            .child(
-                div()
-                    .size(px(40.))
-                    .rounded(props.radius)
-                    .bg(with_alpha(icon_color, 0.15))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(Icon::new(icon).size(px(20.)).text_color(icon_color)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(colors.foreground)
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(colors.muted)
-                            .child(format!("{count} manga")),
-                    ),
-            )
-            .into_any_element()
-    };
+    let smart_card =
+        |id: &'static str, title: &'static str, count: usize, icon: IconName| -> AnyElement {
+            let on_select_smart = on_select_smart.clone();
+            div()
+                .id(ElementId::from(id))
+                .flex_1()
+                .h(px(84.))
+                .p_4()
+                .rounded(props.radius)
+                .bg(with_alpha(colors.surface, 0.65))
+                .border_1()
+                .border_color(colors.border)
+                .cursor_pointer()
+                .hover(|style| {
+                    style
+                        .bg(with_alpha(colors.foreground, 0.05))
+                        .border_color(colors.accent)
+                })
+                .on_click(move |_, window, cx| on_select_smart(id, window, cx))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_4()
+                .child(
+                    div()
+                        .size(px(40.))
+                        .rounded(props.radius)
+                        .bg(with_alpha(colors.foreground, 0.08))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(icon).size(px(20.)).text_color(colors.foreground)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(colors.foreground)
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(colors.muted)
+                                .child(format!("{count} manga")),
+                        ),
+                )
+                .into_any_element()
+        };
 
     gpui_kit::base::ScrollBounce::new(
         "collections-scroll-bounce",
@@ -147,14 +143,12 @@ pub fn render_collections_view(
                             "Favorites",
                             props.favorites_count,
                             IconName::Heart,
-                            colors.accent,
                         ))
                         .child(smart_card(
                             "reading",
                             "Currently Reading",
                             props.reading_count,
                             IconName::BookOpen,
-                            colors.foreground,
                         )),
                 )
                 .child(
@@ -168,14 +162,12 @@ pub fn render_collections_view(
                             "Want to Read",
                             props.want_to_read_count,
                             IconName::Clock,
-                            colors.foreground,
                         ))
                         .child(smart_card(
                             "completed",
                             "Completed",
                             props.completed_count,
                             IconName::Check,
-                            colors.accent,
                         )),
                 ),
         )
@@ -264,14 +256,14 @@ pub fn render_collections_view(
                                             div()
                                                 .size(px(40.))
                                                 .rounded(props.radius)
-                                                .bg(with_alpha(colors.accent, 0.15))
+                                                .bg(with_alpha(colors.foreground, 0.08))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
                                                 .child(
                                                     Icon::new(IconName::Folder)
                                                         .size(px(20.))
-                                                        .text_color(colors.accent),
+                                                        .text_color(colors.foreground),
                                                 ),
                                         )
                                         .child(

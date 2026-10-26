@@ -117,7 +117,12 @@ pub fn render_manga_details(
                     .flex_wrap()
                     .gap_8()
                     // Left Column: Cover artwork
-                    .child(
+                    .child({
+                        let inner_radius = if props.radius > px(0.) {
+                            (props.radius - px(1.0)).max(px(0.))
+                        } else {
+                            px(0.)
+                        };
                         div()
                             .w(px(240.))
                             .h(px(340.))
@@ -131,9 +136,10 @@ pub fn render_manga_details(
                             .child(
                                 img(props.cover_path)
                                     .size_full()
+                                    .rounded(inner_radius)
                                     .object_fit(gpui_kit::ObjectFit::Cover),
-                            ),
-                    )
+                            )
+                    })
                     // Right Column: Details & Actions
                     .child(
                         div()
