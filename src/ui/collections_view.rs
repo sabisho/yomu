@@ -91,18 +91,15 @@ pub fn render_collections_view(
                 .into_any_element()
         };
 
-    gpui_kit::base::ScrollBounce::new(
-        "collections-scroll-bounce",
-        props.scroll_handle,
-        div()
-            .id("collections-container")
-            .track_scroll(props.scroll_handle)
-            .size_full()
-            .overflow_y_scroll()
-            .p_6()
-            .flex()
-            .flex_col()
-            .gap_6()
+    div()
+        .id("collections-container")
+        .track_scroll(props.scroll_handle)
+        .size_full()
+        .overflow_y_scroll()
+        .p_6()
+        .flex()
+        .flex_col()
+        .gap_6()
         // Top Toolbar inside view
         .child(
             div()
@@ -309,7 +306,6 @@ pub fn render_collections_view(
                         }))
                         .into_any_element()
                 }),
-        ),
-    )
-    .into_any_element()
+        )
+        .into_any_element()
 }

@@ -219,6 +219,7 @@ struct Yomu {
     details_scroll: ScrollHandle,
     settings_scroll: ScrollHandle,
     sidebar_scroll: ScrollHandle,
+    library_scroll_controller: yomu::scroll::PlatformScrollController,
     #[allow(dead_code)]
     library_pinch_accum: f32,
     cursor_pos: Option<(f32, f32)>,
@@ -344,6 +345,7 @@ impl Yomu {
             details_scroll: ScrollHandle::new(),
             settings_scroll: ScrollHandle::new(),
             sidebar_scroll: ScrollHandle::new(),
+            library_scroll_controller: yomu::scroll::PlatformScrollController::new(),
             library_pinch_accum: 0.0,
             cursor_pos: None,
             save_seq: 0,
@@ -4170,8 +4172,28 @@ impl Yomu {
                             .id("main-view-content")
                             .flex_1()
                             .min_w_0()
-                            .h_full()
+                            .min_h_0()
                             .overflow_hidden()
+                            .on_scroll_wheel(cx.listener(
+                                |this, event: &ScrollWheelEvent, _, cx| {
+                                    let scroll_handle = this.current_scroll_handle();
+                                    let animations_enabled = this.animations_enabled();
+                                    if this.library_scroll_controller.handle_wheel(
+                                        event,
+                                        &scroll_handle,
+                                        animations_enabled,
+                                    ) {
+                                        this.wake();
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, _| {
+                                    this.library_scroll_controller.cancel_inertia();
+                                }),
+                            )
                             .child(content),
                     ),
             )
@@ -4734,39 +4756,35 @@ impl Yomu {
             })
             .collect();
 
-        gpui_kit::base::ScrollBounce::new(
-            "history-scroll-bounce",
-            &self.library_scroll,
-            div()
-                .id("history-container")
-                .track_scroll(&self.library_scroll)
-                .size_full()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .child(if is_grid {
-                    div()
-                        .px(px(grid.pad_x))
-                        .py_6()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap(px(grid.gap))
-                        .children(cards)
-                } else {
-                    div()
-                        .w_full()
-                        .max_w(px(1040.))
-                        .mx_auto()
-                        .px(px(grid.pad_x.max(16.0)))
-                        .py_4()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .children(cards)
-                }),
-        )
-        .into_any_element()
+        div()
+            .id("history-container")
+            .track_scroll(&self.library_scroll)
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .child(if is_grid {
+                div()
+                    .px(px(grid.pad_x))
+                    .py_6()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(grid.gap))
+                    .children(cards)
+            } else {
+                div()
+                    .w_full()
+                    .max_w(px(1040.))
+                    .mx_auto()
+                    .px(px(grid.pad_x.max(16.0)))
+                    .py_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(cards)
+            })
+            .into_any_element()
     }
 
     fn render_book_card(
@@ -5513,49 +5531,40 @@ impl Yomu {
         } else {
             &self.library_scroll
         };
-        let bounce_id = if in_group {
-            "group-grid-bounce"
-        } else {
-            "all-manga-bounce"
-        };
 
-        gpui_kit::base::ScrollBounce::new(
-            bounce_id,
-            scroll_handle,
-            div()
-                .id(if in_group {
-                    "group-grid"
-                } else {
-                    "all-manga-container"
-                })
-                .track_scroll(scroll_handle)
-                .size_full()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .child(if is_grid {
-                    div()
-                        .px(px(grid.pad_x))
-                        .py_6()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap(px(grid.gap))
-                        .children(cards)
-                } else {
-                    div()
-                        .w_full()
-                        .max_w(px(1040.))
-                        .mx_auto()
-                        .px(px(grid.pad_x.max(16.0)))
-                        .py_4()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .children(cards)
-                }),
-        )
-        .into_any_element()
+        div()
+            .id(if in_group {
+                "group-grid"
+            } else {
+                "all-manga-container"
+            })
+            .track_scroll(scroll_handle)
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .child(if is_grid {
+                div()
+                    .px(px(grid.pad_x))
+                    .py_6()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(grid.gap))
+                    .children(cards)
+            } else {
+                div()
+                    .w_full()
+                    .max_w(px(1040.))
+                    .mx_auto()
+                    .px(px(grid.pad_x.max(16.0)))
+                    .py_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(cards)
+            })
+            .into_any_element()
     }
 
     fn render_downloads_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -5655,6 +5664,7 @@ impl Yomu {
             }
             ui::sidebar::MainView::Details(id) => NavDestination::Details(id),
             ui::sidebar::MainView::Settings => {
+                self.library_scroll_controller.reset();
                 self.active_view = ui::sidebar::MainView::Settings;
                 cx.notify();
                 return;
@@ -5703,6 +5713,7 @@ impl Yomu {
                 self.active_view = ui::sidebar::MainView::Details(id.clone());
             }
         }
+        self.library_scroll_controller.reset();
         cx.notify();
     }
 
@@ -5710,21 +5721,24 @@ impl Yomu {
         self.sidebar_collapsed || window.viewport_size().width < px(720.)
     }
 
-    fn is_current_view_scrolled(&self) -> bool {
-        let scroll_handle = if self.open_group.is_some() {
-            &self.group_scroll
+    fn current_scroll_handle(&self) -> ScrollHandle {
+        if self.open_group.is_some() {
+            self.group_scroll.clone()
         } else {
             match self.active_view {
-                ui::sidebar::MainView::ContinueReading => &self.continue_reading_scroll,
-                ui::sidebar::MainView::AllManga => &self.library_scroll,
-                ui::sidebar::MainView::Collections => &self.collections_scroll,
-                ui::sidebar::MainView::History => &self.library_scroll,
-                ui::sidebar::MainView::Downloads => &self.library_scroll,
-                ui::sidebar::MainView::Details(_) => &self.details_scroll,
-                ui::sidebar::MainView::Settings => &self.settings_scroll,
+                ui::sidebar::MainView::ContinueReading => self.continue_reading_scroll.clone(),
+                ui::sidebar::MainView::AllManga => self.library_scroll.clone(),
+                ui::sidebar::MainView::Collections => self.collections_scroll.clone(),
+                ui::sidebar::MainView::History => self.library_scroll.clone(),
+                ui::sidebar::MainView::Downloads => self.library_scroll.clone(),
+                ui::sidebar::MainView::Details(_) => self.details_scroll.clone(),
+                ui::sidebar::MainView::Settings => self.settings_scroll.clone(),
             }
-        };
-        scroll_handle.offset().y < px(-2.0)
+        }
+    }
+
+    fn is_current_view_scrolled(&self) -> bool {
+        self.current_scroll_handle().offset().y < px(-2.0)
     }
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -6493,7 +6507,19 @@ impl Render for Yomu {
         // ask for another frame while something is actually moving.
         let now = Instant::now();
         let dt = self.frame_delta(now);
-        let animating = self.sync_reader(window, cx, dt);
+        let reader_animating = self.sync_reader(window, cx, dt);
+        let scroll_animating = if self.reader.is_none() {
+            let scroll_handle = self.current_scroll_handle();
+            let animations_enabled = self.animations_enabled();
+            self.library_scroll_controller
+                .check_stillness_timeout(now, animations_enabled);
+            let stepped = self.library_scroll_controller.step(now, &scroll_handle);
+            let awaiting = self.library_scroll_controller.is_awaiting_release();
+            stepped || awaiting
+        } else {
+            false
+        };
+        let animating = reader_animating || scroll_animating;
         if animating {
             self.last_frame = Some(now);
             window.request_animation_frame();

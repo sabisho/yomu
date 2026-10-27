@@ -11,6 +11,7 @@ pub mod library;
 pub mod menu;
 pub mod motion;
 pub mod pagecache;
+pub mod scroll;
 pub mod search;
 pub mod selection;
 pub mod util;

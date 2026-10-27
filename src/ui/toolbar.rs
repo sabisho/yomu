@@ -3,11 +3,11 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Sizable};
+use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::gpui::Anchor;
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -57,6 +57,7 @@ pub fn render_main_toolbar(
 
     div()
         .h(px(52.))
+        .flex_shrink_0()
         .w_full()
         .px_4()
         .when(props.sidebar_collapsed && cfg!(target_os = "macos"), |s| {
@@ -65,10 +66,12 @@ pub fn render_main_toolbar(
         .flex()
         .items_center()
         .justify_between()
-        .when(props.is_scrolled, |s| {
-            s.border_b_1().border_color(colors.border)
+        .border_b_1()
+        .border_color(if props.is_scrolled {
+            colors.border
+        } else {
+            colors.border.opacity(0.0)
         })
-        .when(!props.is_scrolled, |s| s.border_b_0())
         // Left: Sidebar toggle + Back navigation (visible only when inside a group/series)
         .child(
             div()
@@ -133,6 +136,7 @@ pub fn render_main_toolbar(
                                 .w_full()
                                 .max_w(px(400.))
                                 .min_w(px(140.))
+                                .flex_shrink_0()
                                 .rounded(props.radius)
                                 .border_1()
                                 .border_color(colors.border)
@@ -409,17 +413,20 @@ pub fn render_main_toolbar(
                                     ),
                             )
                         })
-                        // 3. Import Button: minimal plus (+) icon button with native dropdown menu
+                        // 3. Import Button: unified rounded-square button matching 28px toolbar controls
                         .when(props.show_import, |this| {
                             let on_import_files = on_import_files.clone();
                             let on_import_folder = on_import_folder.clone();
+                            // Clamping radius to 7.0px (25% of 28px) preserves the rounded-square
+                            // geometry and prevents degenerating into a circular disc under large/pill radii.
+                            let button_radius = px(f32::from(props.radius).min(7.0));
                             this.child(
                                 div().debug_selector(|| "add-files".into()).child(
                                     Button::new("add-files")
                                         .icon(IconName::Plus)
                                         .ghost()
-                                        .small()
-                                        .rounded(props.radius)
+                                        .with_size(Size::Size(px(28.)))
+                                        .rounded(ButtonRounded::Size(button_radius))
                                         .border_1()
                                         .border_color(colors.border)
                                         .bg(with_alpha(colors.surface, 0.6))

@@ -2189,6 +2189,54 @@ fn touchpad_flick_without_ended_event_triggers_inertia_on_linux(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn touchpad_flick_triggers_library_inertial_scroll_glide_on_linux(cx: &mut TestAppContext) {
+    let fx = fixture("library-inertia");
+    let (view, cx) = launch(&fx, cx);
+    view.update_in(cx, |this, _window, cx| {
+        for i in 0..30 {
+            let mut b = this.library.books()[0].clone();
+            b.id = format!("book_{i}");
+            this.library.add(b);
+        }
+        cx.notify();
+    });
+    settle_animations(&view, cx);
+
+    cx.simulate_event(MouseMoveEvent {
+        position: point(px(400.), px(300.)),
+        modifiers: Modifiers::default(),
+        pressed_button: None,
+    });
+
+    // Simulate event over the library cards area (e.g. card 0)
+    for _ in 0..4 {
+        cx.simulate_event(ScrollWheelEvent {
+            position: card(0),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-60.))),
+            touch_phase: TouchPhase::Moved,
+            modifiers: Modifiers::default(),
+        });
+    }
+
+    let offset_after_wheel = view.read_with(cx, |this, _| this.library_scroll.offset().y);
+    assert_eq!(offset_after_wheel, px(-240.));
+
+    // Advance time past stillness threshold (40ms) to trigger inertia launch
+    view.update_in(cx, |this, _window, cx| {
+        this.library_scroll_controller.kinetic.last_motion_time =
+            Some(Instant::now() - Duration::from_millis(40));
+        this.wake();
+        cx.notify();
+    });
+
+    settle_animations(&view, cx);
+
+    let final_offset = view.read_with(cx, |this, _| this.library_scroll.offset().y);
+    assert!(final_offset < offset_after_wheel);
+    assert!(!view.read_with(cx, |this, _| this.library_scroll_controller.is_animating()));
+}
+
+#[gpui_kit::test]
 fn touch_down_mid_inertia_cancels_immediately(cx: &mut TestAppContext) {
     let fx = fixture("wheel");
     let (view, cx) = launch(&fx, cx);

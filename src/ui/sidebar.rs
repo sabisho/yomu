@@ -154,9 +154,7 @@ pub fn render_sidebar(
                         ),
                 ),
         )
-        .child(gpui_kit::base::ScrollBounce::new(
-            "sidebar-scroll-bounce",
-            props.scroll_handle,
+        .child(
             div()
                 .id("sidebar-nav-scroll")
                 .track_scroll(props.scroll_handle)
@@ -201,7 +199,7 @@ pub fn render_sidebar(
                     Some(props.downloads_count),
                     props.current_section == SidebarSection::Downloads,
                 )),
-        ))
+        )
         // Settings bar at the bottom
         .child(
             div().p_3().flex().items_center().justify_end().child(

@@ -321,6 +321,33 @@ Settings uses active Kit themes rather than a Yomu palette. Tabs are open to fut
   - Enforced `self.animations_enabled()` (`!self.reduce_motion && !self.library.settings().disable_animations`) across popups (`animate_popup`), dialogs, and reader kinetic momentum gliding (`end_touch`). Essential scrolling functionality is never disabled.
   - System reduced-motion preference overrides user settings, greys out the toggle, and restores user preference when the system preference is removed.
 
+### 8. Deep Refactoring, GPUI Kit Native Architecture & Cross-Platform Momentum
+- **Import Button Redesign (`src/ui/toolbar.rs`):**
+  - Replaced the circular `Button::icon` with a 28px height, rounded-square button using `ButtonRounded::Size(px(f32::from(props.radius).min(7.0)))`.
+  - Harmonized geometry, padding, hover states, and border radius with neighboring toolbar segmented controls (`toolbar-grouping-segmented`, `toolbar-viewmode-segmented`, `toolbar-sidebar-toggle`).
+  - Preserved native `DropdownMenu` integration and accessibility/test selectors.
+- **Library View Extraction (`src/ui/library_view.rs`):**
+  - Extracted card, folder, and row rendering primitives from `src/main.rs` into `src/ui/library_view.rs`.
+  - Exported `render_book_card`, `render_book_list_row`, `render_folder_card`, `render_folder_list_row`, and `directory_groups`.
+  - Maintained complete visual, click handling, context-menu propagation, and testing selector parity while reducing `src/main.rs` complexity by hundreds of lines.
+- **Cross-Platform Momentum Scrolling (`src/scroll.rs`):**
+  - Created `#![forbid(unsafe_code)]` momentum scrolling coordinator `PlatformScrollController`.
+  - **macOS Preservation:** Respects macOS AppKit native momentum scroll stream (`has_native_momentum() = true`), preventing double-gliding or jitter.
+  - **Linux & Windows Fallback:** Implements velocity-tracked exponential decay for trackpad gestures using official `ScrollHandle` APIs and a 35ms stillness timeout for compositors omitting `TouchPhase::Ended`.
+  - Integrated into the root content container (`main-view-content`) and view router (`current_scroll_handle`), delivering smooth inertial momentum to All Manga, Group grid, History, Continue Reading, Collections, Details, and Settings.
+  - Resolved Linux frame loop dormancy: `handle_wheel` and `Render` keep the frame clock active during touchpad motion (`is_awaiting_release`), allowing the 35ms stillness detector to trigger and drive the decaying momentum glide to rest.
+  - Excised redundant `ScrollBounce` element wrappers across library views that previously intercepted `ScrollWheelEvent`s in `DispatchPhase::Capture` with `cx.stop_propagation()`, allowing continuous scroll gestures to bubble cleanly to `main-view-content`.
+  - Guarded boundary clamping in `PlatformScrollController::step()` against uninitialized/zero `max_offset` to prevent premature velocity cancellation on downward flicks.
+  - Documented explicit upstream tracking item: `TODO: Replace and refine cross-platform momentum scrolling using official GPUI/GPUI Kit support.`
+- **Toolbar Layout Stability & Squishing Fix (`src/ui/toolbar.rs` & `src/main.rs`):**
+  - Eliminated the dynamic `border_b_0` vs `border_b_1` box-sizing toggle that shifted toolbar elements vertically by 1px when scrolling. Replaced with persistent `border_b_1()` whose color transitions between `transparent` (at top) and `colors.border` (when scrolled), guaranteeing an invariant 51px content box and zero pixel displacement.
+  - Added `.flex_shrink_0()` to the toolbar and search bar wrapper and replaced `.h_full()` on `main-view-content` with `.flex_1().min_h_0()`, preventing flexbox from compressing toolbar elements during scroll overflow.
+- **Rust Safety & Performance Validation:**
+  - Enforced `#![forbid(unsafe_code)]` in all newly authored and refactored components.
+  - Zero clippy warnings across all workspace targets with `cargo clippy --all-targets`.
+  - Verified 100 library unit tests and 99 UI integration tests pass (0 failures).
+  - Benchmarked animation and decode math: per-frame animation math runs in 20 ns per frame; 460 animated frame paint cycles average 2.72 ms.
+
 ## Build and verification
 
 On the configured NixOS system, use `devenv shell` (or `nix develop`) before launching. Useful commands:

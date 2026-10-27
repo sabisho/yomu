@@ -211,18 +211,15 @@ pub fn render_settings_view(
         )
         // Right macOS Settings Content Pane
         .child(
-            gpui_kit::base::ScrollBounce::new(
-                "settings-scroll-bounce",
-                props.scroll_handle,
-                div()
-                    .id("settings-content-scroll")
-                    .track_scroll(props.scroll_handle)
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .rounded_r(props.radius)
-                    .overflow_hidden()
-                    .overflow_y_scroll()
+            div()
+                .id("settings-content-scroll")
+                .track_scroll(props.scroll_handle)
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .rounded_r(props.radius)
+                .overflow_hidden()
+                .overflow_y_scroll()
                     .px_7()
                     .py_6()
                     .flex()
@@ -306,9 +303,8 @@ pub fn render_settings_view(
                             on_reset_all_data,
                         ),
                     }),
-            ),
-        )
-        .into_any_element()
+            )
+            .into_any_element()
 }
 
 fn settings_card(colors: UiColors) -> Div {

@@ -448,12 +448,15 @@ impl Reader {
         }
 
         let mut motion_active = false;
-        if self
-            .kinetic
-            .check_stillness_timeout(Instant::now(), self.animate)
+        // On macOS, native momentum events are dispatched directly by the OS window server.
+        // Software stillness timeout and release tracking are reserved for Linux and Windows.
+        if !cfg!(target_os = "macos")
+            && self
+                .kinetic
+                .check_stillness_timeout(Instant::now(), self.animate)
         {
             // Started inertia from stillness
-        } else if self.kinetic.is_awaiting_release() {
+        } else if !cfg!(target_os = "macos") && self.kinetic.is_awaiting_release() {
             motion_active = true;
         }
 

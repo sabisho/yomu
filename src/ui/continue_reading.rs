@@ -85,19 +85,16 @@ pub fn render_continue_reading_view(
             .into_any_element();
     }
 
-    gpui_kit::base::ScrollBounce::new(
-        "continue-reading-scroll-bounce",
-        props.scroll_handle,
-        div()
-            .id("continue-reading-container")
-            .track_scroll(props.scroll_handle)
-            .size_full()
-            .overflow_y_scroll()
-            .px(props.pad_x)
-            .py_6()
-            .flex()
-            .flex_col()
-            .gap_6()
+    div()
+        .id("continue-reading-container")
+        .track_scroll(props.scroll_handle)
+        .size_full()
+        .overflow_y_scroll()
+        .px(props.pad_x)
+        .py_6()
+        .flex()
+        .flex_col()
+        .gap_6()
         // Section 1: Continue Reading
         .child(
             div()
@@ -374,7 +371,6 @@ pub fn render_continue_reading_view(
                         .gap(props.recent_gap)
                         .children(props.recent_cards),
                 ),
-        ),
-    )
-    .into_any_element()
+        )
+        .into_any_element()
 }

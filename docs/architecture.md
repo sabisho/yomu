@@ -19,7 +19,8 @@ GPUI Kit window / Yomu (src/main.rs)
 | Module | Responsibility | Important boundaries |
 |---|---|---|
 | `main.rs` | GPUI Kit app/window, state router (`MainView`), key/mouse dispatch, overlays/dialogs, rendering two-pane shell and reader, background-task coordination | UI integration layer; routes between persistent two-pane shell (`render_two_pane_shell`) and immersive reader (`render_reader`). Navigation history (`nav_history`) supports back/forward navigation. |
-| `ui/` | Modular GPUI Kit view components conforming to macOS HIG design board | Submodules: `sidebar` (navigation & window controls), `toolbar` (history, search badge, view modes, import), `continue_reading` (hero & queue), `details` (manga detail sheet), `collections_view` (smart & user collections), `settings_view` (6-tab preferences), `components` (stat badges, tags). |
+| `ui/` | Modular GPUI Kit view components conforming to macOS HIG design board | Submodules: `sidebar` (navigation & window controls), `toolbar` (history, search badge, view modes, import), `library_view` (cards, folders, list rows), `continue_reading` (hero & queue), `details` (manga detail sheet), `collections_view` (smart & user collections), `settings_view` (6-tab preferences), `components` (stat badges, tags), `reader` (immersive reader views). |
+| `scroll.rs` | Cross-platform momentum scrolling coordinator | Abstracts platform-specific wheel/touchpad momentum handling via `PlatformScrollController`. Preserves native macOS AppKit momentum without double-layering; provides safe, deterministic kinetic glide on Linux and Windows using official `ScrollHandle` APIs. |
 | `collections.rs` | Custom user collections model and smart collection query primitives | Decoupled from book disk storage. Deleting a collection only deletes list groupings, never user comic files. |
 | `archive.rs` | Enumerate and read CBZ/ZIP pages or images in folders | Filters supported image names, ignores hidden/resource-fork files, natural-sorts names, limits archive page inflation. Source types are `Archive` and `Folder`. |
 | `imaging.rs` | Decode supported images, scale for display, create JPEG covers | No gpui dependency. Decoded pixel buffers are BGRA for gpui; original dimensions are retained for layout. Has dimension guardrails. |
@@ -83,6 +84,23 @@ Reader and library preferences currently live in `library.json`. `Settings::from
 `vim::Vim` parses tokens and command-line text into `Action`s; `main.rs` applies actions. `layout.rs` calculates fit/zoom/pan; `motion.rs` advances transitions and scroll using elapsed frame time. Respect the environment/desktop reduced-motion policy as well as the stored animation preference.
 
 Continuous mode is owned by `Reader` and persisted in `Settings`. It stacks page images vertically at the current viewport width, keeps known source dimensions separately from evictable decoded textures, estimates unknown pages as portrait until decode completes, and updates the saved current page as the viewport crosses pages. Cache retention follows the visible range plus nearby pages, subject to the existing decoded-memory budget. Webcomics mode is a persisted override that forces this layout and sets the inter-page gap to zero; turning it off restores the saved continuous/single-page preference. Single-page mode retains page-turn behavior.
+
+### Cross-Platform Momentum Scrolling (`src/scroll.rs`)
+
+Scrolling responsiveness differs across platforms due to operating system event architectures:
+- **macOS**: AppKit natively generates a synthetic stream of `ScrollWheelEvent`s with `TouchPhase::Moved` during momentum glides. Interposing a custom kinetic loop on macOS would double-glide or fight the native momentum curve. On macOS, `PlatformScrollController` delegates directly to GPUI Kit's native scroll handling (`has_native_momentum() = true`).
+- **Linux (Wayland/X11) & Windows**: GPUI delivers raw touchpad scroll deltas with `TouchPhase::Moved`, but compositors and OS drivers often omit synthetic momentum events once fingers lift from the trackpad, or omit `TouchPhase::Ended`. On these platforms, `PlatformScrollController` tracks recent drag velocity and triggers an exponential kinetic decay upon gesture completion (detected via `TouchPhase::Ended` or a 35ms stillness timeout). The controller applies deltas directly to GPUI's official `ScrollHandle` and cancels immediately on mouse down or opposite-direction input.
+
+### TODO: Replace and refine cross-platform momentum scrolling using official GPUI/GPUI Kit support.
+
+The task explicitly requires:
+1. Monitoring official GPUI and GPUI Kit releases, documentation, and upstream changes for native momentum-scrolling support on Linux and Windows, as well as improvements to the existing macOS implementation.
+2. Reassessing the temporary Linux/Windows fallback when the official APIs become available.
+3. Replacing the fallback with the official implementation wherever appropriate.
+4. Using the official API consistently across platforms while preserving platform-native behavior and user scrolling preferences.
+5. Removing obsolete fallback code and redundant abstractions after migration.
+6. Testing mouse wheels, trackpads, momentum decay, scrolling responsiveness, and interaction with scrollbars, focus, gestures, and reader controls across all supported platforms.
+7. Verifying that the official solution meets or exceeds the smoothness, precision, and efficiency of the temporary implementation.
 
 ## Invariants worth preserving
 
