@@ -66,7 +66,7 @@ use ui::library_view::{
 };
 use ui::overlays::{
     BookMenu, ConfirmAction, ConfirmDialog, LibraryMenu, Overlay, PropertiesDialog, SeriesDialog,
-    SettingsTab,
+    SettingsTab, command_suggestions,
 };
 use ui::reader::{Drag, Page, Reader, ReaderSyncOutcome, WheelParams, viewport_of};
 #[allow(unused_imports)]
@@ -5255,311 +5255,64 @@ impl Yomu {
 
     fn render_command_box(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let input = self.cmdline_text()?;
-        let suggestions = command_suggestions(input, &self.custom_themes);
-        let border_px = self.border_px();
-        let rounding_lg = self.radius_lg_px();
-        let rounding_md = self.radius_px();
-        let inner_radius = if border_px > 0.0 {
-            (rounding_lg - border_px).max(0.0)
-        } else {
-            rounding_lg
+        let style = self.overlay_style(self.colors.surface);
+        let yomu = cx.entity();
+
+        let yomu_close = yomu.clone();
+        let on_close = move |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+            yomu_close.update(cx, |this, cx| this.cancel_cmdline(cx));
         };
 
-        let mut prompt = div()
-            .id("command-box-panel")
-            .w(px(560.))
-            .max_w(px(700.))
-            .flex()
-            .flex_col()
-            .rounded(px(rounding_lg))
-            .overflow_hidden()
-            .when(border_px > 0.0, |this| {
-                this.border(px(border_px)).border_color(self.colors.accent)
-            })
-            .bg(self.colors.surface)
-            .shadow_xl()
-            .text_sm()
-            .text_color(self.colors.foreground)
-            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                cx.stop_propagation()
-            })
-            .on_mouse_down(MouseButton::Right, |_: &MouseDownEvent, _, cx| {
-                cx.stop_propagation()
-            });
-
-        // Top child: Command input row
-        let mut input_row = div()
-            .id("command-box-input")
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_4()
-            .py_3()
-            .rounded_t(px(inner_radius))
-            .when(suggestions.is_empty(), |this| {
-                this.rounded_b(px(inner_radius))
-            })
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.colors.accent)
-                    .text_base()
-                    .child(":"),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_color(self.colors.foreground)
-                    .child(format!("{input}▏")),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(self.colors.muted)
-                    .child("↑↓ select · Tab complete · Enter run · Esc cancel"),
-            );
-
-        if !suggestions.is_empty() {
-            input_row = input_row.border_b_1().border_color(self.colors.border);
-        }
-        prompt = prompt.child(input_row);
-
-        // Bottom child: Completion suggestions (if any)
-        if !suggestions.is_empty() {
-            let mut rows = div()
-                .id("command-box-suggestions")
-                .flex()
-                .flex_col()
-                .p_1()
-                .rounded_b(px(inner_radius))
-                .max_h(px(320.))
-                .overflow_y_scroll();
-
-            let item_radius = rounding_md.min(inner_radius);
-            for (index, (completion, label, description)) in suggestions.iter().enumerate() {
-                let selected = index == self.command_selection;
-                let completion = completion.clone();
-                rows = rows.child(
-                    div()
-                        .id(SharedString::from(format!("command-suggestion-{index}")))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_4()
-                        .px_3()
-                        .py(px(6.))
-                        .rounded(px(item_radius))
-                        .cursor_pointer()
-                        .when(border_px > 0.0 || selected, |this| {
-                            this.border(px(border_px.max(1.0)))
-                                .border_color(if selected {
-                                    with_alpha(self.colors.accent, 0.70)
-                                } else {
-                                    with_alpha(self.colors.accent, 0.0)
-                                })
-                        })
-                        .when(selected, |row| row.bg(with_alpha(self.colors.accent, 0.20)))
-                        .hover(|row| row.bg(with_alpha(self.colors.accent, 0.15)))
-                        .child(
-                            div()
-                                .font_weight(if selected {
-                                    FontWeight::SEMIBOLD
-                                } else {
-                                    FontWeight::NORMAL
-                                })
-                                .text_color(if selected {
-                                    self.colors.accent
-                                } else {
-                                    self.colors.foreground
-                                })
-                                .child(label.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_right()
-                                .text_xs()
-                                .text_color(self.colors.muted)
-                                .truncate()
-                                .child(*description),
-                        )
-                        .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
-                            if this.command_selection != index {
-                                this.command_selection = index;
-                                if let Some(draft) = this.cmdline_text().map(str::to_owned) {
-                                    this.sync_theme_preview(&draft, cx);
-                                }
-                                cx.notify();
-                            }
-                        }))
-                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            let is_complete = !completion.ends_with(' ');
-                            this.replace_cmdline(completion.clone());
-                            if is_complete {
-                                let vp = viewport_of(window);
-                                let actions = if let Some(reader) = this.reader.as_mut() {
-                                    reader.vim.feed("enter")
-                                } else {
-                                    this.library_vim.feed("enter")
-                                };
-                                this.command_selection = 0;
-                                this.theme_before_preview = None;
-                                for action in actions {
-                                    this.apply(action, vp, window, cx);
-                                }
-                            } else {
-                                this.command_selection = 0;
-                                if let Some(draft) = this.cmdline_text().map(str::to_owned) {
-                                    this.sync_theme_preview(&draft, cx);
-                                }
-                            }
-                            cx.notify();
-                        })),
-                );
-            }
-            prompt = prompt.child(rows);
-        }
-
-        let scrim = div()
-            .id("command-box-scrim")
-            .occlude()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(with_alpha(overlay_shade(self.colors), 0.40))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| this.cancel_cmdline(cx)),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| this.cancel_cmdline(cx)),
-            )
-            .child(ui::overlays::animate_popup(
-                "command-prompt-popup",
-                self.animations_enabled(),
-                prompt,
-            ));
-
-        Some(deferred(scrim).with_priority(3).into_any_element())
-    }
-}
-
-/// Suggestions for the reader's vim `:` command box:
-/// returns (completed command text, display label, short explanation).
-fn command_suggestions(
-    input: &str,
-    custom_themes: &HashMap<String, Rc<ThemeConfig>>,
-) -> Vec<(String, String, &'static str)> {
-    const COMMANDS: &[(&str, &str)] = &[
-        ("fit", "Choose page fit mode"),
-        ("zoom", "Set zoom percentage or reset"),
-        ("animate", "Toggle page animations"),
-        ("continuous", "Toggle continuous scrolling"),
-        ("webcomics", "Toggle gapless webcomics mode"),
-        ("remember-zoom", "Toggle retaining zoom across books"),
-        ("theme", "Change color theme"),
-        ("goto", "Jump to a page number"),
-        ("mark", "Set a letter mark"),
-        ("settings", "Open Settings"),
-        ("info", "Toggle page information"),
-        ("help", "Show keyboard help"),
-        ("fullscreen", "Toggle fullscreen"),
-        ("q", "Return to the library"),
-        ("qa", "Quit yomu"),
-    ];
-    const FITS: &[(&str, &str)] = &[
-        ("page", "Fit the whole page"),
-        ("width", "Fit the page width"),
-        ("height", "Fit the page height"),
-        ("original", "Show at original size"),
-    ];
-    const TOGGLES: &[(&str, &str)] = &[("on", "Enable"), ("off", "Disable")];
-    const ZOOM: &[(&str, &str)] = &[
-        ("reset", "Reset zoom"),
-        ("150", "Set zoom to 150% (edit the number as needed)"),
-    ];
-
-    let trimmed = input.trim_start();
-    let mut words = trimmed.split_whitespace();
-    let command = words.next().unwrap_or_default();
-    let has_separator = trimmed.ends_with(char::is_whitespace);
-    if let Some((_, _)) = COMMANDS.iter().find(|(name, _)| *name == command)
-        && (has_separator || input.contains(' '))
-    {
-        if command == "theme" {
-            let partial = trimmed
-                .strip_prefix(command)
-                .unwrap_or("")
-                .trim_start()
-                .to_lowercase();
-            let mut themes: Vec<(String, &'static str)> = Vec::new();
-            for (name, config) in &*BUILT_IN_THEMES {
-                let desc = match config.mode {
-                    gpui_kit::component::ThemeMode::Light => "Light theme",
-                    gpui_kit::component::ThemeMode::Dark => "Dark theme",
-                };
-                themes.push((name.clone(), desc));
-            }
-            for (name, config) in custom_themes {
-                if !BUILT_IN_THEMES.contains_key(name) {
-                    let desc = match config.mode {
-                        gpui_kit::component::ThemeMode::Light => "Custom light theme",
-                        gpui_kit::component::ThemeMode::Dark => "Custom dark theme",
-                    };
-                    themes.push((name.clone(), desc));
+        let yomu_select = yomu.clone();
+        let on_select = move |index: usize, _window: &mut Window, cx: &mut App| {
+            yomu_select.update(cx, |this, cx| {
+                if this.command_selection != index {
+                    this.command_selection = index;
+                    if let Some(draft) = this.cmdline_text().map(str::to_owned) {
+                        this.sync_theme_preview(&draft, cx);
+                    }
+                    cx.notify();
                 }
-            }
-            themes.sort_by_key(|a| a.0.to_lowercase());
-            return themes
-                .into_iter()
-                .filter(|(name, _)| {
-                    partial.is_empty()
-                        || name.to_lowercase().starts_with(&partial)
-                        || name.to_lowercase().contains(&partial)
-                })
-                .map(|(name, description)| (format!("{command} {name}"), name, description))
-                .collect();
-        }
-
-        let args = if command == "fit" {
-            FITS
-        } else if matches!(
-            command,
-            "animate" | "continuous" | "webcomics" | "remember-zoom"
-        ) {
-            TOGGLES
-        } else if command == "zoom" {
-            ZOOM
-        } else {
-            &[]
+            });
         };
-        let partial = words.next().unwrap_or_default();
-        return args
-            .iter()
-            .filter(|(value, _)| value.starts_with(partial))
-            .map(|(value, description)| {
-                (
-                    format!("{command} {value}"),
-                    (*value).to_string(),
-                    *description,
-                )
-            })
-            .collect();
-    }
 
-    let prefix = if has_separator { "" } else { command };
-    COMMANDS
-        .iter()
-        .filter(|(name, _)| name.starts_with(prefix))
-        .take(8)
-        .map(|(name, description)| (format!("{name} "), (*name).to_string(), *description))
-        .collect()
+        let yomu_submit = yomu.clone();
+        let on_submit = move |completion: String, window: &mut Window, cx: &mut App| {
+            let is_complete = !completion.ends_with(' ');
+            yomu_submit.update(cx, |this, cx| {
+                this.replace_cmdline(completion.clone());
+                if is_complete {
+                    let vp = viewport_of(window);
+                    let actions = if let Some(reader) = this.reader.as_mut() {
+                        reader.vim.feed("enter")
+                    } else {
+                        this.library_vim.feed("enter")
+                    };
+                    this.command_selection = 0;
+                    this.theme_before_preview = None;
+                    for action in actions {
+                        this.apply(action, vp, window, cx);
+                    }
+                } else {
+                    this.command_selection = 0;
+                    if let Some(draft) = this.cmdline_text().map(str::to_owned) {
+                        this.sync_theme_preview(&draft, cx);
+                    }
+                }
+                cx.notify();
+            });
+        };
+
+        Some(ui::overlays::render_command_box(
+            input,
+            self.command_selection,
+            &self.custom_themes,
+            style,
+            on_close,
+            on_select,
+            on_submit,
+        ))
+    }
 }
 
 impl Render for Yomu {

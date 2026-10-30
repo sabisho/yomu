@@ -1,11 +1,13 @@
 //! Overlay definitions and rendering: menus, dialogs, settings tabs, and modal states.
 
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::{Icon, ThemeConfig};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Anchor, Animation, AnimationExt, AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement,
@@ -15,7 +17,7 @@ use gpui_kit::{
 use yomu::menu::{BookAction, Entry, Item};
 
 use crate::ui::components::{ButtonKind, overlay_shade, panel_button, with_alpha};
-use crate::ui::theme::UiColors;
+use crate::ui::theme::{BUILT_IN_THEMES, UiColors};
 
 #[derive(Clone)]
 pub struct BookMenu {
@@ -808,4 +810,279 @@ pub fn render_library_menu(
     )
     .with_priority(2)
     .into_any_element()
+}
+
+/// Suggestions for the reader's vim `:` command box:
+/// returns (completed command text, display label, short explanation).
+pub fn command_suggestions(
+    input: &str,
+    custom_themes: &HashMap<String, Rc<ThemeConfig>>,
+) -> Vec<(String, String, &'static str)> {
+    const COMMANDS: &[(&str, &str)] = &[
+        ("fit", "Choose page fit mode"),
+        ("zoom", "Set zoom percentage or reset"),
+        ("animate", "Toggle page animations"),
+        ("continuous", "Toggle continuous scrolling"),
+        ("webcomics", "Toggle gapless webcomics mode"),
+        ("remember-zoom", "Toggle retaining zoom across books"),
+        ("theme", "Change color theme"),
+        ("goto", "Jump to a page number"),
+        ("mark", "Set a letter mark"),
+        ("settings", "Open Settings"),
+        ("info", "Toggle page information"),
+        ("help", "Show keyboard help"),
+        ("fullscreen", "Toggle fullscreen"),
+        ("q", "Return to the library"),
+        ("qa", "Quit yomu"),
+    ];
+    const FITS: &[(&str, &str)] = &[
+        ("page", "Fit the whole page"),
+        ("width", "Fit the page width"),
+        ("height", "Fit the page height"),
+        ("original", "Show at original size"),
+    ];
+    const TOGGLES: &[(&str, &str)] = &[("on", "Enable"), ("off", "Disable")];
+    const ZOOM: &[(&str, &str)] = &[
+        ("reset", "Reset zoom"),
+        ("150", "Set zoom to 150% (edit the number as needed)"),
+    ];
+
+    let trimmed = input.trim_start();
+    let mut words = trimmed.split_whitespace();
+    let command = words.next().unwrap_or_default();
+    let has_separator = trimmed.ends_with(char::is_whitespace);
+    if let Some((_, _)) = COMMANDS.iter().find(|(name, _)| *name == command)
+        && (has_separator || input.contains(' '))
+    {
+        if command == "theme" {
+            let partial = trimmed
+                .strip_prefix(command)
+                .unwrap_or("")
+                .trim_start()
+                .to_lowercase();
+            let mut themes: Vec<(String, &'static str)> = Vec::new();
+            for (name, config) in &*BUILT_IN_THEMES {
+                let desc = match config.mode {
+                    gpui_kit::component::ThemeMode::Light => "Light theme",
+                    gpui_kit::component::ThemeMode::Dark => "Dark theme",
+                };
+                themes.push((name.clone(), desc));
+            }
+            for (name, config) in custom_themes {
+                if !BUILT_IN_THEMES.contains_key(name) {
+                    let desc = match config.mode {
+                        gpui_kit::component::ThemeMode::Light => "Custom light theme",
+                        gpui_kit::component::ThemeMode::Dark => "Custom dark theme",
+                    };
+                    themes.push((name.clone(), desc));
+                }
+            }
+            themes.sort_by_key(|a| a.0.to_lowercase());
+            return themes
+                .into_iter()
+                .filter(|(name, _)| name.to_lowercase().starts_with(&partial))
+                .map(|(name, desc)| (format!("theme {name}"), name, desc))
+                .collect();
+        }
+
+        let options: &[(&str, &str)] = match command {
+            "fit" => FITS,
+            "animate" | "continuous" | "webcomics" | "remember-zoom" => TOGGLES,
+            "zoom" => ZOOM,
+            _ => &[],
+        };
+        let partial = trimmed
+            .strip_prefix(command)
+            .unwrap_or("")
+            .trim_start()
+            .to_lowercase();
+        return options
+            .iter()
+            .filter(|(choice, _)| choice.starts_with(&partial))
+            .map(|(choice, desc)| (format!("{command} {choice}"), choice.to_string(), *desc))
+            .collect();
+    }
+
+    COMMANDS
+        .iter()
+        .filter(|(name, _)| name.starts_with(command))
+        .map(|(name, desc)| {
+            let space = if matches!(*name, "q" | "qa" | "help" | "settings" | "info") {
+                ""
+            } else {
+                " "
+            };
+            (format!("{name}{space}"), name.to_string(), *desc)
+        })
+        .collect()
+}
+
+pub fn render_command_box(
+    input: &str,
+    command_selection: usize,
+    custom_themes: &HashMap<String, Rc<ThemeConfig>>,
+    style: OverlayStyle,
+    on_close: impl Fn(&MouseDownEvent, &mut Window, &mut App) + Clone + 'static,
+    on_select: impl Fn(usize, &mut Window, &mut App) + Clone + 'static,
+    on_submit: impl Fn(String, &mut Window, &mut App) + Clone + 'static,
+) -> AnyElement {
+    let suggestions = command_suggestions(input, custom_themes);
+    let border_px = style.border_px;
+    let rounding_lg = style.rounding_lg;
+    let rounding_md = style.radius_px;
+    let inner_radius = if border_px > 0.0 {
+        (rounding_lg - border_px).max(0.0)
+    } else {
+        rounding_lg
+    };
+
+    let mut prompt = div()
+        .id("command-box-panel")
+        .w(px(560.))
+        .max_w(px(700.))
+        .flex()
+        .flex_col()
+        .rounded(px(rounding_lg))
+        .overflow_hidden()
+        .when(border_px > 0.0, |this| {
+            this.border(px(border_px)).border_color(style.colors.accent)
+        })
+        .bg(style.colors.surface)
+        .shadow_xl()
+        .text_sm()
+        .text_color(style.colors.foreground)
+        .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+            cx.stop_propagation()
+        })
+        .on_mouse_down(MouseButton::Right, |_: &MouseDownEvent, _, cx| {
+            cx.stop_propagation()
+        });
+
+    let mut input_row = div()
+        .id("command-box-input")
+        .flex()
+        .items_center()
+        .gap_3()
+        .px_4()
+        .py_3()
+        .rounded_t(px(inner_radius))
+        .when(suggestions.is_empty(), |this| {
+            this.rounded_b(px(inner_radius))
+        })
+        .child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(style.colors.accent)
+                .text_base()
+                .child(":"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(style.colors.foreground)
+                .child(format!("{input}▏")),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(style.colors.muted)
+                .child("↑↓ select · Tab complete · Enter run · Esc cancel"),
+        );
+
+    if !suggestions.is_empty() {
+        input_row = input_row.border_b_1().border_color(style.colors.border);
+    }
+    prompt = prompt.child(input_row);
+
+    if !suggestions.is_empty() {
+        let mut rows = div()
+            .id("command-box-suggestions")
+            .flex()
+            .flex_col()
+            .p_1()
+            .rounded_b(px(inner_radius))
+            .max_h(px(320.))
+            .overflow_y_scroll();
+
+        let item_radius = rounding_md.min(inner_radius);
+        for (index, (completion, label, description)) in suggestions.iter().enumerate() {
+            let selected = index == command_selection;
+            let completion = completion.clone();
+            let on_select_item = on_select.clone();
+            let on_submit_item = on_submit.clone();
+            rows = rows.child(
+                div()
+                    .id(SharedString::from(format!("command-suggestion-{index}")))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .px_3()
+                    .py(px(6.))
+                    .rounded(px(item_radius))
+                    .cursor_pointer()
+                    .when(border_px > 0.0 || selected, |this| {
+                        this.border(px(border_px.max(1.0)))
+                            .border_color(if selected {
+                                with_alpha(style.colors.accent, 0.70)
+                            } else {
+                                with_alpha(style.colors.accent, 0.0)
+                            })
+                    })
+                    .when(selected, |row| {
+                        row.bg(with_alpha(style.colors.accent, 0.20))
+                    })
+                    .hover(|row| row.bg(with_alpha(style.colors.accent, 0.15)))
+                    .child(
+                        div()
+                            .font_weight(if selected {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(if selected {
+                                style.colors.accent
+                            } else {
+                                style.colors.foreground
+                            })
+                            .child(label.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_right()
+                            .text_xs()
+                            .text_color(style.colors.muted)
+                            .truncate()
+                            .child(*description),
+                    )
+                    .on_mouse_move(move |_, window, cx| on_select_item(index, window, cx))
+                    .on_click(move |_, window, cx| on_submit_item(completion.clone(), window, cx)),
+            );
+        }
+        prompt = prompt.child(rows);
+    }
+
+    let on_close_right = on_close.clone();
+    let scrim = div()
+        .id("command-box-scrim")
+        .occlude()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(with_alpha(overlay_shade(style.colors), 0.40))
+        .on_mouse_down(MouseButton::Left, on_close)
+        .on_mouse_down(MouseButton::Right, on_close_right)
+        .child(animate_popup(
+            "command-prompt-popup",
+            style.animations_enabled,
+            prompt,
+        ));
+
+    deferred(scrim).with_priority(3).into_any_element()
 }
