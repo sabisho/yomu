@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
@@ -228,24 +228,16 @@ pub fn render_continue_reading_view(
                                                         }),
                                                 )
                                                 .child(
-                                                    div()
-                                                        .id("hero-more-btn")
-                                                        .size(px(32.))
-                                                        .rounded(props.radius)
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .bg(with_alpha(colors.foreground, 0.06))
-                                                        .cursor_pointer()
+                                                    Button::new("hero-more-btn")
+                                                        .ghost()
+                                                        .with_size(Size::Size(px(32.)))
+                                                        .rounded(ButtonRounded::Size(props.radius))
+                                                        .tooltip("More options")
+                                                        .icon(IconName::Ellipsis)
                                                         .on_click(move |event: &ClickEvent, window, cx| {
                                                             let pos: (f32, f32) = (event.position().x.into(), event.position().y.into());
                                                             on_book_menu_hero(&hero_id_clone, pos, window, cx);
-                                                        })
-                                                        .child(
-                                                            Icon::new(IconName::Ellipsis)
-                                                                .size(px(16.))
-                                                                .text_color(colors.foreground),
-                                                        ),
+                                                        }),
                                                 ),
                                         ),
                                 )

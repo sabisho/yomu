@@ -6,8 +6,7 @@ use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, IconName, Sizable};
+use gpui_kit::component::{Icon, IconName, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, Div, FontWeight, InteractiveElement, Pixels, ScrollHandle,
@@ -226,30 +225,19 @@ pub fn render_manga_details(
                                         }),
                                 )
                                 .child(
-                                    div()
-                                        .id("details-more-menu-btn")
-                                        .size(px(32.))
-                                        .rounded(props.radius)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .bg(with_alpha(colors.foreground, 0.06))
-                                        .cursor_pointer()
-                                        .tooltip(|window, cx| {
-                                            Tooltip::new("More options").build(window, cx)
-                                        })
+                                    Button::new("details-more-menu-btn")
+                                        .ghost()
+                                        .with_size(Size::Size(px(32.)))
+                                        .rounded(ButtonRounded::Size(props.radius))
+                                        .tooltip("More options")
+                                        .icon(IconName::Ellipsis)
                                         .on_click(move |event: &ClickEvent, window, cx| {
                                             let pos: (f32, f32) = (
                                                 event.position().x.into(),
                                                 event.position().y.into(),
                                             );
                                             on_more_menu(&book_id_clone, pos, window, cx);
-                                        })
-                                        .child(
-                                            Icon::new(IconName::Ellipsis)
-                                                .size(px(16.))
-                                                .text_color(colors.foreground),
-                                        ),
+                                        }),
                                 ),
                         ),
                 ),

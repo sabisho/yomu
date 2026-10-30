@@ -96,6 +96,7 @@ pub mod tooltip;
 pub mod tree;
 
 pub use crate::Disableable;
+pub use crate::component_traits::Selectable;
 pub use element_ext::*;
 pub use global_state::GlobalState;
 pub use gpui_base::Root;

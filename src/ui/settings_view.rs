@@ -8,7 +8,6 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Disableable, Icon, Side, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -104,27 +103,16 @@ pub fn render_settings_view(
                         .child({
                             let is_macos = cfg!(target_os = "macos");
                             let is_windows = cfg!(target_os = "windows");
-                            let close_btn = div()
-                                .id("settings-close-btn")
-                                .size(px(20.))
-                                .rounded(px(4.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .hover(|s| s.bg(with_alpha(colors.foreground, 0.08)))
-                                .tooltip(|window, cx| {
-                                    Tooltip::new("Close settings (Esc)").build(window, cx)
-                                })
+                            let close_btn = Button::new("settings-close-btn")
+                                .ghost()
+                                .with_size(Size::Size(px(24.)))
+                                .rounded(ButtonRounded::Size(px(4.)))
+                                .tooltip("Close settings (Esc)")
+                                .icon(IconName::Close)
                                 .on_click({
                                     let on_close = on_close.clone();
                                     move |e, window, cx| on_close(e, window, cx)
-                                })
-                                .child(
-                                    Icon::new(IconName::Close)
-                                        .size(px(14.))
-                                        .text_color(colors.muted),
-                                );
+                                });
                             let title = div()
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)

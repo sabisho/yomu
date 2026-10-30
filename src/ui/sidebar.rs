@@ -1,9 +1,9 @@
 //! Navigation sidebar for Yomu's two-pane application shell.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
@@ -206,25 +206,13 @@ pub fn render_sidebar(
         // Settings bar at the bottom
         .child(
             div().p_3().flex().items_center().justify_end().child(
-                div()
-                    .id("sidebar-settings-btn")
-                    .size(px(28.))
-                    .rounded(props.radius)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(with_alpha(colors.foreground, 0.08)))
-                    .tooltip(|window, cx| {
-                        Tooltip::new(format!("Settings ({})", settings_shortcut_str()))
-                            .build(window, cx)
-                    })
-                    .on_click(on_settings)
-                    .child(
-                        Icon::new(IconName::Settings)
-                            .size(px(16.))
-                            .text_color(colors.muted),
-                    ),
+                Button::new("sidebar-settings-btn")
+                    .ghost()
+                    .with_size(Size::Size(px(28.)))
+                    .rounded(ButtonRounded::Size(props.radius))
+                    .tooltip(format!("Settings ({})", settings_shortcut_str()))
+                    .icon(IconName::Settings)
+                    .on_click(on_settings),
             ),
         )
         .into_any_element()

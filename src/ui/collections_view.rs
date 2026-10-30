@@ -3,7 +3,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Icon, Sizable};
+use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
@@ -287,24 +287,16 @@ pub fn render_collections_view(
                                         ),
                                 )
                                 .child(
-                                    div()
-                                        .id(menu_elem_id)
-                                        .size(px(28.))
-                                        .rounded(props.radius)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(with_alpha(colors.foreground, 0.1)))
+                                    Button::new(menu_elem_id)
+                                        .ghost()
+                                        .with_size(Size::Size(px(28.)))
+                                        .rounded(ButtonRounded::Size(props.radius))
+                                        .tooltip("Collection options")
+                                        .icon(IconName::Ellipsis)
                                         .on_click(move |event: &ClickEvent, window, cx| {
                                             let pos: (f32, f32) = (event.position().x.into(), event.position().y.into());
                                             on_collection_menu(&col_id_clone, pos, window, cx);
-                                        })
-                                        .child(
-                                            Icon::new(IconName::Ellipsis)
-                                                .size(px(14.))
-                                                .text_color(colors.muted),
-                                        ),
+                                        }),
                                 )
                         }))
                         .into_any_element()

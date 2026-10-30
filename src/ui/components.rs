@@ -73,6 +73,7 @@ pub fn with_alpha(color: gpui_kit::Hsla, alpha: f32) -> Rgba {
 
 /// Returns the search shortcut for the current OS.
 /// On macOS: "⌘K", on Linux / Windows: "Ctrl+K"
+#[allow(dead_code)]
 pub fn search_shortcut_str() -> &'static str {
     if cfg!(target_os = "macos") {
         "⌘K"

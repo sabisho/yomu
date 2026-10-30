@@ -16,7 +16,23 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 
 ---
 
-## 2. Recently Completed Work (Phases 0–4)
+## 2. Recently Completed Work (Phases 0–5)
+
+### Phase 5: GPUI Kit 0.8.1 Component Audit and Modernization
+- **Comprehensive Component Audit:** Systematically audited all UI modules (`toolbar`, `sidebar`, `settings_view`, `details`, `continue_reading`, `collections_view`, `library_view`, `overlays`, `components`).
+- **Icon Buttons Modernization:** Replaced manual `div()` icon buttons with official `gpui_kit::component::button::Button` using `.ghost().with_size(...)` across:
+  - Sidebar settings button (`sidebar-settings-btn`)
+  - Settings close button (`settings-close-btn`)
+  - Manga details more-options button (`details-more-menu-btn`)
+  - Continue Reading hero more-options button (`hero-more-btn`)
+  - Collections menu action button (`col-menu-<id>`)
+  - Toolbar sidebar toggle button (`toolbar-sidebar-toggle`)
+  - Toolbar group back navigation button (`group-back`)
+  - Toolbar client-side decoration close button (`toolbar-csd-close`)
+- **Segmented Controls Modernization:** Converted manual div switches for grouping (`toolbar-grouping-segmented`) and view mode (`toolbar-viewmode-segmented`) to official `ButtonGroup::new(...)` with `Button::new(...).ghost().selected(...)`. Re-exported `Selectable` trait in `vendor/gpui-component/src/lib.rs`.
+- **Keyboard Shortcut Badges:** Replaced manual text shortcut badge in the main search input with official `gpui_kit::component::kbd::Kbd`.
+- **Preserved Custom Routing & HIG Layout:** Preserved custom modal/overlay routing in `overlays.rs` and reader canvas architecture, maintaining complete test coverage without introducing unnecessary abstractions.
+- **Verification:** All 202 tests pass (100 core domain tests, 102 binary integration tests). Zero warnings under strict Clippy and rustc. Clean formatting under `cargo fmt`.
 
 ### Phase 4: GPUI Kit 0.8.1 Upgrade, Native Scrollbars & Platform Scroll Bounce
 - **GPUI Kit & Upstream Upgrade:** Upgraded `gpui-kit` to `=0.8.1` and upstream runtime to `gpui-pre = 0.3.10`.
