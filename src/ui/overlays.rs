@@ -1086,3 +1086,132 @@ pub fn render_command_box(
 
     deferred(scrim).with_priority(3).into_any_element()
 }
+
+pub const HELP: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Navigation",
+        &[
+            (
+                "j, k, h, l / Arrows",
+                "Scroll view by step; turns page at boundary.",
+            ),
+            ("Space / Shift+Space", "Scroll one viewport down or up."),
+            ("Ctrl+D / Ctrl+U", "Scroll half a viewport down or up."),
+            ("J, K / PgDn, PgUp", "Navigate to next or previous page."),
+            ("gg / G / [N]G", "Jump to first, last, or page N."),
+            ("m[a] / '[a] / ''", "Set mark, jump to mark, or jump back."),
+        ],
+    ),
+    (
+        "Display & Zoom",
+        &[
+            (
+                "a / s / zh / z1",
+                "Fit to page, width, height, or original size.",
+            ),
+            ("Tab", "Cycle through available fit modes."),
+            ("+ / - / 0 / zi / zo", "Zoom in, zoom out, or reset zoom."),
+            (
+                "Ctrl+Wheel / Pinch / Drag",
+                "Zoom at cursor position, or drag to pan.",
+            ),
+            ("zt / zz / zb", "Align view to top, center, or bottom."),
+            (
+                "v / w / i / f",
+                "Toggle continuous, webcomics, info, or fullscreen.",
+            ),
+        ],
+    ),
+    (
+        "Commands (:)",
+        &[
+            (
+                ":fit [mode]",
+                "Set fit mode (page, width, height, original).",
+            ),
+            (":zoom [pct]", "Set zoom percentage, or reset to fit."),
+            (":q / :qa", "Close current comic, or quit application."),
+            (
+                ":settings / Ctrl+,",
+                "Open settings and preferences dialog.",
+            ),
+            (
+                ":animate [on|off]",
+                "Enable or disable smooth page animations.",
+            ),
+            (
+                ":continuous [on|off]",
+                "Toggle stacked continuous reading mode.",
+            ),
+            (
+                ":webcomics [on|off]",
+                "Toggle gapless webcomics strip mode.",
+            ),
+            (":theme [name]", "Change color theme or cycle themes."),
+        ],
+    ),
+];
+
+pub fn help_overlay(colors: UiColors, border_px: f32, rounding_xl: f32) -> AnyElement {
+    let mut panel = div()
+        .w(px(600.))
+        .max_w_full()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_6()
+        .rounded(px(rounding_xl))
+        .when(border_px > 0.0, |this| {
+            this.border(px(border_px)).border_color(colors.border)
+        })
+        .bg(colors.surface)
+        .shadow_lg()
+        .text_sm();
+
+    for (title, rows) in HELP {
+        panel = panel.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.muted)
+                        .child(*title),
+                )
+                .children(rows.iter().map(|(keys, what)| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_between()
+                        .items_center()
+                        .gap_4()
+                        .child(div().text_color(colors.foreground).child(*what))
+                        .child(div().flex_none().text_color(colors.accent).child(*keys))
+                })),
+        );
+    }
+    panel = panel.child(
+        div()
+            .text_xs()
+            .text_color(colors.muted)
+            .child("Press ? or Esc to close"),
+    );
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(with_alpha(
+            overlay_shade(colors),
+            (0.5 + colors.widget_opacity * 0.15).min(0.65),
+        ))
+        .child(panel)
+        .into_any_element()
+}

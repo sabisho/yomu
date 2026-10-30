@@ -59,7 +59,7 @@ actions!(
 
 mod ui;
 
-use ui::components::{centered, overlay_shade, page_layer, pill, with_alpha};
+use ui::components::{centered, page_layer, pill, with_alpha};
 use ui::library_view::{
     BookCardProps, LibraryGroup, directory_groups, render_book_card, render_book_list_row,
     render_folder_card, render_folder_list_row,
@@ -5245,11 +5245,9 @@ impl Yomu {
             .child(top_bar)
             .child(left_chevron)
             .child(right_chevron)
-            .children(
-                reader
-                    .show_help
-                    .then(|| help_overlay(self.colors, self.border_px(), self.radius_xl_px())),
-            )
+            .children(reader.show_help.then(|| {
+                ui::overlays::help_overlay(self.colors, self.border_px(), self.radius_xl_px())
+            }))
             .into_any_element()
     }
 
@@ -5409,185 +5407,6 @@ impl Drop for Yomu {
                 }
             }
         }
-    }
-}
-
-// ----------------------------------------------------------------------------------------
-// Small helpers
-// ----------------------------------------------------------------------------------------
-
-const HELP: &[(&str, &[(&str, &str)])] = &[
-    (
-        "Navigation",
-        &[
-            (
-                "j, k, h, l / Arrows",
-                "Scroll view by step; turns page at boundary.",
-            ),
-            ("Space / Shift+Space", "Scroll one viewport down or up."),
-            ("Ctrl+D / Ctrl+U", "Scroll half a viewport down or up."),
-            ("J, K / PgDn, PgUp", "Navigate to next or previous page."),
-            ("gg / G / [N]G", "Jump to first, last, or page N."),
-            ("m[a] / '[a] / ''", "Set mark, jump to mark, or jump back."),
-        ],
-    ),
-    (
-        "Display & Zoom",
-        &[
-            (
-                "a / s / zh / z1",
-                "Fit to page, width, height, or original size.",
-            ),
-            ("Tab", "Cycle through available fit modes."),
-            ("+ / - / 0 / zi / zo", "Zoom in, zoom out, or reset zoom."),
-            (
-                "Ctrl+Wheel / Pinch / Drag",
-                "Zoom at cursor position, or drag to pan.",
-            ),
-            ("zt / zz / zb", "Align view to top, center, or bottom."),
-            (
-                "v / w / i / f",
-                "Toggle continuous, webcomics, info, or fullscreen.",
-            ),
-        ],
-    ),
-    (
-        "Commands (:)",
-        &[
-            (
-                ":fit [mode]",
-                "Set fit mode (page, width, height, original).",
-            ),
-            (":zoom [pct]", "Set zoom percentage, or reset to fit."),
-            (":q / :qa", "Close current comic, or quit application."),
-            (
-                ":settings / Ctrl+,",
-                "Open settings and preferences dialog.",
-            ),
-            (
-                ":animate [on|off]",
-                "Enable or disable smooth page animations.",
-            ),
-            (
-                ":continuous [on|off]",
-                "Toggle stacked continuous reading mode.",
-            ),
-            (
-                ":webcomics [on|off]",
-                "Toggle gapless webcomics strip mode.",
-            ),
-            (":theme [name]", "Change color theme or cycle themes."),
-        ],
-    ),
-];
-
-fn help_overlay(colors: UiColors, border_px: f32, rounding_xl: f32) -> AnyElement {
-    let mut panel = div()
-        .w(px(600.))
-        .max_w_full()
-        .flex()
-        .flex_col()
-        .gap_3()
-        .p_6()
-        .rounded(px(rounding_xl))
-        .when(border_px > 0.0, |this| {
-            this.border(px(border_px)).border_color(colors.border)
-        })
-        .bg(colors.surface)
-        .shadow_lg()
-        .text_sm();
-
-    for (title, rows) in HELP {
-        panel = panel.child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.muted)
-                        .child(*title),
-                )
-                .children(rows.iter().map(|(keys, what)| {
-                    div()
-                        .flex()
-                        .flex_row()
-                        .justify_between()
-                        .items_center()
-                        .gap_4()
-                        .child(div().text_color(colors.foreground).child(*what))
-                        .child(div().flex_none().text_color(colors.accent).child(*keys))
-                })),
-        );
-    }
-    panel = panel.child(
-        div()
-            .text_xs()
-            .text_color(colors.muted)
-            .child("Press ? or Esc to close"),
-    );
-
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(with_alpha(
-            overlay_shade(colors),
-            (0.5 + colors.widget_opacity * 0.15).min(0.65),
-        ))
-        .child(panel)
-        .into_any_element()
-}
-
-#[allow(dead_code)]
-fn icon_button(
-    id: &'static str,
-    label: &'static str,
-    icon: IconName,
-    colors: UiColors,
-    active: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let button = Button::new(id)
-        .accessibility_label(label)
-        .tooltip(label)
-        .rounded(ButtonRounded::Medium)
-        .small()
-        .ghost()
-        .outline()
-        .border_color(if active { colors.accent } else { colors.border })
-        .text_color(if active {
-            colors.accent
-        } else {
-            colors.foreground
-        })
-        .bg(colors.surface)
-        .cursor_pointer()
-        // Render the bundled SVG directly so its theme color is explicit. The
-        // Button icon convenience path inherits a color from Kit's component
-        // theme, which can be transparent against custom/translucent surfaces.
-        .child(Icon::new(icon).size_4().text_color(if active {
-            colors.accent
-        } else {
-            colors.foreground
-        }))
-        .on_click(on_click);
-    #[cfg(test)]
-    {
-        div()
-            .debug_selector(|| id.into())
-            .child(button)
-            .into_any_element()
-    }
-    #[cfg(not(test))]
-    {
-        button.into_any_element()
     }
 }
 
