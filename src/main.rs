@@ -62,6 +62,10 @@ mod ui;
 use ui::components::{
     ButtonKind, centered, overlay_shade, page_layer, panel_button, pill, with_alpha,
 };
+use ui::library_view::{
+    BookCardProps, LibraryGroup, directory_groups, render_book_card, render_book_list_row,
+    render_folder_card, render_folder_list_row,
+};
 use ui::overlays::{
     BookMenu, ConfirmAction, ConfirmDialog, LibraryMenu, Overlay, PropertiesDialog, SeriesDialog,
     SettingsTab,
@@ -100,63 +104,9 @@ enum Side {
     Right,
 }
 
-struct LibraryGroup<'a> {
-    key: String,
-    #[allow(dead_code)]
-    name: String,
-    first_seen: usize,
-    books: Vec<&'a Book>,
-}
-
 enum ImportEvent {
     Book(Book),
     Finished(library::ImportReport),
-}
-
-fn directory_groups<'a>(books: impl IntoIterator<Item = &'a Book>) -> Vec<LibraryGroup<'a>> {
-    let mut buckets: std::collections::BTreeMap<String, (String, usize, Vec<&'a Book>)> =
-        std::collections::BTreeMap::new();
-    for (index, book) in books.into_iter().enumerate() {
-        let manual_series = book
-            .series
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty());
-        let (key, name) = if let Some(series) = manual_series {
-            (
-                format!("series:{}", series.to_lowercase()),
-                series.to_string(),
-            )
-        } else {
-            let parent = book.path.parent().unwrap_or_else(|| Path::new("."));
-            let display = parent
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| parent.display().to_string());
-            (format!("directory:{}", parent.display()), display)
-        };
-        buckets
-            .entry(key)
-            .and_modify(|(_, _, members)| members.push(book))
-            .or_insert_with(|| (name, index, vec![book]));
-    }
-
-    let mut groups: Vec<_> = buckets
-        .into_iter()
-        .filter_map(|(key, (name, first_seen, members))| {
-            if members.len() < 2 {
-                return None;
-            }
-            Some(LibraryGroup {
-                key,
-                name,
-                first_seen,
-                books: members,
-            })
-        })
-        .collect();
-    groups.sort_by_key(|group| group.first_seen);
-    groups
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4799,136 +4749,44 @@ impl Yomu {
         let book_id = book.id.clone();
         let thumb_size = self.library.settings().thumbnail_size;
         let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
-        let display_title = book.title.clone();
-        let total = book.page_count;
-        let current = if book.opened {
-            book.current_page + 1
-        } else {
-            0
-        };
-        let progress = book.progress();
         let is_selected = self.selection.contains(&book.id);
         let border_px = self.border_px();
-        let inner_radius = (radius - px(border_px)).max(px(0.));
 
-        div()
-            .id(ElementId::from(SharedString::from(format!(
-                "manga-item-{}",
-                book.id
-            ))))
-            .w(px(card_w))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .rounded(radius)
-            .bg(if is_selected {
-                with_alpha(colors.accent, 0.15)
-            } else {
-                with_alpha(colors.surface, 0.6)
-            })
-            .when(border_px > 0.0 || is_selected, |s| {
-                let w = if is_selected {
-                    border_px.max(1.5)
-                } else {
-                    border_px
-                };
-                s.border(px(w)).border_color(if is_selected {
-                    colors.accent
-                } else {
-                    colors.border
-                })
-            })
-            .overflow_hidden()
-            .cursor_pointer()
-            .hover(|s| s.border_color(colors.accent).shadow_md())
-            .on_mouse_down(MouseButton::Right, {
-                let yomu = yomu.clone();
-                let book_id = book_id.clone();
-                move |event: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    yomu.update(cx, |this, cx| {
-                        this.open_context_menu(&book_id, event.position, window, cx);
-                    });
+        let yomu_click = yomu.clone();
+        let id_click = book_id.clone();
+        let on_click = move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+            let ctrl = event.modifiers().control || event.modifiers().platform;
+            let shift = event.modifiers().shift;
+            yomu_click.update(cx, |this, cx| {
+                if this.select_click(&id_click, ctrl, shift, cx) {
+                    return;
                 }
-            })
-            .on_click({
-                let yomu = yomu.clone();
-                let book_id = book_id.clone();
-                move |event: &ClickEvent, window, cx| {
-                    let ctrl = event.modifiers().control || event.modifiers().platform;
-                    let shift = event.modifiers().shift;
-                    yomu.update(cx, |this, cx| {
-                        if this.select_click(&book_id, ctrl, shift, cx) {
-                            return;
-                        }
-                        this.open_book(&book_id, window, cx);
-                    });
-                }
-            })
-            .child(
-                div()
-                    .id(ElementId::from(SharedString::from(format!(
-                        "manga-cover-{}",
-                        book.id
-                    ))))
-                    .relative()
-                    .w_full()
-                    .h(px(cover_h))
-                    .rounded_t(inner_radius)
-                    .bg(with_alpha(colors.foreground, 0.04))
-                    .overflow_hidden()
-                    .child(
-                        img(cover_path)
-                            .size_full()
-                            .rounded_t(inner_radius)
-                            .object_fit(gpui_kit::ObjectFit::Cover),
-                    )
-                    .children(is_selected.then(|| {
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full()
-                            .bg(with_alpha(colors.accent, 0.22))
-                    })),
-            )
-            .child(
-                div()
-                    .p_2p5()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.foreground)
-                            .truncate()
-                            .child(display_title),
-                    )
-                    .child(div().text_xs().text_color(colors.muted).truncate().child(
-                        if book.opened {
-                            format!("Ch. {current} of {total} · {:.0}%", progress * 100.0)
-                        } else {
-                            format!("{total} pages")
-                        },
-                    ))
-                    .children(book.opened.then(|| {
-                        div()
-                            .h(px(3.))
-                            .w_full()
-                            .rounded(radius)
-                            .bg(with_alpha(colors.foreground, 0.08))
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(relative(progress))
-                                    .rounded(radius)
-                                    .bg(colors.accent),
-                            )
-                    })),
-            )
-            .into_any_element()
+                this.open_book(&id_click, window, cx);
+            });
+        };
+
+        let yomu_right = yomu.clone();
+        let id_right = book_id;
+        let on_right_click = move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+            yomu_right.update(cx, |this, cx| {
+                this.open_context_menu(&id_right, event.position, window, cx);
+            });
+        };
+
+        render_book_card(
+            BookCardProps {
+                book,
+                cover_path,
+                card_w,
+                cover_h,
+                radius,
+                border_px,
+                is_selected,
+                colors,
+            },
+            on_click,
+            on_right_click,
+        )
     }
 
     fn render_book_list_row(
@@ -4941,230 +4799,40 @@ impl Yomu {
         let book_id = book.id.clone();
         let thumb_size = self.library.settings().thumbnail_size;
         let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
-        let display_title = book.title.clone();
-        let total = book.page_count;
-        let current = if book.opened {
-            book.current_page + 1
-        } else {
-            0
-        };
-        let progress = book.progress();
         let is_selected = self.selection.contains(&book.id);
         let border_px = self.border_px();
 
-        div()
-            .id(ElementId::from(SharedString::from(format!(
-                "manga-item-{}",
-                book.id
-            ))))
-            .w_full()
-            .h(px(64.))
-            .px_3p5()
-            .rounded(radius)
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .bg(if is_selected {
-                with_alpha(colors.accent, 0.15)
-            } else {
-                with_alpha(colors.surface, 0.5)
-            })
-            .when(border_px > 0.0 || is_selected, |s| {
-                let w = if is_selected {
-                    border_px.max(1.5)
-                } else {
-                    border_px
-                };
-                s.border(px(w)).border_color(if is_selected {
-                    colors.accent
-                } else {
-                    colors.border
-                })
-            })
-            .cursor_pointer()
-            .hover(|s| {
-                s.bg(if is_selected {
-                    with_alpha(colors.accent, 0.22)
-                } else {
-                    with_alpha(colors.surface, 0.8)
-                })
-                .border_color(colors.accent)
-            })
-            .on_mouse_down(MouseButton::Right, {
-                let yomu = yomu.clone();
-                let book_id = book_id.clone();
-                move |event: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    yomu.update(cx, |this, cx| {
-                        this.open_context_menu(&book_id, event.position, window, cx);
-                    });
+        let yomu_click = yomu.clone();
+        let id_click = book_id.clone();
+        let on_click = move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+            let ctrl = event.modifiers().control || event.modifiers().platform;
+            let shift = event.modifiers().shift;
+            yomu_click.update(cx, |this, cx| {
+                if this.select_click(&id_click, ctrl, shift, cx) {
+                    return;
                 }
-            })
-            .on_click({
-                let yomu = yomu.clone();
-                let book_id = book_id.clone();
-                move |event: &ClickEvent, window, cx| {
-                    let ctrl = event.modifiers().control || event.modifiers().platform;
-                    let shift = event.modifiers().shift;
-                    yomu.update(cx, |this, cx| {
-                        if this.select_click(&book_id, ctrl, shift, cx) {
-                            return;
-                        }
-                        this.open_book(&book_id, window, cx);
-                    });
-                }
-            })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .min_w_0()
-                    .flex_1()
-                    .children(is_selected.then(|| {
-                        div()
-                            .size(px(18.))
-                            .rounded(px(4.))
-                            .bg(colors.accent)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Icon::new(IconName::Check)
-                                    .size(px(12.))
-                                    .text_color(colors.accent_foreground),
-                            )
-                    }))
-                    .child(
-                        div()
-                            .id(ElementId::from(SharedString::from(format!(
-                                "manga-cover-{}",
-                                book.id
-                            ))))
-                            .w(px(36.))
-                            .h(px(50.))
-                            .flex_none()
-                            .rounded(px(self.radius_px().min(4.)))
-                            .bg(with_alpha(colors.foreground, 0.04))
-                            .overflow_hidden()
-                            .child(
-                                img(cover_path)
-                                    .size_full()
-                                    .rounded(px(self.radius_px().min(4.)))
-                                    .object_fit(gpui_kit::ObjectFit::Cover),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .min_w_0()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(colors.foreground)
-                                    .truncate()
-                                    .child(display_title),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_xs()
-                                    .text_color(colors.muted)
-                                    .children(book.series.as_deref().map(|s| {
-                                        div()
-                                            .px_1p5()
-                                            .py_0p5()
-                                            .rounded(px(3.))
-                                            .bg(with_alpha(colors.foreground, 0.06))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(colors.foreground)
-                                            .truncate()
-                                            .child(s.to_string())
-                                    }))
-                                    .child(div().truncate().child(if book.opened {
-                                        format!(
-                                            "Ch. {current} of {total} · {:.0}%",
-                                            progress * 100.0
-                                        )
-                                    } else {
-                                        format!("{total} pages")
-                                    })),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .flex_none()
-                    .children(book.opened.then(|| {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .w(px(90.))
-                                    .h(px(4.))
-                                    .rounded_full()
-                                    .bg(with_alpha(colors.foreground, 0.08))
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(relative(progress))
-                                            .rounded_full()
-                                            .bg(colors.accent),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .w(px(34.))
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(colors.muted)
-                                    .child(format!("{:.0}%", progress * 100.0)),
-                            )
-                    }))
-                    .child(if progress >= 1.0 {
-                        div()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_full()
-                            .bg(with_alpha(colors.accent, 0.15))
-                            .text_color(colors.accent)
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Completed")
-                    } else if book.opened {
-                        div()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_full()
-                            .bg(with_alpha(colors.foreground, 0.08))
-                            .text_color(colors.foreground)
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Reading")
-                    } else {
-                        div()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_full()
-                            .bg(with_alpha(colors.foreground, 0.04))
-                            .text_color(colors.muted)
-                            .text_xs()
-                            .child("Unread")
-                    }),
-            )
-            .into_any_element()
+                this.open_book(&id_click, window, cx);
+            });
+        };
+
+        let yomu_right = yomu.clone();
+        let id_right = book_id;
+        let on_right_click = move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+            yomu_right.update(cx, |this, cx| {
+                this.open_context_menu(&id_right, event.position, window, cx);
+            });
+        };
+
+        render_book_list_row(
+            book,
+            cover_path,
+            radius,
+            border_px,
+            is_selected,
+            colors,
+            on_click,
+            on_right_click,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5180,126 +4848,39 @@ impl Yomu {
         border_px: f32,
         yomu: &Entity<Self>,
     ) -> AnyElement {
-        let group_key = group_key.to_string();
-        let group_name = group_name.to_string();
-        let book_ids = book_ids.to_vec();
+        let yomu_click = yomu.clone();
+        let group_key_click = group_key.to_string();
+        let on_click = move |_event: &ClickEvent, _window: &mut Window, cx: &mut App| {
+            let key = group_key_click.clone();
+            yomu_click.update(cx, |this, cx| {
+                this.enter_group(key, cx);
+            });
+        };
 
-        div()
-            .id(SharedString::from(format!("folder-{}", group_key)))
-            .w_full()
-            .h(px(64.))
-            .px_3p5()
-            .rounded(radius)
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .bg(with_alpha(colors.surface, 0.5))
-            .when(border_px > 0.0, |s| {
-                s.border(px(border_px)).border_color(colors.border)
-            })
-            .cursor_pointer()
-            .hover(|s| {
-                s.bg(with_alpha(colors.surface, 0.8))
-                    .border_color(colors.accent)
-            })
-            .on_mouse_down(MouseButton::Right, {
-                let yomu = yomu.clone();
-                let group_key = group_key.clone();
-                let group_name = group_name.clone();
-                let book_ids = book_ids.clone();
-                move |event: &MouseDownEvent, _window, cx| {
-                    cx.stop_propagation();
-                    yomu.update(cx, |this, cx| {
-                        this.open_group_context_menu(
-                            &group_key,
-                            &group_name,
-                            &book_ids,
-                            event.position,
-                            cx,
-                        );
-                    });
-                }
-            })
-            .on_click({
-                let yomu = yomu.clone();
-                let group_key = group_key.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.enter_group(group_key.clone(), cx);
-                    });
-                }
-            })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .min_w_0()
-                    .flex_1()
-                    .child(
-                        div()
-                            .w(px(36.))
-                            .h(px(50.))
-                            .flex_none()
-                            .rounded(px(self.radius_px().min(4.)))
-                            .bg(with_alpha(colors.foreground, 0.04))
-                            .overflow_hidden()
-                            .child(
-                                img(cover_path)
-                                    .size_full()
-                                    .rounded(px(self.radius_px().min(4.)))
-                                    .object_fit(gpui_kit::ObjectFit::Cover),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .min_w_0()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .child(
-                                        Icon::new(IconName::Folder)
-                                            .size(px(14.))
-                                            .text_color(colors.accent),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(colors.foreground)
-                                            .truncate()
-                                            .child(group_name),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(colors.muted)
-                                    .child(format!("{count} volumes · Series folder")),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2p5()
-                    .flex_none()
-                    .child(ui::components::stat_badge(count, false, colors, radius))
-                    .child(
-                        Icon::new(IconName::ChevronRight)
-                            .size(px(16.))
-                            .text_color(colors.muted),
-                    ),
-            )
-            .into_any_element()
+        let yomu_right = yomu.clone();
+        let group_key_right = group_key.to_string();
+        let group_name_right = group_name.to_string();
+        let book_ids_right = book_ids.to_vec();
+        let on_right_click = move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+            let key = group_key_right.clone();
+            let name = group_name_right.clone();
+            let ids = book_ids_right.clone();
+            yomu_right.update(cx, |this, cx| {
+                this.open_group_context_menu(&key, &name, &ids, event.position, cx);
+            });
+        };
+
+        render_folder_list_row(
+            group_key,
+            group_name,
+            count,
+            cover_path,
+            radius,
+            border_px,
+            colors,
+            on_click,
+            on_right_click,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5316,98 +4897,42 @@ impl Yomu {
         colors: UiColors,
         yomu: &Entity<Self>,
     ) -> AnyElement {
-        let group_key = group_key.to_string();
-        let group_name = group_name.to_string();
-        let book_ids = book_ids.to_vec();
         let border_px = self.border_px();
-        let inner_radius = (radius - px(border_px)).max(px(0.));
+        let yomu_click = yomu.clone();
+        let group_key_click = group_key.to_string();
+        let on_click = move |_event: &ClickEvent, _window: &mut Window, cx: &mut App| {
+            let key = group_key_click.clone();
+            yomu_click.update(cx, |this, cx| {
+                this.enter_group(key, cx);
+            });
+        };
 
-        div()
-            .id(SharedString::from(format!("folder-{}", group_key)))
-            .w(px(card_w))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .rounded(radius)
-            .bg(with_alpha(colors.surface, 0.6))
-            .when(border_px > 0.0, |s| {
-                s.border(px(border_px)).border_color(colors.border)
-            })
-            .overflow_hidden()
-            .cursor_pointer()
-            .hover(|s| s.border_color(colors.accent).shadow_md())
-            .on_mouse_down(MouseButton::Right, {
-                let yomu = yomu.clone();
-                let group_key = group_key.clone();
-                let group_name = group_name.clone();
-                let book_ids = book_ids.clone();
-                move |event: &MouseDownEvent, _window, cx| {
-                    cx.stop_propagation();
-                    yomu.update(cx, |this, cx| {
-                        this.open_group_context_menu(
-                            &group_key,
-                            &group_name,
-                            &book_ids,
-                            event.position,
-                            cx,
-                        );
-                    });
-                }
-            })
-            .on_click({
-                let yomu = yomu.clone();
-                let group_key = group_key.clone();
-                move |_, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.enter_group(group_key.clone(), cx);
-                    });
-                }
-            })
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .h(px(cover_h))
-                    .rounded_t(inner_radius)
-                    .bg(with_alpha(colors.foreground, 0.04))
-                    .overflow_hidden()
-                    .child(
-                        img(cover_path)
-                            .size_full()
-                            .rounded_t(inner_radius)
-                            .object_fit(gpui_kit::ObjectFit::Cover),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top_2()
-                            .right_2()
-                            .child(ui::components::stat_badge(count, false, colors, radius)),
-                    ),
-            )
-            .child(
-                div()
-                    .p_2p5()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.foreground)
-                            .truncate()
-                            .child(group_name),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(colors.muted)
-                            .truncate()
-                            .child(format!("{count} volumes · Series")),
-                    ),
-            )
-            .into_any_element()
+        let yomu_right = yomu.clone();
+        let group_key_right = group_key.to_string();
+        let group_name_right = group_name.to_string();
+        let book_ids_right = book_ids.to_vec();
+        let on_right_click = move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+            let key = group_key_right.clone();
+            let name = group_name_right.clone();
+            let ids = book_ids_right.clone();
+            yomu_right.update(cx, |this, cx| {
+                this.open_group_context_menu(&key, &name, &ids, event.position, cx);
+            });
+        };
+
+        render_folder_card(
+            group_key,
+            group_name,
+            count,
+            cover_path,
+            card_w,
+            cover_h,
+            radius,
+            border_px,
+            colors,
+            on_click,
+            on_right_click,
+        )
     }
 
     fn render_all_manga_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

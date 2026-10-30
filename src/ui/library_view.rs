@@ -1,7 +1,6 @@
 //! Library card, folder, and list row rendering primitives for Yomu's two-pane application shell.
 
 #![allow(clippy::too_many_arguments)]
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
@@ -180,38 +179,34 @@ pub fn render_book_card(
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(colors.foreground)
-                        .line_clamp(2)
+                        .truncate()
                         .child(book.title.clone()),
                 )
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
                         .text_xs()
                         .text_color(colors.muted)
+                        .truncate()
                         .child(if book.opened {
                             format!("Ch. {current} of {total} · {:.0}%", progress * 100.0)
                         } else {
                             format!("{total} pages")
                         }),
                 )
-                .when(book.opened, |this| {
-                    this.child(
-                        div()
-                            .w_full()
-                            .h(px(3.))
-                            .rounded_full()
-                            .bg(with_alpha(colors.foreground, 0.08))
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(relative(progress))
-                                    .rounded_full()
-                                    .bg(colors.accent),
-                            ),
-                    )
-                }),
+                .children(book.opened.then(|| {
+                    div()
+                        .h(px(3.))
+                        .w_full()
+                        .rounded(radius)
+                        .bg(with_alpha(colors.foreground, 0.08))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(progress))
+                                .rounded(radius)
+                                .bg(colors.accent),
+                        )
+                })),
         )
         .into_any_element()
 }
