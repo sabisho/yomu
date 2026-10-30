@@ -1,122 +1,128 @@
 # Architecture
 
-## Runtime shape
+## Runtime Topology
 
-The binary starts in `src/main.rs`, initializes GPUI Kit and the app window, then owns the `Yomu` application state. The library crate (`src/lib.rs`) exports the core modules and deliberately does not depend on GPUI/Kit. This keeps most behavior deterministic and testable without creating a window.
+Yomu is structured into two strict architectural layers:
+
+1. **Core Domain Layer (`src/lib.rs` / `yomu` crate):** Pure Rust (`#![forbid(unsafe_code)]`), decoupled from GPUI and windowing. Responsible for archive unpacking, SIMD image decoding and scaling, geometry calculations, memory cache policies, vim key parsing, search matching, selection rules, and JSON persistence. Fully deterministic and testable without a window or graphics compositor.
+2. **UI & Window Orchestration (`src/main.rs` + `src/ui/`):** Built on GPUI Kit 0.8.0. Manages the application window, state routing between the two-pane desktop shell and edge-to-edge immersive reader, input dispatch, and background task scheduling.
 
 ```text
-GPUI Kit window / Yomu (src/main.rs)
-  ├─ Library + Settings (src/library.rs) ── JSON + covers in XDG data dir
-  ├─ Reader state ── page list from archive.rs
-  │                    └─ async read/decode/scale ── pagecache.rs policy
-  ├─ Input parser (vim.rs) ── actions applied to reader
-  ├─ View geometry (layout.rs) and motion (motion.rs)
-  └─ menu.rs / selection.rs ── UI-independent interaction rules
+GPUI Kit Window / Yomu (src/main.rs)
+  ├─ View Router (MainView)
+  │    ├─ Sidebar (src/ui/sidebar.rs) ── persistent 240px macOS navigation
+  │    ├─ Toolbar (src/ui/toolbar.rs) ── search, view mode, selection bar
+  │    ├─ Library View (src/ui/library_view.rs) ── cards, folders, list rows
+  │    ├─ Continue Reading (src/ui/continue_reading.rs) ── hero banner & queue
+  │    ├─ Manga Details (src/ui/details.rs) ── metadata matrix & synopsis
+  │    ├─ Collections (src/ui/collections_view.rs) ── smart & custom folders
+  │    ├─ History (src/ui/history_view.rs) ── in-progress & completed manga
+  │    ├─ Settings (src/ui/settings_view.rs) ── 6-tab split-pane preferences
+  │    ├─ Overlays (src/ui/overlays.rs) ── dialogs, menus, command prompt, help
+  │    └─ Reader (src/ui/reader.rs) ── edge-to-edge canvas with autohiding HUD
+  ├─ Core Library (src/library.rs) ── JSON persistence & XDG data management
+  ├─ Reader Engine ── archive page listing, decode queue, and texture cache
+  ├─ Momentum Controller (src/scroll.rs) ── platform-adaptive scrolling
+  └─ Background Executors ── multithreaded decode, resize, and import pipeline
 ```
 
-## Modules and ownership
+---
 
-| Module | Responsibility | Important boundaries |
+## Modules and Boundaries
+
+### Core Domain Modules (`src/`)
+
+| Module | Responsibility | Invariants & Boundaries |
 |---|---|---|
-| `main.rs` | GPUI Kit app/window, state router (`MainView`), key/mouse dispatch, overlays/dialogs, rendering two-pane shell and reader, background-task coordination | UI integration layer; routes between persistent two-pane shell (`render_two_pane_shell`) and immersive reader (`render_reader`). Navigation history (`nav_history`) supports back/forward navigation. |
-| `ui/` | Modular GPUI Kit view components conforming to macOS HIG design board | Submodules: `sidebar` (navigation & window controls), `toolbar` (history, search badge, view modes, import), `library_view` (cards, folders, list rows), `continue_reading` (hero & queue), `details` (manga detail sheet), `collections_view` (smart & user collections), `settings_view` (6-tab preferences), `components` (stat badges, tags), `reader` (immersive reader views). |
-| `scroll.rs` | Cross-platform momentum scrolling coordinator | Abstracts platform-specific wheel/touchpad momentum handling via `PlatformScrollController`. Preserves native macOS AppKit momentum without double-layering; provides safe, deterministic kinetic glide on Linux and Windows using official `ScrollHandle` APIs. |
-| `collections.rs` | Custom user collections model and smart collection query primitives | Decoupled from book disk storage. Deleting a collection only deletes list groupings, never user comic files. |
-| `archive.rs` | Enumerate and read CBZ/ZIP pages or images in folders | Filters supported image names, ignores hidden/resource-fork files, natural-sorts names, limits archive page inflation. Source types are `Archive` and `Folder`. |
-| `imaging.rs` | Decode supported images, scale for display, create JPEG covers | No gpui dependency. Decoded pixel buffers are BGRA for gpui; original dimensions are retained for layout. Has dimension guardrails. |
-| `library.rs` | Book model/status/progress, settings, JSON load/save, imports, generated covers | `DataDirs` resolves storage. `Library` owns persisted data; comic files remain at their original paths. Format version 3. Continuous mode and webcomics are lenient settings defaulting off; folder grouping defaults on while honoring explicit saved values. Each book's optional series name defaults to unassigned when loading older data. |
-| `layout.rs` | Fit modes, zoom bounds/steps, viewport geometry, pan offsets, decode tiers | Pure math. Page indices and geometry do not depend on reading direction except arrival placement. |
-| `vim.rs` | Turn key tokens and command-line input into reader actions | Knows no UI. The UI consumes `Action` values and performs side effects. |
-| `motion.rs` | Frame-time based scroll easing, page-turn transitions, reduced-motion detection | Pure calculations/state machines; avoid tying animation duration to frame count. |
-| `pagecache.rs` | Prefetch order and eviction planning | Pure policy. Current page is preserved even if that alone exceeds the budget. Current constants: 5 ahead, 3 prefetched behind, keep 4 behind/5 ahead, adaptive 1.0–3.0 GiB decoded-page budget. |
-| `selection.rs` | Library multi-selection and range anchor semantics | Pure state; return selected IDs in library order at the call site for stable batch operations. |
-| `search.rs` | Case-insensitive title/source-path/series substring matching | Pure helper; query state is transient in the UI and search never changes library ordering or stored books. |
-| `menu.rs` | Context menu actions, navigation, confirmations, properties rows | Pure menu rules; UI decides how entries are drawn and dispatched. |
-| `util.rs` | Natural ordering, FNV-1a IDs, date/size helpers | Shared small helpers. |
+| `archive.rs` | Enumerate and read CBZ/CBR/ZIP/RAR pages and image folders | Natural-sorts entries; filters hidden/system files; prevents archive inflation attacks. Never mutates source archives on disk. |
+| `imaging.rs` | Decode supported image formats (JPEG, PNG, WebP, GIF), SIMD scaling, JPEG cover generation | Decoupled from GPUI. Pixel buffers are BGRA for GPUI textures. Large images decode and scale off the UI thread via `zune-jpeg` and `fast_image_resize`. |
+| `library.rs` | Book models, reading progress, marks, user settings, JSON persistence, and import pipeline | Format version 3. Backwards-compatible and lenient with missing fields. Deleting books or collections never deletes original comic files. |
+| `collections.rs` | Smart categories (Favorites, Reading, Want to Read, Completed) and custom user collections | Grouping metadata only; decoupled from book archive storage. |
+| `layout.rs` | Fit modes (Page, Width, Height, Original), zoom calculation, viewport geometry, decode tiers | Pure math. Page indices are strictly zero-based and ordered in reading sequence regardless of RTL display travel. |
+| `motion.rs` | Frame-time scroll easing, page-turn transitions, reduced-motion detection | Driven by delta time ($dt$), not frame counts. Respects desktop reduced-motion preferences. |
+| `scroll.rs` | Cross-platform momentum scrolling coordinator (`PlatformScrollController`) | Preserves native AppKit momentum on macOS; supplies smooth kinetic glide on Linux and Windows via official `ScrollHandle` APIs. |
+| `pagecache.rs` | Prefetch order and texture eviction planning | Pure policy. Preserves current page texture even if it exceeds budget. Adaptive decoded image budget: 1.0 GiB default (scales 512 MiB to 3.0 GiB based on host RAM). |
+| `vim.rs` | Parse key tokens, counts, motions, and `:` command-line strings into typed `Action`s | Pure parser without UI dependencies. The UI applies the resulting `Action` enum. |
+| `selection.rs` | Multi-selection state, toggle, and range selection anchors | Pure state machine. Emits selected IDs in stable library order for deterministic batch operations. |
+| `search.rs` | Case-insensitive title, source path, and series substring matching | Pure helper. Query state is transient in the UI and never alters persisted library order. |
+| `menu.rs` | Context menu item generation, validation, and confirmation requirements | Decides available book and library actions; UI renders and dispatches them. |
+| `util.rs` | Natural sorting, FNV-1a path hashing, date/size formatting | Reusable pure helpers. |
 
-## Main data and control flows
+### UI Modules (`src/ui/`)
 
-### Import
+| Module | Responsibility | Design & Integration |
+|---|---|---|
+| `sidebar.rs` | Persistent 240px navigation sidebar | Native macOS traffic lights on macOS; clean sections on Linux/Windows. Navigates between primary sections with badge counts. |
+| `toolbar.rs` | Unified 52px header toolbar | Symmetrical back button, centered search with `⌘K`/`Ctrl+K` shortcut, view mode toggle, import action, and in-place selection toolbar. |
+| `library_view.rs` | Book cards, folder cards, and list rows | Responsive card sizing from `ThumbnailSize`. Selection highlights, hover states, and drag/click handling. |
+| `continue_reading.rs`| Continue reading dashboard | Hero featured manga banner, Up Next queue column, and Recently Added responsive cover grid. |
+| `details.rs` | Dedicated manga inspector screen | High-resolution cover, romaji/native titles, expandable synopsis, underline tabs, and 4x2 metadata matrix. |
+| `collections_view.rs`| Smart and custom collections screen | 2x2 smart collection cards with accent icons; custom collection folder grid with management menus. |
+| `history_view.rs` | Reading history screen | Chronological reading log of in-progress and completed books with progress bars and quick navigation. |
+| `settings_view.rs` | Split-pane macOS preferences | 6 dedicated categories (General, Appearance, Reader, Library, Shortcuts, Advanced) with native GPUI Kit switches, dropdowns, and tables. |
+| `overlays.rs` | Modal dialogs, menus, command prompt, help | Consolidated modal layer. Uses `OverlayStyle` for consistent geometry. Floating command prompt with live auto-completion; shortcuts modal. |
+| `reader.rs` | Reader viewport state and continuous strip | Edge-to-edge canvas; autohiding header with fit and reading direction controls; floating progress pill; lateral chevrons. |
+| `components.rs` | Shared atomic visual primitives | Window controls, responsive grid math, status badges, and genre tags. |
+| `theme.rs` | Theme management and TOML loader | Bridges GPUI Kit themes and custom `themes.toml` files with automatic SHA-256 fingerprint reloading. |
 
-`library::import_paths_with_progress` expands selected files/folders into candidates, scans image folders with a depth limit, determines source kind, enumerates pages, creates a stable path-derived ID and generates a cover. It invokes a callback after each cover is ready. `main.rs` forwards each book through a channel to the UI task, adds it, and saves immediately. Library order is persisted insertion order; imports append in natural directory scan order. An imported book references the original path; it is not copied. Archive and folder page names are naturally sorted.
+---
 
-### Opening and reading
+## Data and Control Flows
 
-The UI gets the selected `Book`, enumerates its pages with `archive::list_pages`, clamps/restores its saved zero-based page index, and requests bytes and image processing in background work. `imaging::decode_fit_bgra` returns pixels scaled to an appropriate device-pixel tier chosen using layout/zoom. gpui image objects are then used by rendering. Page index updates and progress persistence happen on navigation; direction changes which control means forward/backward but does not change the index model.
+### 1. Import Flow
+1. User triggers import via toolbar button, shortcut (`⌘O`/`Ctrl+O`), or drag-and-drop.
+2. Background executor scans paths recursively, identifies archives (`.cbz`, `.cbr`, `.zip`, `.rar`) or image directories, and extracts covers.
+3. Completed books are streamed sequentially to the UI thread via an `mpsc` channel.
+4. UI inserts each book into `Library` and triggers debounced persistence to `$XDG_DATA_HOME/yomu/library.json`.
 
-`pagecache` determines what should be loaded and retained. A cache change should preserve the current page, bound decoded buffers, and account for image dimensions/bytes. The policy's adaptive budget (1.0 GiB default, scaling up to 3.0 GiB depending on available host RAM) is a decoded image budget, not a hard bound on all process memory: GPU textures, source bytes, allocator overhead, and transient decode buffers can add to RSS.
+### 2. Reading and Image Pipeline
+1. Opening a book unmounts the desktop shell and mounts the edge-to-edge `Reader`.
+2. Reader requests page dimensions from archive metadata.
+3. `pagecache::plan_eviction` computes needed prefetch and drop sets around the current viewport.
+4. Off-UI threads decode and resize requested pages to match the active viewport scale (`imaging::decode_fit_bgra`).
+5. Decoded BGRA pixel buffers are uploaded as GPUI textures.
+6. Dropped textures are placed in `garbage` and explicitly released in `Yomu::render` via `window.drop_image`.
 
-### Two-Pane Shell & View Navigation
+### 3. Navigation and History
+1. View state is driven by `Yomu.active_view` (`MainView`).
+2. Symmetrical history navigation is tracked in `Yomu.nav_history` (`Vec<NavDestination>`).
+3. Entering a folder group or details screen pushes a destination; the toolbar Back button pops back without losing selection or scroll position.
 
-The app layout follows the approved macOS Human Interface Guidelines design specification (`Screenshots/macOS_redign_design_board.png`):
-- **Persistent Sidebar (`src/ui/sidebar.rs`)**: 240px fixed width featuring primary navigation categories (`ContinueReading`, `AllManga`, `Collections`, `History`, `Downloads`), and bottom settings trigger. On macOS, native AppKit traffic lights are positioned at `(16, 18)` with an 80px left padding reserve; on Linux and Windows, custom fake window dots are eliminated in favor of native window decorations.
-- **Top Toolbar (`src/ui/toolbar.rs`)**: 52px fixed height with context-aware controls. The back button (`toolbar-nav-back`) is visible strictly when inside an open group (`open_group.is_some()`) to navigate back to the library grid; forward navigation button has been removed to avoid navigation ambiguity. In normal browsing mode (selection count == 0), renders search with `⌘K` / `Ctrl+K` shortcut, view mode switches (grid/list, series folder grouping), and the standalone plus (+) import button. In selection mode (selection count > 0), the browsing controls cleanly swap in-place for selection-specific actions (`N selected` badge, `Select all`, `Remove`, `Cancel`) without height jumps or layout shifts. On Linux with client-side decorations (`Decorations::Client`), renders a clean Libadwaita close button on the far right with actions shifted left.
-- **State Router (`MainView`) & Symmetrical Navigation (`NavDestination`)**: The active screen is driven by `self.active_view` in `Yomu`, with clean stack navigation. Destinations (`Section`, `Group`, `Details`) allow entering a group, navigating to details, and moving back without losing context.
-- **Context Menus & Selection Decoupling**: Right-clicking books or folder groups targets the items directly via `BookMenu.target_ids` without mutating or triggering global library selection mode. Context menu operations (e.g. Remove, Mark Read/Unread) act directly on the targeted items if unselected, or the full selection if right-clicking an already-selected item.
-- **Vim Mode & Navigation**: Vim key bindings (`j`, `k`, `h`, `l`, `gg`, `G`, `:`) are opt-in and disabled by default. Managed via `Settings.vim_mode` in the Reader settings tab, with temporary session overrides via `--vim` or `--vim-mode` CLI flags without mutating persisted settings. Standard desktop arrow keys and Space/PageDown navigation operate consistently across all modes. The Shortcuts tab in Settings dynamically displays the active key bindings.
-- **Responsive Layout & Card Geometry**: Grid cards have fixed widths determined strictly by the user's thumbnail size setting (`Small`, `Medium`, `Large`). Remaining horizontal viewport space is distributed across inter-card gaps and outer margins, ensuring equal padding on both sides and zero trailing whitespace in both All Manga and Recently Added. Cards calculate an `inner_radius` for cover images to ensure image corners do not protrude past card borders.
-- **Centralized Animation Policy**: Animations adhere strictly to `!reduce_motion && !disable_animations`. When the desktop environment requests reduced motion, animations are disabled globally and the UI toggle is disabled with an explanatory note.
-- **Manga Details View (`src/ui/details.rs`)**: Replaces the former slide-over drawer with a rich dedicated screen featuring high-resolution cover display, genre pill tags, collapsible synopsis, underline tab navigation, and 4x2 metadata matrix.
+### 4. Input and Command Execution
+1. Global and vim key presses pass through `Yomu::on_key`.
+2. Vim mode is opt-in via settings or temporary CLI flag (`--vim`).
+3. Reader `:` key opens the floating command box. Suggestions filter dynamically against supported commands and themes.
+4. Pressing Enter passes the command string to `vim::Vim::feed`, producing typed `Action` values executed by `Yomu::apply`.
 
-### Collections & Custom Groups
+---
 
-Custom user collections (`src/collections.rs`) provide flexible organizational taxonomies:
-- 4 built-in smart collections: *Favorites*, *Plan to Read*, *Completed*, *Recently Added*.
-- User custom collections with custom names, creation timestamps, and book ID memberships.
-- Complete isolation from underlying comic storage: adding, renaming, or deleting collections never touches or removes the comic files on disk.
+## Design System Tokens
 
-### Immersive Reader
+Yomu renders UI components using centralized semantic tokens derived from the active GPUI Kit theme (`UiColors`):
 
-When opening a book, the reader enters an edge-to-edge reading mode:
-- The persistent sidebar auto-hides completely to maximize reading surface area.
-- Top navigation bar auto-hides, exposing fit mode toggles, reading direction selectors, chapter/page titles, and back-to-library navigation.
-- Lateral hover chevrons appear on left and right window margins for mouse-driven page turns.
-- A floating translucent bottom pill displays precise reading progress with page slider and scrub preview.
+| Token | Semantic Role |
+|---|---|
+| `background` | Root window canvas background |
+| `surface` | Card surfaces, panels, sidebars, dialogs |
+| `surface_hover` | Interactive hover highlight on list items and cards |
+| `border` | Subtle 1px structural outlines and dividers |
+| `foreground` | Primary text, titles, high-contrast glyphs |
+| `muted` | Secondary metadata, subtitles, shortcut hints |
+| `accent` | Focus rings, active selections, primary CTA buttons |
+| `accent_foreground`| Text rendered over solid accent backgrounds |
+| `danger` | Destructive action highlights and delete confirmations |
 
-### Persistence
+Corner radii follow user preferences (`CornerRounding::None`, `Small`, `Medium`, `Large`, `Full`).
 
-Default storage is `$XDG_DATA_HOME/yomu/` (normally `~/.local/share/yomu/`); `YOMU_DATA_DIR` overrides the root. `library.json` contains the version, books, progress, marks, and settings. Generated cover JPEGs live in `covers/<book-id>.jpg`. The comic source is never modified by library operations.
+---
 
-Reader and library preferences currently live in `library.json`. `Settings::from_value` defaults missing/invalid fields and clamps opacity. The separate XDG config file `$XDG_CONFIG_HOME/yomu/themes.toml` contains only user-defined theme configs; `themes.example.toml` documents its supported schema. When a default's meaning changes, update the library version/migration deliberately; migrations should be idempotent and covered by tests.
+## Persistence and Invariants
 
-### Input and animation
-
-`vim::Vim` parses tokens and command-line text into `Action`s; `main.rs` applies actions. `layout.rs` calculates fit/zoom/pan; `motion.rs` advances transitions and scroll using elapsed frame time. Respect the environment/desktop reduced-motion policy as well as the stored animation preference.
-
-Continuous mode is owned by `Reader` and persisted in `Settings`. It stacks page images vertically at the current viewport width, keeps known source dimensions separately from evictable decoded textures, estimates unknown pages as portrait until decode completes, and updates the saved current page as the viewport crosses pages. Cache retention follows the visible range plus nearby pages, subject to the existing decoded-memory budget. Webcomics mode is a persisted override that forces this layout and sets the inter-page gap to zero; turning it off restores the saved continuous/single-page preference. Single-page mode retains page-turn behavior.
-
-### Cross-Platform Momentum Scrolling (`src/scroll.rs`)
-
-Scrolling responsiveness differs across platforms due to operating system event architectures:
-- **macOS**: AppKit natively generates a synthetic stream of `ScrollWheelEvent`s with `TouchPhase::Moved` during momentum glides. Interposing a custom kinetic loop on macOS would double-glide or fight the native momentum curve. On macOS, `PlatformScrollController` delegates directly to GPUI Kit's native scroll handling (`has_native_momentum() = true`).
-- **Linux (Wayland/X11) & Windows**: GPUI delivers raw touchpad scroll deltas with `TouchPhase::Moved`, but compositors and OS drivers often omit synthetic momentum events once fingers lift from the trackpad, or omit `TouchPhase::Ended`. On these platforms, `PlatformScrollController` tracks recent drag velocity and triggers an exponential kinetic decay upon gesture completion (detected via `TouchPhase::Ended` or a 35ms stillness timeout). The controller applies deltas directly to GPUI's official `ScrollHandle` and cancels immediately on mouse down or opposite-direction input.
-
-### TODO: Replace and refine cross-platform momentum scrolling using official GPUI/GPUI Kit support.
-
-The task explicitly requires:
-1. Monitoring official GPUI and GPUI Kit releases, documentation, and upstream changes for native momentum-scrolling support on Linux and Windows, as well as improvements to the existing macOS implementation.
-2. Reassessing the temporary Linux/Windows fallback when the official APIs become available.
-3. Replacing the fallback with the official implementation wherever appropriate.
-4. Using the official API consistently across platforms while preserving platform-native behavior and user scrolling preferences.
-5. Removing obsolete fallback code and redundant abstractions after migration.
-6. Testing mouse wheels, trackpads, momentum decay, scrolling responsiveness, and interaction with scrollbars, focus, gestures, and reader controls across all supported platforms.
-7. Verifying that the official solution meets or exceeds the smoothness, precision, and efficiency of the temporary implementation.
-
-## Invariants worth preserving
-
-- Library-owned mutations are saved to disk; removal forgets metadata and covers but never deletes source comics.
-- `Book.series` is optional persisted manual grouping metadata; assignment trims and normalizes whitespace, and reuses existing spelling case-insensitively to avoid duplicate groups. Clearing a manual assignment restores automatic grouping by the book path's parent directory.
-- Directory grouping is on by default. Groups with at least two books render as folder cards; the first member's cover is the folder thumbnail. Opening a card navigates to a second view of its volumes. Both group cards and members retain library/import order. The search filter is applied to group contents and individual items.
-- A zero-based page index is clamped against the enumerated page count, and finished status means the final page is current.
-- Archive/folder sorting is natural (e.g. `2` before `10`) and hidden junk is excluded.
-- Archive entry size and decoded image pixel count have defensive limits.
-- Page rendering consumes BGRA buffers; changing channel order can produce incorrect colors.
-- Input parsing and core state rules remain independent of gpui where practical.
-- The active GPUI Kit theme is the source of UI colors. Do not reintroduce a fixed Yomu palette. The library toolbar intentionally has no app name, total book count, opaque fill, or bottom rule; keep search centered and actions in the upper-right menu.
-- Async work must not apply stale results to a different book/page/request. Follow the existing request identity/cancellation checks in `main.rs` when extending it.
-
-## Testing map
-
-Tests are mostly colocated with each module. Pure logic tests cover archive ordering/limits, geometry, status/progress, migration/settings parsing, selection, menu rules, input parsing, page-cache eviction and animation timing. `main.rs` also contains gpui test-support tests for interactions and view state. Inspect nearby tests before extending a behavior; tests may reveal edge cases beyond the README description. `cargo test perf_ -- --ignored --nocapture` runs ignored benchmarks.
-
-The Nix package sets `doCheck = false`; packaging builds do not run the test suite. The development shell's `devenv test` runs `cargo test`.
+- **Storage Locations:**
+  - Library data: `$XDG_DATA_HOME/yomu/library.json` (overridable via `YOMU_DATA_DIR`).
+  - Generated covers: `$XDG_DATA_HOME/yomu/covers/<book-id>.jpg`.
+  - Custom themes: `$XDG_CONFIG_HOME/yomu/themes.toml`.
+- **Invariants:**
+  - Deleting books or collections from the UI **never** removes comic archives or folders from user disk.
+  - Page indices are strictly zero-based internally. Reading direction (LTR vs RTL) alters only visual motion and navigation mapping, never archive indexing.
+  - If `library.json` fails to parse, a timestamped `.corrupt` backup is created automatically to prevent data loss.

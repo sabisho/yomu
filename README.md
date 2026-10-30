@@ -55,6 +55,12 @@ devenv shell               # Rust toolchain + every native library gpui needs
 cargo run --release
 ```
 
+To install desktop shortcuts and application icons into your user environment when running via `cargo`:
+
+```sh
+cargo run --release -- --install-desktop
+```
+
 - `devenv test` runs the whole test suite; with direnv, `direnv allow` loads the shell automatically
   (the `.envrc` is already there).
 - `nix develop` still works if you prefer it (same toolchain, same libraries), and `nix run .` builds and runs
@@ -326,8 +332,9 @@ blending.
   time at 60, 144 or 240 Hz, and a frame is only requested while something is moving; an idle window draws nothing.
   The compositor's frame callbacks set the pace.
 - **Memory.** At most the current page, three ahead and two behind stay decoded (one behind and three ahead are
-  prefetched), under a 320 MB cap; textures are freed as soon as they are no longer drawn. Pages are decoded and
-  scaled on background threads at the resolution the current zoom needs, with a SIMD resampler.
+  prefetched), with an adaptive memory budget (1.0 GiB default, scaling between 512 MiB and 3.0 GiB based on host RAM);
+  textures are freed as soon as they are no longer drawn. Pages are decoded and scaled on background threads at the
+  resolution the current zoom needs, with a SIMD resampler.
 
 Measured here (a slow single-core VM with no GPU, so only the CPU side): a 3000x4500 JPEG decodes and scales in
 300 to 500 ms at every resolution tier (the old resampler needed about 1.3 s at the 1536 to 2048 pixel tiers and
@@ -346,37 +353,30 @@ Importing never copies or modifies your comic files.
 
 ## Dependencies
 
-The UI uses GPUI Kit 0.7.3, which brings its matching GPUI snapshot and requires Rust 1.92 or newer. A local copy
+The UI uses GPUI Kit 0.8.0, which brings its matching GPUI snapshot and requires Rust 1.92 or newer. A local copy
 of `vendor/gpui-component` is maintained as a Cargo compatibility patch.
 
 ## Development
 
 For coding-agent instructions, architecture, persistence invariants, and change recipes, see
 [AGENTS.md](AGENTS.md), [docs/architecture.md](docs/architecture.md),
-[docs/development.md](docs/development.md), [docs/ui-redesign-plan.md](docs/ui-redesign-plan.md),
+[docs/development.md](docs/development.md), [docs/agent-handoff.md](docs/agent-handoff.md),
 and [ROADMAP.md](ROADMAP.md).
 
 ```sh
 cargo test       # core logic plus UI tests that drive the real views with simulated mouse and keyboard input
 ```
 
-The code is split so that everything except the window lives in the library crate:
+The code is split cleanly between the core library crate and modular UI components:
 
-- `src/archive.rs` lists and reads pages from CBZ, CBR, ZIP, and RAR archives and image folders
-- `src/imaging.rs` decodes and resizes pages, and builds cover thumbnails
-- `src/layout.rs` is the fit-mode, zoom and pan math
-- `src/vim.rs` turns keys into actions: counts, `gg`/`zw`/`ma` sequences and the `:` command line
-- `src/menu.rs` decides which context-menu actions apply to a book, plus confirmations and the Properties rows
-- `src/selection.rs` holds the multi-select rules (toggle, range, select all)
+- `src/lib.rs` exports GPUI-independent domain logic (archives, image decode/SIMD resize, geometry, vim parsing, selection, caching, and persistence)
+- `src/ui/` contains modular view components (sidebar, toolbar, library cards, continue reading, details, collections, history, settings, overlays, reader)
+- `src/main.rs` manages window state, event routing, and background executor scheduling
 - `nix/package.nix` is the Nix package; `devenv.nix` / `devenv.yaml` and `flake.nix` are the dev environments
-- `src/library.rs` is the library model, JSON persistence, and the import pipeline
-- `src/main.rs` is the GPUI Kit UI
 
 ## Not done yet
 
-- CB7 (needs a 7z archive reader)
-- Double-page spreads
-- Sorting options
-- A clear Noctalia Launcher-style hover and active-selection color across menus and settings, including pointer hover
-  and keyboard navigation. Use the theme's primary/accent color so the current item is easy to identify.
-- Inertial scrolling (very low priority roadmap item)
+- Dual-page / spread reading mode
+- Library sorting options (title, last read, recently added, page count)
+- CB7 archive support (needs a 7z archive reader)
+- Upstream GPUI momentum scrolling migration (once GPUI publishes upstream Linux/Windows momentum events)
