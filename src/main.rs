@@ -14,7 +14,7 @@ use std::{
 use anyhow::Result;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Side as MenuSide, Sizable, Theme as KitTheme, ThemeConfig};
@@ -39,7 +39,7 @@ use yomu::{
         self, Book, BorderSize, CornerRounding, DataDirs, Library, Settings, ThemeModePreference,
         ThumbnailSize,
     },
-    menu::{self, BookAction, Entry, Item},
+    menu::{self, BookAction, Entry},
     motion, pagecache,
     selection::Selection,
     util::{format_size, now_secs},
@@ -59,9 +59,7 @@ actions!(
 
 mod ui;
 
-use ui::components::{
-    ButtonKind, centered, overlay_shade, page_layer, panel_button, pill, with_alpha,
-};
+use ui::components::{centered, overlay_shade, page_layer, pill, with_alpha};
 use ui::library_view::{
     BookCardProps, LibraryGroup, directory_groups, render_book_card, render_book_list_row,
     render_folder_card, render_folder_list_row,
@@ -3129,550 +3127,124 @@ impl Yomu {
         })
     }
 
-    /// Full-window layer behind a dialog: swallows clicks meant for the view underneath and
-    /// closes the dialog when clicked. `dim` darkens the view behind it.
-    fn scrim(&self, dim: bool, cx: &mut Context<Self>) -> gpui_kit::Stateful<gpui_kit::Div> {
-        // Explicit insets matter: an absolutely positioned child without them is placed after the
-        // in-flow content (below the window) instead of covering it.
-        div()
-            .id("overlay-scrim")
-            .occlude()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(with_alpha(
-                overlay_shade(self.colors),
-                if dim { 0.50 } else { 0.0 },
-            ))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_overlay(cx)),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_overlay(cx)),
-            )
+    fn overlay_style(&self, surface_bg: gpui_kit::Hsla) -> ui::overlays::OverlayStyle {
+        ui::overlays::OverlayStyle {
+            colors: self.colors,
+            border_px: self.border_px(),
+            radius_px: self.radius_px(),
+            rounding_lg: self.radius_lg_px(),
+            rounding_xl: self.radius_xl_px(),
+            surface_bg,
+            animations_enabled: self.animations_enabled(),
+        }
     }
 
     fn render_menu(&self, menu: &BookMenu, cx: &mut Context<Self>) -> AnyElement {
-        let border_px = self.border_px();
-        let rounding_lg = self.radius_lg_px();
-        let mut list = div()
-            .min_w(px(200.))
-            .max_w(px(320.))
-            .w_auto()
-            .flex()
-            .flex_col()
-            .p_1()
-            .rounded(px(rounding_lg))
-            .bg(self.menu_surface())
-            .when(border_px > 0.0, |this| {
-                this.border(px(border_px)).border_color(self.colors.accent)
-            })
-            .shadow_lg()
-            .text_sm()
-            .text_color(self.colors.foreground)
-            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                cx.stop_propagation()
-            })
-            .on_mouse_down(MouseButton::Right, |_: &MouseDownEvent, _, cx| {
-                cx.stop_propagation()
+        let style = self.overlay_style(self.menu_surface());
+        let yomu = cx.entity();
+
+        let yomu_close = yomu.clone();
+        let on_close = move |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+            yomu_close.update(cx, |this, cx| this.close_overlay(cx));
+        };
+
+        let yomu_hover = yomu.clone();
+        let on_hover = move |ix: usize, _window: &mut Window, cx: &mut App| {
+            yomu_hover.update(cx, |this, cx| this.menu_hover(ix, cx));
+        };
+
+        let yomu_action = yomu.clone();
+        let on_action = move |action: BookAction,
+                              book_id: &str,
+                              target_ids: &[String],
+                              window: &mut Window,
+                              cx: &mut App| {
+            let book_id = book_id.to_string();
+            let target_ids = target_ids.to_vec();
+            yomu_action.update(cx, |this, cx| {
+                this.run_book_action(action, &book_id, &target_ids, window, cx);
             });
+        };
 
-        for (ix, entry) in menu.entries.iter().enumerate() {
-            list = match entry {
-                Entry::Separator => list,
-                Entry::Item(item) => list.child(self.menu_item(menu, ix, item, cx)),
-            };
-        }
-
-        #[cfg(test)]
-        let list = list.debug_selector(|| "book-menu".into());
-
-        // `anchored` keeps the menu inside the window (it slides back in near the edges) and
-        // `deferred` paints it above everything else.
-        deferred(
-            div()
-                .id("book-menu-scrim")
-                .occlude()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_overlay(cx)),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_overlay(cx)),
-                )
-                .child(
-                    anchored()
-                        .position(menu.position)
-                        .anchor(Anchor::TopLeft)
-                        .snap_to_window_with_margin(px(8.))
-                        .child(list),
-                ),
-        )
-        .with_priority(1)
-        .into_any_element()
+        ui::overlays::render_book_menu(menu, style, on_close, on_hover, on_action)
     }
 
     fn render_library_menu(&self, menu: &LibraryMenu, cx: &mut Context<Self>) -> AnyElement {
-        let entries = [
-            (
-                IconName::FilePlus,
-                "Add files",
-                "Import CBZ, CBR and ZIP comics",
-            ),
-            (
-                IconName::FolderPlus,
-                "Add folder",
-                "Import a folder of images",
-            ),
-            (
-                IconName::Settings,
-                "Settings",
-                "Themes and reader preferences",
-            ),
-            (
-                IconName::Folder,
-                if self.library.settings().group_series {
-                    "Show individual volumes"
-                } else {
-                    "Group into folders"
-                },
-                if self.library.settings().group_series {
-                    "Display books ungrouped"
-                } else {
-                    "Group volumes by folder"
-                },
-            ),
-            (IconName::LogOut, "Quit", "Close yomu"),
-        ];
-        let border_px = self.border_px();
-        let rounding_lg = self.radius_lg_px();
-        let rounding_md = self.radius_px();
-        let mut list = div()
-            .min_w(px(240.))
-            .max_w(px(360.))
-            .w_auto()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_2()
-            .rounded(px(rounding_lg))
-            .bg(self.menu_surface())
-            .when(border_px > 0.0, |this| {
-                this.border(px(border_px)).border_color(self.colors.accent)
-            })
-            .shadow_lg()
-            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                cx.stop_propagation()
-            })
-            .on_mouse_down(MouseButton::Right, |_: &MouseDownEvent, _, cx| {
-                cx.stop_propagation()
+        let style = self.overlay_style(self.menu_surface());
+        let group_series = self.library.settings().group_series;
+        let yomu = cx.entity();
+
+        let yomu_close = yomu.clone();
+        let on_close = move |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
+            yomu_close.update(cx, |this, cx| this.close_overlay(cx));
+        };
+
+        let yomu_hover = yomu.clone();
+        let on_hover = move |ix: usize, _window: &mut Window, cx: &mut App| {
+            yomu_hover.update(cx, |this, cx| {
+                if let Some(Overlay::LibraryMenu(menu)) = this.overlay.as_mut() {
+                    menu.selected = ix;
+                    cx.notify();
+                }
             });
-        for (index, (icon, label, description)) in entries.into_iter().enumerate() {
-            let selected = menu.selected == index;
-            list = list.child(
-                div()
-                    .id(SharedString::from(format!("library-menu-{index}")))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .px_3()
-                    .py_2()
-                    .rounded(px(rounding_md))
-                    .cursor_pointer()
-                    .when(selected, |row| row.bg(self.colors.accent))
-                    .when(!selected, |row| {
-                        row.hover(|style| style.bg(self.colors.surface_hover))
-                    })
-                    .child(Icon::new(icon).size_4().text_color(if selected {
-                        self.colors.accent_foreground
-                    } else {
-                        self.colors.foreground
-                    }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(if selected {
-                                        self.colors.accent_foreground
-                                    } else {
-                                        self.colors.foreground
-                                    })
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(if selected {
-                                        self.colors.accent_foreground
-                                    } else {
-                                        self.colors.muted
-                                    })
-                                    .truncate()
-                                    .child(description),
-                            ),
-                    )
-                    .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
-                        if let Some(Overlay::LibraryMenu(menu)) = this.overlay.as_mut() {
-                            menu.selected = index;
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.run_library_menu_action(index, window, cx);
-                    })),
-            );
-        }
-
-        deferred(
-            div()
-                .id("library-menu-scrim")
-                .occlude()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_overlay(cx)),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| this.close_overlay(cx)),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .top(px(52.))
-                        .right(px(18.))
-                        .child(self.animate_popup("library-menu-popup", list)),
-                ),
-        )
-        .with_priority(2)
-        .into_any_element()
-    }
-
-    fn menu_item(
-        &self,
-        menu: &BookMenu,
-        ix: usize,
-        item: &Item,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let icon = match item.action {
-            BookAction::Open => IconName::BookOpen,
-            BookAction::StartOver | BookAction::ResetProgress => IconName::RotateCcw,
-            BookAction::MarkRead => IconName::CircleCheck,
-            BookAction::MarkUnread => IconName::CircleX,
-            BookAction::RevealFile => IconName::FolderOpen,
-            BookAction::Properties => IconName::Info,
-            BookAction::SetSeries => IconName::Library,
-            BookAction::Remove | BookAction::RemoveSelected => IconName::Trash,
-            BookAction::ClearSelection => IconName::X,
         };
-        let is_selected = menu.selected == Some(ix);
-        let item_color = if !item.enabled {
-            self.colors.muted
-        } else if is_selected {
-            self.colors.accent_foreground
-        } else if item.danger {
-            self.colors.danger
-        } else {
-            self.colors.foreground
+
+        let yomu_action = yomu.clone();
+        let on_action = move |ix: usize, window: &mut Window, cx: &mut App| {
+            yomu_action.update(cx, |this, cx| {
+                this.run_library_menu_action(ix, window, cx);
+            });
         };
-        let rounding_md = self.radius_px();
-        let base = div()
-            .id(SharedString::from(format!("menu-item-{ix}")))
-            .h(px(28.))
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(rounding_md))
-            .child(
-                div()
-                    .w(px(20.))
-                    .h(px(20.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(Icon::new(icon).size_4().text_color(item_color)),
-            )
-            .child(item.label.clone());
 
-        if !item.enabled {
-            return base
-                .text_color(self.colors.muted)
-                .opacity(0.6)
-                .into_any_element();
-        }
-
-        let action = item.action;
-        let book_id = menu.book_id.clone();
-        let target_ids = menu.target_ids.clone();
-        base.text_color(if is_selected {
-            self.colors.accent_foreground
-        } else if item.danger {
-            self.colors.danger
-        } else {
-            self.colors.foreground
-        })
-        .cursor_pointer()
-        .when(is_selected, |row| row.bg(self.colors.accent))
-        .when(!is_selected, |row| {
-            row.hover(|style| style.bg(self.colors.surface_hover))
-        })
-        .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| this.menu_hover(ix, cx)))
-        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.run_book_action(action, &book_id, &target_ids, window, cx);
-        }))
-        .into_any_element()
-    }
-
-    fn panel(&self, width: f32) -> gpui_kit::Stateful<gpui_kit::Div> {
-        let border_px = self.border_px();
-        let rounding_xl = self.radius_xl_px();
-        div()
-            .id(SharedString::from(format!("panel-{}", width as u32)))
-            .occlude()
-            .w(px(width))
-            .max_w_full()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_6()
-            .rounded(px(rounding_xl))
-            .bg(self.widget_surface(self.colors.surface))
-            .when(border_px > 0.0, |this| {
-                this.border(px(border_px)).border_color(self.colors.accent)
-            })
-            .shadow_lg()
-            .text_sm()
-            .text_color(self.colors.foreground)
-            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                cx.stop_propagation()
-            })
-            .on_mouse_down(MouseButton::Right, |_: &MouseDownEvent, _, cx| {
-                cx.stop_propagation()
-            })
-    }
-
-    fn animate_popup<E>(&self, id: &'static str, surface: E) -> gpui_kit::AnimationElement<E>
-    where
-        E: IntoElement + Styled + 'static,
-    {
-        surface.with_animation(
-            id,
-            Animation::new(Duration::from_millis(if !self.animations_enabled() {
-                1
-            } else {
-                180
-            }))
-            .with_easing(ease_out_quint()),
-            |surface, progress| {
-                surface
-                    .opacity(progress)
-                    .relative()
-                    .top(px((1.0 - progress) * 9.0))
-            },
-        )
+        ui::overlays::render_library_menu(menu, group_series, style, on_close, on_hover, on_action)
     }
 
     fn render_confirm(&self, dialog: &ConfirmDialog, cx: &mut Context<Self>) -> AnyElement {
-        self.scrim(true, cx)
-            .child(
-                self.animate_popup("confirm-dialog", self.panel(380.))
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(dialog.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_color(self.colors.muted)
-                            .child(dialog.message.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .justify_end()
-                            .gap_2()
-                            .child(panel_button(
-                                "confirm-cancel",
-                                "Cancel",
-                                ButtonKind::Normal,
-                                self.colors,
-                                true,
-                                cx.listener(|this, _: &ClickEvent, _, cx| this.close_overlay(cx)),
-                            ))
-                            .child(panel_button(
-                                "confirm-accept",
-                                dialog.confirm_label,
-                                if matches!(dialog.action, ConfirmAction::ClearAllData) {
-                                    ButtonKind::Danger
-                                } else {
-                                    ButtonKind::Primary
-                                },
-                                self.colors,
-                                true,
-                                cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.confirm_accept(window, cx);
-                                }),
-                            )),
-                    ),
-            )
-            .into_any_element()
+        let style = self.overlay_style(self.widget_surface(self.colors.surface));
+        let yomu = cx.entity();
+
+        let yomu_close = yomu.clone();
+        let on_close = move |_window: &mut Window, cx: &mut App| {
+            yomu_close.update(cx, |this, cx| this.close_overlay(cx));
+        };
+
+        let yomu_accept = yomu.clone();
+        let on_accept = move |window: &mut Window, cx: &mut App| {
+            yomu_accept.update(cx, |this, cx| {
+                this.confirm_accept(window, cx);
+            });
+        };
+
+        ui::overlays::render_confirm_dialog(dialog, style, on_close, on_accept)
     }
 
     fn render_properties(&self, dialog: &PropertiesDialog, cx: &mut Context<Self>) -> AnyElement {
-        let rows = dialog.rows.iter().map(|(label, value)| {
-            div()
-                .flex()
-                .flex_row()
-                .gap_4()
-                .child(
-                    div()
-                        .w(px(84.))
-                        .flex_none()
-                        .text_color(self.colors.muted)
-                        .child(label.clone()),
-                )
-                .child(div().flex_1().min_w_0().truncate().child(value.clone()))
-        });
+        let style = self.overlay_style(self.widget_surface(self.colors.surface));
+        let yomu = cx.entity();
 
-        self.scrim(true, cx)
-            .child(
-                self.animate_popup("properties-dialog", self.panel(480.))
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .truncate()
-                            .child(dialog.title.clone()),
-                    )
-                    .child(div().flex().flex_col().gap_2().children(rows))
-                    .child(div().flex().flex_row().justify_end().child(panel_button(
-                        "properties-close",
-                        "Close",
-                        ButtonKind::Normal,
-                        self.colors,
-                        true,
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.close_overlay(cx)),
-                    ))),
-            )
-            .into_any_element()
+        let yomu_close = yomu.clone();
+        let on_close = move |_window: &mut Window, cx: &mut App| {
+            yomu_close.update(cx, |this, cx| this.close_overlay(cx));
+        };
+
+        ui::overlays::render_properties_dialog(dialog, style, on_close)
     }
 
     fn render_series_dialog(&self, dialog: &SeriesDialog, cx: &mut Context<Self>) -> AnyElement {
-        self.scrim(true, cx)
-            .child(
-                self.animate_popup("series-dialog", self.panel(480.))
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(self.colors.foreground)
-                            .child(if dialog.book_ids.len() == 1 {
-                                "Set Series"
-                            } else {
-                                "Set Series for Selected Books"
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(self.colors.muted)
-                            .child("Assign a series name to group these volumes."),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(self.colors.foreground)
-                                    .child("Series Name:"),
-                            )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .rounded(px(self.radius_px()))
-                                    .border_1()
-                                    .border_color(self.colors.accent)
-                                    .child(
-                                        Input::new(&dialog.input)
-                                            .id("series-name-input")
-                                            .cleanable(true)
-                                            .bordered(false)
-                                            .focus_bordered(false)
-                                            .w_full(),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .justify_between()
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(self.colors.muted)
-                                    .child("Enter to save · Esc to cancel"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap_2()
-                                    .child(panel_button(
-                                        "series-cancel",
-                                        "Cancel",
-                                        ButtonKind::Normal,
-                                        self.colors,
-                                        true,
-                                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.close_overlay(cx)
-                                        }),
-                                    ))
-                                    .child(panel_button(
-                                        "series-save",
-                                        "Save",
-                                        ButtonKind::Primary,
-                                        self.colors,
-                                        true,
-                                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.save_series_dialog(cx)
-                                        }),
-                                    )),
-                            ),
-                    ),
-            )
-            .into_any_element()
+        let style = self.overlay_style(self.widget_surface(self.colors.surface));
+        let yomu = cx.entity();
+
+        let yomu_close = yomu.clone();
+        let on_close = move |_window: &mut Window, cx: &mut App| {
+            yomu_close.update(cx, |this, cx| this.close_overlay(cx));
+        };
+
+        let yomu_save = yomu.clone();
+        let on_save = move |_window: &mut Window, cx: &mut App| {
+            yomu_save.update(cx, |this, cx| this.save_series_dialog(cx));
+        };
+
+        ui::overlays::render_series_dialog(dialog, style, on_close, on_save)
     }
 
     fn render_collection_dialog(
@@ -3680,88 +3252,31 @@ impl Yomu {
         dialog: &ui::overlays::CollectionDialog,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let is_edit = !dialog.is_new;
-        let border_px = self.border_px();
-        let rounding_xl = self.radius_xl_px();
+        let style = self.overlay_style(self.colors.background);
         let yomu = cx.entity();
-        let editing_id = dialog.collection_id.clone();
-        let input_state = dialog.input.clone();
 
-        self.scrim(true, cx)
-            .child(
-                div()
-                    .w(px(380.))
-                    .rounded(px(rounding_xl))
-                    .when(border_px > 0.0, |this| {
-                        this.border(px(border_px)).border_color(self.colors.border)
-                    })
-                    .bg(self.colors.background)
-                    .p_5()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .shadow_xl()
-                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation()
-                    })
-                    .child(
-                        div()
-                            .text_base()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(self.colors.foreground)
-                            .child(if is_edit {
-                                "Rename Collection"
-                            } else {
-                                "New Collection"
-                            }),
-                    )
-                    .child(Input::new(&dialog.input))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap_2()
-                            .child(
-                                Button::new("collection-dialog-cancel")
-                                    .label("Cancel")
-                                    .rounded(ButtonRounded::Medium)
-                                    .outline()
-                                    .on_click({
-                                        let yomu = yomu.clone();
-                                        move |_, _, cx| {
-                                            yomu.update(cx, |this, cx| this.close_overlay(cx))
-                                        }
-                                    }),
-                            )
-                            .child(
-                                Button::new("collection-dialog-save")
-                                    .primary()
-                                    .label(if is_edit { "Rename" } else { "Create" })
-                                    .rounded(ButtonRounded::Medium)
-                                    .bg(self.colors.accent)
-                                    .text_color(self.colors.accent_foreground)
-                                    .on_click({
-                                        let yomu = yomu.clone();
-                                        move |_, _, cx| {
-                                            let name = input_state.read(cx).value().to_string();
-                                            if !name.trim().is_empty() {
-                                                yomu.update(cx, |this, cx| {
-                                                    if let Some(id) = &editing_id {
-                                                        this.library
-                                                            .rename_collection(id, name.trim());
-                                                    } else {
-                                                        this.library.add_collection(name.trim());
-                                                    }
-                                                    this.save_library();
-                                                    this.close_overlay(cx);
-                                                });
-                                            }
-                                        }
-                                    }),
-                            ),
-                    ),
-            )
-            .into_any_element()
+        let yomu_close = yomu.clone();
+        let on_close = move |_window: &mut Window, cx: &mut App| {
+            yomu_close.update(cx, |this, cx| this.close_overlay(cx));
+        };
+
+        let yomu_save = yomu.clone();
+        let on_save =
+            move |name: &str, editing_id: Option<&str>, _window: &mut Window, cx: &mut App| {
+                let name = name.to_string();
+                let editing_id = editing_id.map(|s| s.to_string());
+                yomu_save.update(cx, |this, cx| {
+                    if let Some(id) = &editing_id {
+                        this.library.rename_collection(id, &name);
+                    } else {
+                        this.library.add_collection(&name);
+                    }
+                    this.save_library();
+                    this.close_overlay(cx);
+                });
+            };
+
+        ui::overlays::render_collection_dialog(dialog, style, on_close, on_save)
     }
 
     fn render_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -3920,28 +3435,31 @@ impl Yomu {
             },
         );
 
-        self.scrim(true, cx)
-            .child(
-                div()
-                    .w(px(860.))
-                    .min_w(px(640.))
-                    .max_w(relative(0.92))
-                    .h(px(620.))
-                    .min_h(px(460.))
-                    .max_h(relative(0.90))
-                    .rounded(px(self.radius_xl_px()))
-                    .when(border_px > 0.0, |this| {
-                        this.border(px(border_px)).border_color(self.colors.border)
-                    })
-                    .bg(self.colors.background)
-                    .shadow_xl()
-                    .overflow_hidden()
-                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .child(view),
-            )
-            .into_any_element()
+        let yomu_scrim = yomu.clone();
+        ui::overlays::scrim(true, self.colors, move |_, cx| {
+            yomu_scrim.update(cx, |this, cx| this.close_overlay(cx));
+        })
+        .child(
+            div()
+                .w(px(860.))
+                .min_w(px(640.))
+                .max_w(relative(0.92))
+                .h(px(620.))
+                .min_h(px(460.))
+                .max_h(relative(0.90))
+                .rounded(px(self.radius_xl_px()))
+                .when(border_px > 0.0, |this| {
+                    this.border(px(border_px)).border_color(self.colors.border)
+                })
+                .bg(self.colors.background)
+                .shadow_xl()
+                .overflow_hidden()
+                .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                })
+                .child(view),
+        )
+        .into_any_element()
     }
 
     fn render_two_pane_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -5922,7 +5440,11 @@ impl Yomu {
                 MouseButton::Right,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| this.cancel_cmdline(cx)),
             )
-            .child(self.animate_popup("command-prompt-popup", prompt));
+            .child(ui::overlays::animate_popup(
+                "command-prompt-popup",
+                self.animations_enabled(),
+                prompt,
+            ));
 
         Some(deferred(scrim).with_priority(3).into_any_element())
     }
