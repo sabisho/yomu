@@ -37,6 +37,35 @@ cargo test perf_ -- --ignored --nocapture
 
 The last command runs opt-in performance measurements, not the normal suite. UI tests use gpui's simulated platform and do not validate appearance on a real compositor. Run focused tests while iterating, then the full suite for behavior changes when verification is requested or appropriate.
 
+## Engineering Philosophy (Ponytail)
+
+Follow the Ponytail engineering philosophy: prefer the simplest correct, maintainable, secure, and performant solution. Avoid unnecessary complexity, but never sacrifice engineering quality merely to reduce code.
+
+- **Investigate before implementing:** Understand the existing architecture, dependencies, GPUI Kit capabilities, and relevant code paths before making changes.
+- **Prefer native solutions:** Use Rust standard library functionality, existing project abstractions, GPUI/GPUI Kit components and official APIs before introducing custom implementations.
+- **Avoid unnecessary dependencies:** Reuse existing dependencies where practical. Add a new dependency only when it provides meaningful value that justifies its maintenance cost.
+- **Avoid overengineering:** Do not introduce unnecessary traits, wrappers, abstractions, configuration layers, generic frameworks, or premature extensibility.
+- **Preserve architectural boundaries:** Keep core logic independent of GPUI and respect the existing modular architecture.
+- **Optimize based on evidence:** Prioritize responsiveness, smooth rendering, efficient resource management, and measurable performance. Do not trade performance for fewer lines of code.
+- **Make focused changes:** Avoid unrelated refactoring, broad rewrites, and unnecessary modifications to working functionality.
+- **Test meaningful changes:** Add focused regression tests where appropriate. Verify behavior, compilation, and performance when relevant.
+- **Review before completion:** Check for regressions, duplicated logic, unnecessary complexity, security issues, resource leaks, and incomplete error handling.
+- **Document technical debt:** If a necessary improvement cannot be completed safely, document the reason, impact, and recommended follow-up rather than silently leaving it unresolved.
+
+### Project-specific priority
+
+Ponytail principles are engineering guidelines, not permission to override Yomu's established requirements.
+
+When instructions conflict, prioritize:
+1. Explicit user requirements and product decisions.
+2. Yomu's documented architectural invariants, data-preservation requirements, and platform compatibility.
+3. Correctness, security, accessibility, and performance.
+4. Ponytail's simplicity and minimalism preferences.
+
+Never remove necessary caching, preloading, validation, error handling, tests, or abstractions simply to reduce code size. Never replace official GPUI Kit functionality with ad-hoc custom implementations when an appropriate native capability exists or is planned.
+
+Do not compromise Linux, Windows, or macOS compatibility for platform-specific convenience.
+
 ## Working conventions
 
 - The UI follows a macOS HIG two-pane design (`src/ui/sidebar.rs` + `src/ui/toolbar.rs` + content router `MainView`). Persistent sidebar width is 240px; UI integration tests clicking library cards must offset mouse coordinates accordingly (`x = 240.0 + padding + card_offset`).

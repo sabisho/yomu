@@ -12,6 +12,12 @@
       "sourceType": "github",
       "skillPath": "skills/gpui-kit-design-guides/SKILL.md",
       "computedHash": "cc144ee0cc35978c387e6a13e8bc2cd25bfac45363ad25235d5b9cf09f8fa017"
+    },
+    "ponytail": {
+      "source": "DietrichGebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail/SKILL.md",
+      "computedHash": "061f887d9e3e735f85db3be3655a8936a00f24d5fb65ac4ab74a968a770fe342"
     }
   }
 }
