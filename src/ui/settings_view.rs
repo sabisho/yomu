@@ -5,6 +5,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::tooltip::Tooltip;
@@ -213,18 +214,19 @@ pub fn render_settings_view(
         .child(
             div()
                 .id("settings-content-scroll")
-                .track_scroll(props.scroll_handle)
                 .flex_1()
                 .min_w_0()
                 .h_full()
                 .rounded_r(props.radius)
-                .overflow_hidden()
-                .overflow_y_scroll()
-                    .px_7()
-                    .py_6()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
+                .overflow_y_scrollbar()
+                .track_scroll(props.scroll_handle)
+                .scroll_bounce(true)
+                .scroll_wheel(false)
+                .px_7()
+                .py_6()
+                .flex()
+                .flex_col()
+                .gap_4()
                     .child(
                         div()
                             .pb_1()

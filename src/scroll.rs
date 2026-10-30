@@ -3,7 +3,7 @@
 //! # Platform Momentum Scrolling Architecture
 //!
 //! - **macOS**: GPUI's AppKit backend translates macOS window server inertial events
-//!   into an ongoing stream of `ScrollWheelEvent`s with `ScrollDelta::Pixels` and
+//!   into an ongoing stream of `ScrollEvent`s with `ScrollDelta::Pixels` and
 //!   `TouchPhase::Moved` / `TouchPhase::Ended`. GPUI's `overflow_y_scroll()` and
 //!   `ScrollHandle` therefore natively receive OS-level momentum without extra code.
 //!   Layering a secondary software simulation on macOS causes duplicate acceleration
@@ -15,7 +15,7 @@
 //!   GPUI's platform layers currently dispatch only raw physical deltas during active
 //!   contact and do not generate momentum decay. To achieve parity with native desktop
 //!   standards, this module provides a safe, minimal, framework-native fallback using
-//!   standard GPUI public APIs (`ScrollHandle`, `ScrollWheelEvent`, and analytical
+//!   standard GPUI public APIs (`ScrollHandle`, `ScrollEvent`, and analytical
 //!   exponential decay).
 //!
 //! - **Mouse Wheels vs Trackpads**: Conventional mouse-wheel input (`ScrollDelta::Lines`)
@@ -44,7 +44,7 @@
 
 use std::time::Instant;
 
-use gpui_kit::{ScrollDelta, ScrollHandle, ScrollWheelEvent, TouchPhase, point, px};
+use gpui_kit::{ScrollDelta, ScrollEvent, ScrollHandle, TouchPhase, point, px};
 
 use crate::motion::{self, KineticScroll};
 
@@ -111,12 +111,12 @@ impl PlatformScrollController {
         self.kinetic.is_awaiting_release()
     }
 
-    /// Ingests a `ScrollWheelEvent` for a given `ScrollHandle`.
+    /// Ingests a `ScrollEvent` for a given `ScrollHandle`.
     ///
     /// Returns `true` if an animation frame should be requested to service the kinetic glide.
     pub fn handle_wheel(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         _scroll_handle: &ScrollHandle,
         animations_enabled: bool,
     ) -> bool {

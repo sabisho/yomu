@@ -63,6 +63,10 @@ fn launch<'a>(
     let dirs = fx.dirs.clone();
     cx.update(|cx| {
         gpui_kit::init(cx);
+        gpui_kit::component::Theme::set_scrollbar_mode(
+            gpui_kit::component::scroll::ScrollbarMode::Scrolling,
+            cx,
+        );
         cx.bind_keys([KeyBinding::new("ctrl-,", OpenSettings, None)]);
     });
     cx.add_window_view(move |window, cx| {
@@ -2210,11 +2214,12 @@ fn touchpad_flick_triggers_library_inertial_scroll_glide_on_linux(cx: &mut TestA
 
     // Simulate event over the library cards area (e.g. card 0)
     for _ in 0..4 {
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: card(0),
             delta: ScrollDelta::Pixels(point(px(0.), px(-60.))),
             touch_phase: TouchPhase::Moved,
             modifiers: Modifiers::default(),
+            ..Default::default()
         });
     }
 
@@ -3560,4 +3565,37 @@ fn test_desktop_integration_install() {
     assert!(content_forced.contains("[Desktop Entry]"));
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[gpui_kit::test]
+fn test_continuous_reader_scrollbar_sync_and_mode(cx: &mut TestAppContext) {
+    let fx = fixture("continuous-scrollbar");
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Switch to continuous mode
+    view.update_in(cx, |this, _window, cx| {
+        this.set_continuous(Some(true), cx);
+    });
+    settle_animations(&view, cx);
+
+    // Verify continuous mode is active
+    let (is_continuous, doc_height, vp_height) = view.update_in(cx, |this, window, _cx| {
+        let r = this.reader.as_ref().unwrap();
+        let vp = viewport_of(window);
+        (r.continuous, r.continuous_total_height(&vp), vp.height)
+    });
+    assert!(is_continuous);
+    assert!(doc_height > vp_height);
+
+    // Emulate scrollbar dragging via reader_scroll_sync
+    view.update_in(cx, |this, _window, cx| {
+        this.reader_scroll_sync.set(Some(150.0));
+        cx.notify();
+    });
+    settle_animations(&view, cx);
+
+    // Verify that the reader's offset was updated to 150.0
+    let current_off_y = view.read_with(cx, |this, _| this.reader.as_ref().unwrap().off.1);
+    assert_eq!(current_off_y, 150.0);
 }

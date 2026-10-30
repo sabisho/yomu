@@ -16,6 +16,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::scroll::{ScrollableElement, ScrollbarHandle};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Side as MenuSide, Sizable, Theme as KitTheme, ThemeConfig};
 #[allow(unused_imports)]
@@ -25,8 +26,8 @@ use gpui_kit::{
     Anchor, Animation, AnimationExt, AnyElement, AnyWindowHandle, App, Bounds, ClickEvent, Context,
     Decorations, ElementId, Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyBinding,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
-    PathPromptOptions, PinchEvent, Pixels, Point, RenderImage, Rgba, ScrollDelta, ScrollHandle,
-    ScrollWheelEvent, SharedString, Styled, Subscription, TitlebarOptions, TouchPhase, Window,
+    PathPromptOptions, PinchEvent, Pixels, Point, RenderImage, Rgba, ScrollDelta, ScrollEvent,
+    ScrollHandle, SharedString, Size, Styled, Subscription, TitlebarOptions, TouchPhase, Window,
     WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
     actions, anchored, application, canvas, deferred, div, ease_out_quint, img, point, prelude::*,
     px, relative, size,
@@ -167,6 +168,7 @@ struct Yomu {
     details_scroll: ScrollHandle,
     settings_scroll: ScrollHandle,
     sidebar_scroll: ScrollHandle,
+    reader_scroll_sync: std::rc::Rc<std::cell::Cell<Option<f32>>>,
     library_scroll_controller: yomu::scroll::PlatformScrollController,
     #[allow(dead_code)]
     library_pinch_accum: f32,
@@ -187,6 +189,37 @@ struct Yomu {
     selected_collection_id: Option<String>,
     sidebar_collapsed: bool,
     pub vim_cli_override: bool,
+}
+
+#[derive(Clone)]
+struct ReaderScrollHandle {
+    bounds: Bounds<Pixels>,
+    offset_y: f32,
+    content_height: f32,
+    sync: std::rc::Rc<std::cell::Cell<Option<f32>>>,
+    max_offset: f32,
+}
+
+impl ScrollbarHandle for ReaderScrollHandle {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        self.bounds
+    }
+
+    fn offset(&self) -> Point<Pixels> {
+        point(px(0.), px(-self.offset_y))
+    }
+
+    fn set_offset(&self, offset: Point<Pixels>) {
+        let target_y = (-f32::from(offset.y)).clamp(0.0, self.max_offset);
+        self.sync.set(Some(target_y));
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        size(
+            self.bounds.size.width,
+            px(self.content_height.max(f32::from(self.bounds.size.height))),
+        )
+    }
 }
 
 impl Yomu {
@@ -310,6 +343,7 @@ impl Yomu {
             details_scroll: ScrollHandle::new(),
             settings_scroll: ScrollHandle::new(),
             sidebar_scroll: ScrollHandle::new(),
+            reader_scroll_sync: std::rc::Rc::new(std::cell::Cell::new(None)),
             library_scroll_controller: yomu::scroll::PlatformScrollController::new(),
             library_pinch_accum: 0.0,
             cursor_pos: None,
@@ -3659,20 +3693,18 @@ impl Yomu {
                             .min_w_0()
                             .min_h_0()
                             .overflow_hidden()
-                            .on_scroll_wheel(cx.listener(
-                                |this, event: &ScrollWheelEvent, _, cx| {
-                                    let scroll_handle = this.current_scroll_handle();
-                                    let animations_enabled = this.animations_enabled();
-                                    if this.library_scroll_controller.handle_wheel(
-                                        event,
-                                        &scroll_handle,
-                                        animations_enabled,
-                                    ) {
-                                        this.wake();
-                                        cx.notify();
-                                    }
-                                },
-                            ))
+                            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+                                let scroll_handle = this.current_scroll_handle();
+                                let animations_enabled = this.animations_enabled();
+                                if this.library_scroll_controller.handle_wheel(
+                                    event,
+                                    &scroll_handle,
+                                    animations_enabled,
+                                ) {
+                                    this.wake();
+                                    cx.notify();
+                                }
+                            }))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, _| {
@@ -4345,9 +4377,11 @@ impl Yomu {
             } else {
                 "all-manga-container"
             })
-            .track_scroll(scroll_handle)
             .size_full()
-            .overflow_y_scroll()
+            .overflow_y_scrollbar()
+            .track_scroll(scroll_handle)
+            .scroll_bounce(true)
+            .scroll_wheel(false)
             .flex()
             .flex_col()
             .child(if is_grid {
@@ -4673,6 +4707,27 @@ impl Yomu {
             }
         }
 
+        let reader_scroll_handle = if reader.continuous {
+            let doc_height = reader.continuous_total_height(&vp);
+            if doc_height > vp.height {
+                let max_offset = (doc_height - vp.height).max(0.0);
+                Some(ReaderScrollHandle {
+                    bounds: Bounds {
+                        origin: point(px(0.), px(0.)),
+                        size: size(px(vp.width), px(vp.height)),
+                    },
+                    offset_y: reader.off.1,
+                    content_height: doc_height,
+                    sync: self.reader_scroll_sync.clone(),
+                    max_offset,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let fraction = (reader.page + 1) as f32 / reader.total.max(1) as f32;
         let progress_line = div()
             .absolute()
@@ -4964,7 +5019,7 @@ impl Yomu {
                     this.drag_end(f32::from(event.position.x), viewport_of(window), cx);
                 }),
             )
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
                 let delta = event.delta.pixel_delta(px(WHEEL_LINE));
                 let discrete = matches!(event.delta, ScrollDelta::Lines(_));
                 let control = event.modifiers.control || event.modifiers.platform;
@@ -4995,6 +5050,9 @@ impl Yomu {
             .children(reader.show_help.then(|| {
                 ui::overlays::help_overlay(self.colors, self.border_px(), self.radius_xl_px())
             }))
+            .when_some(reader_scroll_handle.as_ref(), |this, handle| {
+                this.vertical_scrollbar(handle)
+            })
             .into_any_element()
     }
 
@@ -5062,6 +5120,13 @@ impl Yomu {
 
 impl Render for Yomu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(target_y) = self.reader_scroll_sync.take()
+            && let Some(reader) = self.reader.as_mut()
+        {
+            reader.scroll_target.1 = target_y;
+            reader.off.1 = target_y;
+        }
+
         for image in self.garbage.drain(..) {
             let _ = window.drop_image(image);
         }
@@ -5296,6 +5361,7 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
+            KitTheme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling, cx);
             let mut bindings = vec![
                 KeyBinding::new("ctrl-o", ImportFiles, Some("Library")),
                 KeyBinding::new("ctrl-shift-o", ImportFolder, Some("Library")),

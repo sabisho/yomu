@@ -2,6 +2,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{Icon, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -93,9 +94,11 @@ pub fn render_collections_view(
 
     div()
         .id("collections-container")
-        .track_scroll(props.scroll_handle)
         .size_full()
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
+        .track_scroll(props.scroll_handle)
+        .scroll_bounce(true)
+        .scroll_wheel(false)
         .p_6()
         .flex()
         .flex_col()

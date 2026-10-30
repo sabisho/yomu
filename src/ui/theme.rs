@@ -135,6 +135,8 @@ pub const CUSTOM_THEME_COLOR_KEYS: &[&str] = &[
     "primary.hover.background",
     "ring",
     "scrollbar.background",
+    "scrollbar.thumb.background",
+    "scrollbar.thumb.hover.background",
     "secondary.background",
     "secondary.foreground",
     "secondary.hover.background",

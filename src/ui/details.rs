@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, IconName, Sizable};
@@ -81,9 +82,11 @@ pub fn render_manga_details(
 
     div()
         .id("manga-details-container")
-        .track_scroll(props.scroll_handle)
         .size_full()
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
+        .track_scroll(props.scroll_handle)
+        .scroll_bounce(true)
+        .scroll_wheel(false)
         .p_6()
         .flex()
         .flex_col()

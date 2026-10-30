@@ -2,6 +2,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -157,12 +158,14 @@ pub fn render_sidebar(
         .child(
             div()
                 .id("sidebar-nav-scroll")
-                .track_scroll(props.scroll_handle)
                 .flex_1()
                 .min_h_0()
+                .overflow_y_scrollbar()
+                .track_scroll(props.scroll_handle)
+                .scroll_bounce(true)
+                .scroll_wheel(false)
                 .flex()
                 .flex_col()
-                .overflow_y_scroll()
                 // Main Navigation
                 .child(nav_item(
                     SidebarSection::ContinueReading,

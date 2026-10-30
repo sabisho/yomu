@@ -7,6 +7,7 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{Icon, ThemeConfig};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -998,12 +999,13 @@ pub fn render_command_box(
     if !suggestions.is_empty() {
         let mut rows = div()
             .id("command-box-suggestions")
-            .flex()
-            .flex_col()
             .p_1()
             .rounded_b(px(inner_radius))
             .max_h(px(320.))
-            .overflow_y_scroll();
+            .overflow_y_scrollbar()
+            .scroll_bounce(true)
+            .flex()
+            .flex_col();
 
         let item_radius = rounding_md.min(inner_radius);
         for (index, (completion, label, description)) in suggestions.iter().enumerate() {

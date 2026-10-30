@@ -5,7 +5,7 @@
 Yomu is structured into two strict architectural layers:
 
 1. **Core Domain Layer (`src/lib.rs` / `yomu` crate):** Pure Rust (`#![forbid(unsafe_code)]`), decoupled from GPUI and windowing. Responsible for archive unpacking, SIMD image decoding and scaling, geometry calculations, memory cache policies, vim key parsing, search matching, selection rules, and JSON persistence. Fully deterministic and testable without a window or graphics compositor.
-2. **UI & Window Orchestration (`src/main.rs` + `src/ui/`):** Built on GPUI Kit 0.8.0. Manages the application window, state routing between the two-pane desktop shell and edge-to-edge immersive reader, input dispatch, and background task scheduling.
+2. **UI & Window Orchestration (`src/main.rs` + `src/ui/`):** Built on GPUI Kit 0.8.1 (`gpui-pre = 0.3.10` runtime). Manages the application window, state routing between the two-pane desktop shell and edge-to-edge immersive reader, input dispatch, official GPUI Kit auto-hiding scrollbars (`ScrollbarMode::Scrolling`), native scroll bounce (`.scroll_bounce(true)`), and background task scheduling.
 
 ```text
 GPUI Kit Window / Yomu (src/main.rs)

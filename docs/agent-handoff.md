@@ -6,17 +6,27 @@ This document is the current operational snapshot for coding agents working on Y
 
 ## 1. Current Implementation Status
 
-Yomu is a high-performance desktop manga and comic reader built in Rust 2024 using **GPUI Kit 0.8.0** (`gpui-pre = 0.3.9` runtime). It operates with `#![forbid(unsafe_code)]` in safe Rust.
+Yomu is a high-performance desktop manga and comic reader built in Rust 2024 using **GPUI Kit 0.8.1** (`gpui-pre = 0.3.10` runtime). It operates with `#![forbid(unsafe_code)]` in safe Rust.
 
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
-- **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader).
-- **Test Baseline:** **201 tests passing** (100 core library tests in `src/lib.rs`, 101 binary UI integration tests in `src/main.rs`, plus 3 opt-in performance benchmarks).
+- **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
+- **Test Baseline:** **202 tests passing** (100 core library unit tests in `src/lib.rs`, 102 binary UI integration tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 205 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
 
-## 2. Recently Completed Work (Phases 0–3)
+## 2. Recently Completed Work (Phases 0–4)
+
+### Phase 4: GPUI Kit 0.8.1 Upgrade, Native Scrollbars & Platform Scroll Bounce
+- **GPUI Kit & Upstream Upgrade:** Upgraded `gpui-kit` to `=0.8.1` and upstream runtime to `gpui-pre = 0.3.10`.
+- **API Migration:** Migrated deprecated `ScrollWheelEvent` -> `ScrollEvent` and `.on_scroll_wheel()` -> `.on_scroll()`.
+- **Auto-Hiding Native Scrollbars:** Configured `Theme::set_scrollbar_mode(ScrollbarMode::Scrolling, cx)` on application initialization. Scrollbars remain invisible while idle, appear dynamically when scrolling begins, and automatically fade out when scrolling ceases.
+- **Dynamic Theme-Aware Scrollbar Styling:** Added `"scrollbar.thumb.background"` and `"scrollbar.thumb.hover.background"` theme tokens to all 6 built-in themes (Catppuccin Mocha, Macchiato, Frappé, Latte, Gruvbox Dark, Gruvbox Light) with transparent track background and contrasting hover thumb states.
+- **Scrollable Area Implementation:** Replaced raw `overflow_y_scroll()` with official `ScrollableElement` (`overflow_y_scrollbar()`) across All Manga grid, sidebar navigation, continue reading, collections, history, manga details, settings view, and command suggestions overlay.
+- **Continuous Reader Scrollbar:** Implemented custom `ScrollbarHandle` (`ReaderScrollHandle`) for continuous vertical and webcomics reader modes with bidirectional scroll offset synchronization.
+- **Native Boundary Scroll Bounce:** Enabled `.scroll_bounce(true)` across all vertical scrollable containers, combined with `.scroll_wheel(false)` to preserve Linux/Windows kinetic momentum while providing native spring-back physics.
+- **Test Coverage:** Added `test_continuous_reader_scrollbar_sync_and_mode` verifying continuous reader scrollbar reflection and handle offset synchronization. All 205 tests pass cleanly.
 
 ### Phase 0: Baseline & Test Discrepancy Resolution
 - Resolved the 98 vs 99 UI test discrepancy: confirmed 102 total binary runner tests (98 in `tests.rs` + 3 in `ui/theme.rs` + 1 in `ui/reader.rs` = 99 active + 3 ignored benchmarks).

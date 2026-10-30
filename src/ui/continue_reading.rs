@@ -6,6 +6,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
@@ -87,9 +88,11 @@ pub fn render_continue_reading_view(
 
     div()
         .id("continue-reading-container")
-        .track_scroll(props.scroll_handle)
         .size_full()
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
+        .track_scroll(props.scroll_handle)
+        .scroll_bounce(true)
+        .scroll_wheel(false)
         .px(props.pad_x)
         .py_6()
         .flex()

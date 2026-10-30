@@ -12,7 +12,7 @@ mod state;
 
 pub use conflict::{DiffConflict, DiffConflictResolution};
 pub use document::{DiffFile, DiffFileStatus, DiffLinePosition, DiffLineRange, DiffSide};
-pub use parser::DiffParseError;
+pub use parser::{DiffParseError, DiffParseOptions};
 pub use presentation::DiffInlineUnit;
 pub use state::{DiffEvent, DiffState};
 
@@ -73,8 +73,24 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("end", Last, Some("Diff")),
         KeyBinding::new("shift-up", ExtendUp, Some("Diff")),
         KeyBinding::new("shift-down", ExtendDown, Some("Diff")),
-        KeyBinding::new("secondary-c", Copy, Some("Diff")),
-        KeyBinding::new("secondary-a", SelectAll, Some("Diff")),
+        KeyBinding::new(
+            if cx.platform_info().is_mac() {
+                "cmd-c"
+            } else {
+                "ctrl-c"
+            },
+            Copy,
+            Some("Diff"),
+        ),
+        KeyBinding::new(
+            if cx.platform_info().is_mac() {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            },
+            SelectAll,
+            Some("Diff"),
+        ),
     ]);
 }
 
