@@ -192,12 +192,12 @@ struct Yomu {
 }
 
 impl Yomu {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let dirs = DataDirs::new().expect("cannot create the yomu data directory");
-        Self::with_dirs(dirs, cx)
+        Self::with_dirs(dirs, window, cx)
     }
 
-    fn with_dirs(dirs: DataDirs, cx: &mut Context<Self>) -> Self {
+    fn with_dirs(dirs: DataDirs, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let dirs = Arc::new(dirs);
         let (library, toast) = match Library::load(&dirs) {
             Ok(library) => (library, None),
@@ -253,6 +253,23 @@ impl Yomu {
             let _ = std::fs::remove_file(obsolete_tracking_file);
         }
 
+        let search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search title, path, or series…"));
+        cx.subscribe(
+            &search_input,
+            |this, input, event: &InputEvent, cx| match event {
+                InputEvent::Change => {
+                    this.search_query = input.read(cx).value().to_string();
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.deactivate_search(cx);
+                }
+                _ => {}
+            },
+        )
+        .detach();
+
         let state = Self {
             focus_handle: cx.focus_handle(),
             dirs,
@@ -285,7 +302,7 @@ impl Yomu {
             selection: Selection::new(),
             search_query: String::new(),
             search_active: false,
-            search_input: None,
+            search_input: Some(search_input),
             open_group: None,
             applied_opaque: None,
             library_scroll: ScrollHandle::new(),
@@ -6059,26 +6076,6 @@ impl Render for Yomu {
         }
         self.sync_appearance(window, cx);
 
-        if self.search_input.is_none() {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(self.search_query.clone())
-                    .placeholder("Search title, path, or series…")
-            });
-            cx.subscribe(&input, |this, input, event: &InputEvent, cx| match event {
-                InputEvent::Change => {
-                    this.search_query = input.read(cx).value().to_string();
-                    cx.notify();
-                }
-                InputEvent::PressEnter { .. } => {
-                    this.deactivate_search(cx);
-                }
-                _ => {}
-            })
-            .detach();
-            self.search_input = Some(input);
-        }
-
         let reading = self.reader.is_some();
         let content = match self.reader.as_ref() {
             Some(reader) => self.render_reader(reader, cx),
@@ -6326,79 +6323,130 @@ fn app_icon() -> Option<Arc<image::RgbaImage>> {
     Some(Arc::new(resized))
 }
 
-fn ensure_desktop_icon() {
+/// Installs desktop entry and application icons to the specified data directory (typically `$XDG_DATA_HOME`).
+///
+/// Returns `Ok(true)` if files were written or updated, or `Ok(false)` if all items were already present.
+/// If `force` is false, existing user-customized `.desktop` files or icons are preserved.
+#[cfg(target_os = "linux")]
+pub fn install_desktop_integration_to(data_dir: &Path, force: bool) -> anyhow::Result<bool> {
+    let mut updated = false;
+    let logo_bytes = include_bytes!("../assets/logo.png");
+    let pixmap_icon = data_dir.join("pixmaps/yomu.png");
+    let pixmap_needs_write = force || !pixmap_icon.exists();
+    if pixmap_needs_write {
+        if let Some(parent) = pixmap_icon.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&pixmap_icon, logo_bytes)?;
+        updated = true;
+    }
+
+    let sizes: &[(&str, &[u8])] = &[
+        ("16x16", include_bytes!("../assets/icons/16x16.png")),
+        ("24x24", include_bytes!("../assets/icons/24x24.png")),
+        ("32x32", include_bytes!("../assets/icons/32x32.png")),
+        ("48x48", include_bytes!("../assets/icons/48x48.png")),
+        ("64x64", include_bytes!("../assets/icons/64x64.png")),
+        ("128x128", include_bytes!("../assets/icons/128x128.png")),
+        ("256x256", include_bytes!("../assets/icons/256x256.png")),
+        ("512x512", include_bytes!("../assets/icons/512x512.png")),
+    ];
+
+    for (sz, bytes) in sizes {
+        let path = data_dir.join(format!("icons/hicolor/{sz}/apps/yomu.png"));
+        let icon_needs_write = force || !path.exists();
+        if icon_needs_write {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, bytes)?;
+            updated = true;
+        }
+    }
+
+    let desktop_file = data_dir.join("applications/yomu.desktop");
+    let desktop_content = include_str!("../packaging/yomu.desktop");
+    let desktop_needs_write = force || !desktop_file.exists();
+    if desktop_needs_write {
+        if let Some(parent) = desktop_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&desktop_file, desktop_content)?;
+        updated = true;
+    }
+
+    Ok(updated)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn install_desktop_integration_to(_data_dir: &Path, _force: bool) -> anyhow::Result<bool> {
+    anyhow::bail!("Desktop integration installation is only supported on Linux.");
+}
+
+pub fn install_desktop_integration(force: bool) -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
-    if let Some(data_dir) = dirs::data_dir() {
-        let mut updated = false;
-        let logo_bytes = include_bytes!("../assets/logo.png");
-        let pixmap_icon = data_dir.join("pixmaps/yomu.png");
-        let pixmap_needs_update = std::fs::read(&pixmap_icon)
-            .map(|existing| existing != logo_bytes)
-            .unwrap_or(true);
-        if pixmap_needs_update {
-            if let Some(parent) = pixmap_icon.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if std::fs::write(&pixmap_icon, logo_bytes).is_ok() {
-                updated = true;
-            }
-        }
+    {
+        let data_dir = dirs::data_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine XDG_DATA_HOME directory"))?;
 
-        let sizes: &[(&str, &[u8])] = &[
-            ("16x16", include_bytes!("../assets/icons/16x16.png")),
-            ("24x24", include_bytes!("../assets/icons/24x24.png")),
-            ("32x32", include_bytes!("../assets/icons/32x32.png")),
-            ("48x48", include_bytes!("../assets/icons/48x48.png")),
-            ("64x64", include_bytes!("../assets/icons/64x64.png")),
-            ("128x128", include_bytes!("../assets/icons/128x128.png")),
-            ("256x256", include_bytes!("../assets/icons/256x256.png")),
-            ("512x512", include_bytes!("../assets/icons/512x512.png")),
-        ];
-
-        for (sz, bytes) in sizes {
-            let path = data_dir.join(format!("icons/hicolor/{sz}/apps/yomu.png"));
-            let icon_needs_update = std::fs::read(&path)
-                .map(|existing| existing != *bytes)
-                .unwrap_or(true);
-            if icon_needs_update {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if std::fs::write(&path, bytes).is_ok() {
-                    updated = true;
-                }
-            }
-        }
-
-        let desktop_file = data_dir.join("applications/yomu.desktop");
-        let desktop_content = include_str!("../packaging/yomu.desktop");
-        if !desktop_file.exists() {
-            if let Some(parent) = desktop_file.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(&desktop_file, desktop_content);
-            updated = true;
-        } else if let Ok(existing) = std::fs::read_to_string(&desktop_file)
-            && !existing.contains("Icon=")
-        {
-            let _ = std::fs::write(&desktop_file, desktop_content);
-            updated = true;
-        }
-
+        let updated = install_desktop_integration_to(&data_dir, force)?;
         if updated {
+            println!(
+                "Installed yomu desktop integration in {}",
+                data_dir.display()
+            );
             let hicolor_dir = data_dir.join("icons/hicolor");
-            let _ = std::process::Command::new("gtk-update-icon-cache")
+            match std::process::Command::new("gtk-update-icon-cache")
                 .arg("-f")
                 .arg("-t")
-                .arg(hicolor_dir)
-                .output();
+                .arg(&hicolor_dir)
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    println!("Updated icon cache: {}", hicolor_dir.display());
+                }
+                Ok(output) => {
+                    eprintln!(
+                        "gtk-update-icon-cache notice (exit {}): {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                }
+                Err(err) => {
+                    eprintln!(
+                        "gtk-update-icon-cache not available ({err}); skipping cache update."
+                    );
+                }
+            }
+        } else {
+            println!(
+                "Desktop integration already installed in {} (use --force to overwrite)",
+                data_dir.display()
+            );
         }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = force;
+        anyhow::bail!("Desktop integration installation is only supported on Linux.");
     }
 }
 
 fn main() {
-    ensure_desktop_icon();
     let args: Vec<String> = std::env::args().collect();
+    if args
+        .iter()
+        .any(|arg| arg == "--install-desktop" || arg == "--install-icons")
+    {
+        let force = args.iter().any(|arg| arg == "--force");
+        if let Err(err) = install_desktop_integration(force) {
+            eprintln!("yomu: desktop installation failed: {err:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let vim_cli_override = args.iter().any(|arg| arg == "--vim" || arg == "--vim-mode");
 
     application()
@@ -6454,7 +6502,7 @@ fn main() {
                     ..Default::default()
                 },
                 move |window, cx| {
-                    let view = cx.new(Yomu::new);
+                    let view = cx.new(|cx| Yomu::new(window, cx));
                     view.update(cx, |this, _| this.vim_cli_override = vim_cli_override);
                     let focus = view.read(cx).focus_handle.clone();
                     window.focus(&focus, cx);

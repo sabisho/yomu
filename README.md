@@ -346,9 +346,8 @@ Importing never copies or modifies your comic files.
 
 ## Dependencies
 
-The UI uses GPUI Kit 0.7.3, which brings its matching GPUI snapshot and requires Rust 1.92 or newer. The old
-`vendor/xattr` and `vendor/stacksafe-macro` compatibility copies are retained in the repository, but are no longer
-patched into the active dependency graph.
+The UI uses GPUI Kit 0.7.3, which brings its matching GPUI snapshot and requires Rust 1.92 or newer. A local copy
+of `vendor/gpui-component` is maintained as a Cargo compatibility patch.
 
 ## Development
 

@@ -27,7 +27,7 @@ dirs = "6"
 # SIMD resampling for page and cover scaling (pure Rust, no C code): several times faster than the
 # image crate's resize, which was the slowest step of showing a large page.
 fast_image_resize = { version = "6", default-features = false, features = ["std"] }
-# Pure-Rust decoders only: no C libraries get linked for image or archive handling.
+# Image and ZIP decoding use pure-Rust decoders; CBR/RAR archives link the unrar C++ library via `unrar`.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 zune-jpeg = { version = "0.5", default-features = false, features = ["x86", "std"] }
 zune-core = { version = "0.5", default-features = false, features = ["std"] }

@@ -66,7 +66,7 @@ fn launch<'a>(
         cx.bind_keys([KeyBinding::new("ctrl-,", OpenSettings, None)]);
     });
     cx.add_window_view(move |window, cx| {
-        let yomu = Yomu::with_dirs(dirs, cx);
+        let yomu = Yomu::with_dirs(dirs, window, cx);
         window.focus(&yomu.focus_handle, cx);
         yomu
     })
@@ -3480,4 +3480,84 @@ fn test_recently_added_layout_and_clipping(cx: &mut TestAppContext) {
     // Queue item cover radius clamping
     let queue_radius = (radius - px(border_px)).max(px(0.)).min(px(6.));
     assert!(queue_radius <= px(6.));
+}
+
+#[gpui_kit::test]
+fn test_search_input_lifecycle(cx: &mut TestAppContext) {
+    let fx = fixture("search_lifecycle");
+    let (view, cx) = launch(&fx, cx);
+
+    // Verify search_input is initialized immediately at construction without needing render
+    let has_search_input = view.read_with(cx, |this, _| this.search_input.is_some());
+    assert!(
+        has_search_input,
+        "search_input must be initialized during view construction"
+    );
+
+    // Verify activating search sets search_active and focuses the input
+    view.update_in(cx, |this, window, cx| {
+        this.activate_search(window, cx);
+    });
+    assert!(view.read_with(cx, |this, _| this.search_active));
+
+    // Verify updating the input value updates search_query via the subscription
+    let input_entity = view.read_with(cx, |this, _| this.search_input.clone().unwrap());
+    input_entity.update_in(cx, |input, window, cx| {
+        input.set_value("test query", window, cx);
+        cx.emit(gpui_kit::component::input::InputEvent::Change);
+    });
+    cx.run_until_parked();
+
+    let query = view.read_with(cx, |this, _| this.search_query.clone());
+    assert_eq!(query, "test query");
+
+    // Deactivating search clears the active flag
+    view.update_in(cx, |this, _, cx| {
+        this.deactivate_search(cx);
+    });
+    assert!(!view.read_with(cx, |this, _| this.search_active));
+}
+
+#[test]
+fn test_desktop_integration_install() {
+    let tmp = std::env::temp_dir().join(format!(
+        "yomu-desktop-test-{}-{}",
+        std::process::id(),
+        crate::now_secs()
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // First install: should create all files and return true (updated)
+    let updated = crate::install_desktop_integration_to(&tmp, false).unwrap();
+    assert!(updated);
+
+    let desktop_file = tmp.join("applications/yomu.desktop");
+    let pixmap_file = tmp.join("pixmaps/yomu.png");
+    let icon_128 = tmp.join("icons/hicolor/128x128/apps/yomu.png");
+
+    assert!(desktop_file.exists());
+    assert!(pixmap_file.exists());
+    assert!(icon_128.exists());
+
+    // Second install without force: files exist, should not update (returns false)
+    let updated_second = crate::install_desktop_integration_to(&tmp, false).unwrap();
+    assert!(!updated_second);
+
+    // Customise the desktop file
+    std::fs::write(&desktop_file, "Customized desktop file").unwrap();
+
+    // Re-run without force: should NOT overwrite customized file
+    let updated_third = crate::install_desktop_integration_to(&tmp, false).unwrap();
+    assert!(!updated_third);
+    let content = std::fs::read_to_string(&desktop_file).unwrap();
+    assert_eq!(content, "Customized desktop file");
+
+    // Re-run with force: should overwrite customized file
+    let updated_forced = crate::install_desktop_integration_to(&tmp, true).unwrap();
+    assert!(updated_forced);
+    let content_forced = std::fs::read_to_string(&desktop_file).unwrap();
+    assert!(content_forced.contains("[Desktop Entry]"));
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }
