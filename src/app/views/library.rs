@@ -228,22 +228,39 @@ impl Yomu {
         let radius = px(self.radius_px());
         let yomu = cx.entity();
 
-        let order = self.current_view_order();
         let query = self.search_query.trim().to_lowercase();
-        let books: Vec<&Book> = order
-            .iter()
-            .filter_map(|id| self.library.get(id))
-            .filter(|b| {
-                if query.is_empty() {
-                    true
-                } else {
-                    b.title.to_lowercase().contains(&query)
-                        || b.series
-                            .as_ref()
-                            .is_some_and(|s| s.to_lowercase().contains(&query))
-                }
-            })
-            .collect();
+        let matches_query = |b: &Book| {
+            query.is_empty()
+                || b.title.to_lowercase().contains(&query)
+                || b.series
+                    .as_ref()
+                    .is_some_and(|s| s.to_lowercase().contains(&query))
+        };
+
+        let books: Vec<&Book> = if self.library.settings().group_series
+            && let Some(open_key) = self.open_group.as_deref()
+        {
+            let groups = directory_groups(self.library.books());
+            if let Some(group) = groups.into_iter().find(|g| g.key == open_key) {
+                group
+                    .books
+                    .into_iter()
+                    .filter(|b| matches_query(b))
+                    .collect()
+            } else {
+                self.library
+                    .books()
+                    .iter()
+                    .filter(|b| matches_query(b))
+                    .collect()
+            }
+        } else {
+            self.library
+                .books()
+                .iter()
+                .filter(|b| matches_query(b))
+                .collect()
+        };
 
         if books.is_empty() {
             return div()

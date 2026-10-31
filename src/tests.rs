@@ -3991,3 +3991,52 @@ fn test_details_cover_stale_result_protection_on_book_change(cx: &mut TestAppCon
         );
     });
 }
+
+#[gpui_kit::test]
+fn test_render_all_manga_view_grouped_and_ungrouped(cx: &mut TestAppContext) {
+    let fx = fixture("render-all-manga");
+    let (view, cx) = launch(&fx, cx);
+    cx.run_until_parked();
+
+    // 1. Default: ungrouped view rendering without search query
+    view.update_in(cx, |this, window, cx| {
+        let _elem = this.render_all_manga_view(window, cx);
+    });
+
+    // 2. Ungrouped with matching search query
+    view.update_in(cx, |this, window, cx| {
+        this.search_query = "A".to_string();
+        let _elem = this.render_all_manga_view(window, cx);
+    });
+
+    // 3. Ungrouped with non-matching search query (renders empty state)
+    view.update_in(cx, |this, window, cx| {
+        this.search_query = "NonExistent".to_string();
+        let _elem = this.render_all_manga_view(window, cx);
+    });
+
+    // 4. Enable series grouping with an open group
+    let group_key = view.read_with(cx, |this, _| {
+        directory_groups(this.library.books())[0].key.clone()
+    });
+
+    view.update_in(cx, |this, window, cx| {
+        this.search_query.clear();
+        this.library.settings_mut().group_series = true;
+        this.open_group = Some(group_key);
+        let _elem = this.render_all_manga_view(window, cx);
+    });
+
+    // 5. Open group with search filter
+    view.update_in(cx, |this, window, cx| {
+        this.search_query = "A".to_string();
+        let _elem = this.render_all_manga_view(window, cx);
+    });
+
+    // 6. Open group with non-existent key falls back gracefully
+    view.update_in(cx, |this, window, cx| {
+        this.search_query.clear();
+        this.open_group = Some("non-existent-group-key".to_string());
+        let _elem = this.render_all_manga_view(window, cx);
+    });
+}

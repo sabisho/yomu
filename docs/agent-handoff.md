@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **245 active tests** passing (106 core library unit tests in `src/lib.rs`, 139 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 248 total).
+- **Test Baseline:** **246 active tests** passing (106 core library unit tests in `src/lib.rs`, 140 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 249 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
@@ -95,6 +95,10 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Replaced per-book `b.path.exists()` in `render_two_pane_shell` with cached `self.downloads_count` computed on the background executor (`refresh_downloads_count`) with monotonic `downloads_seq` sequence tracking and explicit invalidation upon imports, removals, clear all data, and navigation.
      - Replaced synchronous `props.cover_path.exists()` in `ui::details::render_manga_details` with cached `cover_available: bool` in `MangaDetailsProps` driven by background executor checks (`check_details_cover`) with stale-result protection on book change (`details_cover_seq` and `selected_book_id` match).
      - Added 4 UI integration regression tests in `src/tests.rs` (245 active tests passing: 106 lib, 139 bin).
+   - **Phase 3.2 (Completed):** Eliminated quadratic $O(N^2)$ book lookups and per-frame string allocations in library rendering (`src/app/views/library.rs`):
+     - Replaced `order.iter().filter_map(|id| self.library.get(id))` in `Yomu::render_all_manga_view` with direct contiguous iteration over `self.library.books()` in ungrouped mode.
+     - For open series groups, directly borrowed `group.books` from `directory_groups()` without intermediate ID vector allocation or repeated linear scans.
+     - Added UI integration regression test in `src/tests.rs` (246 active tests passing: 106 lib, 140 bin).
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.
 4. **Phase 4: Dual-Page Spread Reading Mode:**

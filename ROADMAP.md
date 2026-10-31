@@ -70,10 +70,14 @@ This document outlines prioritized future work, planned features, and tracked te
   - Eliminated synchronous `props.cover_path.exists()` check from `ui::details::render_manga_details`, adding `cover_available: bool` to `MangaDetailsProps` driven by asynchronous background check (`check_details_cover`) with stale-result protection on book change (`details_cover_seq` and `selected_book_id` match).
   - Added 4 regression UI integration tests covering downloads count correctness, cache invalidation on mutations, stale async result protection, missing cover fallback behavior, and rapid book selection changes (245 active tests passing: 106 lib, 139 bin).
 
-### 7. Constant-Time Library Item Lookups
-- **Goal:** Eliminate $O(N^2)$ linear comparisons during library rendering.
-- **Remediation:**
-  - Index `Library` items using standard library `HashMap<String, usize>` or ordered index without introducing unnecessary crates.
+### 7. Elimination of Quadratic Library Rendering Lookups (Phase 3.2 — Completed)
+- **Goal:** Eliminate $O(N^2)$ linear comparisons and per-frame ID allocations during library rendering.
+- **Status:** Completed.
+  - Eliminated the `Vec<String> → Library::get(id) → Vec<&Book>` lookup chain in `Yomu::render_all_manga_view` (`src/app/views/library.rs`).
+  - In ungrouped mode (or when no group is open), iterates directly over `self.library.books()` with search filtering in $O(N)$ time with zero ID string allocations.
+  - In grouped mode when a group is open, borrows `group.books` directly from `directory_groups()` without secondary ID lookups or ID cloning.
+  - Maintained architecture freeze and storage invariants: no unnecessary hash maps, caches, or duplicated state introduced.
+  - Added UI test coverage for grouped, ungrouped, search-filtered, and missing group rendering paths (246 active tests passing: 106 lib, 140 bin).
 
 ### 8. Background Persistence Zero-Copy Snapshots
 - **Goal:** Eliminate deep-cloning entire `Library` vectors during debounced autosave.
