@@ -3,7 +3,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::HashSet,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -817,8 +816,9 @@ impl Yomu {
             };
             reader.viewport = vp;
             reader.animate = animate;
-            let Some(pages) = reader.pages.clone() else {
-                return false;
+            let pages_len = match reader.pages.as_deref() {
+                Some(pages) => pages.len(),
+                None => return false,
             };
             let previous_page = reader.page;
             reader.settle(&vp);
@@ -841,26 +841,24 @@ impl Yomu {
 
             // Keep a bounded window of decoded pages around the current one, and stay under the
             // memory budget even with very large pages.
-            let entries: Vec<pagecache::Entry> = reader
-                .images
-                .iter()
-                .map(|(index, page)| pagecache::Entry {
-                    index: *index,
+            reader.entries_scratch.clear();
+            reader
+                .entries_scratch
+                .extend(reader.images.iter().map(|(&index, page)| pagecache::Entry {
+                    index,
                     bytes: page.bytes,
-                })
-                .collect();
-            let keep: HashSet<usize> = if reader.continuous {
+                }));
+            let keep = if reader.continuous {
                 let low = reader.off.1;
                 let high = low + vp.height;
                 let (first, last) = reader.continuous_visible_range(low, high, &vp);
-                (first.saturating_sub(1)..=(last + 2).min(pages.len().saturating_sub(1))).collect()
+                first.saturating_sub(1)..=(last + 2).min(pages_len.saturating_sub(1))
             } else {
-                (reader.page.saturating_sub(pagecache::KEEP_BEHIND)
-                    ..=reader.page + pagecache::KEEP_AHEAD)
-                    .collect()
+                reader.page.saturating_sub(pagecache::KEEP_BEHIND)
+                    ..=reader.page + pagecache::KEEP_AHEAD
             };
             for ix in pagecache::plan_eviction_with_keep(
-                &entries,
+                &reader.entries_scratch,
                 reader.page,
                 pagecache::system_memory_budget(),
                 &keep,
@@ -897,12 +895,9 @@ impl Yomu {
             };
 
             let wanted_indices: Vec<usize> = if reader.continuous {
-                keep.iter()
-                    .copied()
-                    .filter(|ix| *ix < pages.len())
-                    .collect()
+                keep.filter(|ix| *ix < pages_len).collect()
             } else {
-                pagecache::prefetch_order(reader.page, pages.len())
+                pagecache::prefetch_order(reader.page, pages_len)
             };
             let wanted = wanted_indices
                 .into_iter()
@@ -934,9 +929,8 @@ impl Yomu {
         if let Some(reader) = self.reader.as_mut() {
             self.garbage.append(&mut reader.released);
             // Cancel background prefetch tasks for pages that are no longer wanted:
-            let wanted_set: HashSet<usize> = wanted.iter().map(|(ix, _)| *ix).collect();
             reader.cancellations.retain(|ix, token| {
-                if !wanted_set.contains(ix) {
+                if !wanted.iter().any(|(wanted_ix, _)| wanted_ix == ix) {
                     token.store(true, Ordering::Relaxed);
                     reader.pending.remove(ix);
                     false
@@ -955,7 +949,7 @@ impl Yomu {
         let Some(reader) = self.reader.as_mut() else {
             return;
         };
-        let Some(pages) = reader.pages.clone() else {
+        let Some(pages) = reader.pages.as_ref() else {
             return;
         };
         if ix >= pages.len() || reader.pending.contains(&ix) || reader.failed.contains_key(&ix) {
@@ -964,6 +958,10 @@ impl Yomu {
         if matches!(reader.images.get(&ix), Some(page) if page.tier >= tier) {
             return;
         }
+        let name = match pages.get(ix) {
+            Some(name) => name.clone(),
+            None => return,
+        };
         let cancel = Arc::new(AtomicBool::new(false));
         reader.pending.insert(ix);
         reader.cancellations.insert(ix, cancel.clone());
@@ -971,7 +969,6 @@ impl Yomu {
         let book_id = reader.book_id.clone();
         let path = reader.path.clone();
         let kind = reader.kind;
-        let name = pages[ix].clone();
         let cancel_token = cancel.clone();
 
         let task = cx.background_executor().spawn(async move {

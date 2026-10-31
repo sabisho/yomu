@@ -97,12 +97,24 @@ This document outlines prioritized future work, planned features, and tracked te
   - Optimized `directory_groups` to check `buckets.get_mut(&key)` before allocating `name: String`, avoiding redundant string allocations for subsequent books in existing buckets.
   - Maintained architecture freeze, retained GPUI's static lifetime requirements for rendered UI labels, and passed full verification suite (250 active tests passing: 109 lib, 141 bin).
 
-### 10. Background Persistence Zero-Copy Snapshots
+### 10. Reduction of Reader Frame-Loop Allocations (Phase 3.3C — Completed)
+- **Goal:** Eliminate avoidable allocations, repeated linear lookups, and redundant string cloning during reader scrolling, momentum, zooming, and page transitions.
+- **Status:** Completed.
+  - Cached `book_title: SharedString` on `Reader` at open time, completely eliminating the $O(N)$ linear `Library::get()` scan and duplicate string heap allocations on every animation frame.
+  - Replaced the per-frame `keep: HashSet<usize>` allocation with scalar `RangeInclusive<usize>` checks in both single-page and continuous modes, preserving exact keep bounds and memory budget semantics.
+  - Optimized `plan_eviction_with_keep` to defer `remaining` vector allocation only when `total > budget`, achieving zero heap allocations during steady-state eviction checks.
+  - Replaced `wanted_set: HashSet<usize>` with direct slice iteration (`!wanted.iter().any(...)`) when checking in-flight prefetch cancellations, eliminating an unnecessary `HashSet` allocation per frame.
+  - Removed duplicate `.to_string()` conversions in `reader_header`, passing `SharedString` directly into GPUI element construction.
+  - Eliminated `reader.pages.clone()` from `sync_reader` and `request_page`, borrowing `reader.pages.as_ref()` and avoiding 7–10 atomic reference count increments/decrements per frame.
+  - Reused `reader.entries_scratch` buffer to eliminate `entries: Vec<Entry>` allocation in `sync_reader`.
+  - Added focused unit and integration regression tests for range-based eviction, prefetch cancellation, and book switch title caching (255 active tests passing: 112 lib, 143 bin).
+
+### 11. Background Persistence Zero-Copy Snapshots
 - **Goal:** Eliminate deep-cloning entire `Library` vectors during debounced autosave.
 - **Remediation:**
   - Pass lightweight serialization diffs or immutable snapshots to background write threads.
 
-### 11. Dependency & Vendor Hygiene
+### 12. Dependency & Vendor Hygiene
 - **Goal:** Reduce repository footprint and simplify upstream maintenance.
 - **Remediation:**
   - Remove dead dependency `memmap2` from `Cargo.toml`.
@@ -112,7 +124,7 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ## 🎨 Phase 4: UI/UX Refinement & Restrained Animations
 
-### 12. Restrained UI Motion Transitions
+### 13. Restrained UI Motion Transitions
 - **Goal:** Introduce subtle, interruptible desktop motion that strictly adheres to `disable_animations`.
 - **Candidates (Starting Guidelines):**
   - Sidebar collapse/expand: ~160–180 ms cubic ease-out width transition.
@@ -123,21 +135,21 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ## 📖 Phase 5: Feature Expansion
 
-### 13. Dual-Page Spread Reading Mode
+### 14. Dual-Page Spread Reading Mode
 - **Goal:** Display two portrait pages side-by-side to replicate physical manga reading.
 - **Behavior:**
   - Automatic single-page fallback for wide landscape pages (spread covers).
   - Respect reading direction (Right-to-Left pairs right page first; Left-to-Right pairs left page first).
   - Toggle via reader key `d` and `:spread [on|off]` command, with persistence in `Settings`.
 
-### 14. Library Sorting Options
+### 15. Library Sorting Options
 - **Goal:** Allow users to sort library cards and list rows beyond the default import order.
 - **Criteria:**
   - Sort by: Title (alphabetical/natural), Last Read (recency), Date Added (import timestamp), Page Count, Reading Progress.
   - Direction: Ascending / Descending toggle.
   - Persist active sort preference in `library.json` without altering source file order.
 
-### 15. CB7 / 7z Archive Support
+### 16. CB7 / 7z Archive Support
 - **Goal:** Support `.cb7` and `.7z` comic archives alongside CBZ, CBR, ZIP, and RAR.
 
 ---

@@ -166,8 +166,8 @@ pub fn reader_progress_bar(fraction: f32, accent: Hsla) -> Div {
 
 /// Autohiding top navigation and header overlay for the reader canvas.
 pub fn reader_header(
-    book_title: &str,
-    current_page_str: &str,
+    book_title: SharedString,
+    current_page_str: SharedString,
     fit_mode: FitMode,
     colors: UiColors,
     on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -221,7 +221,7 @@ pub fn reader_header(
                                 .text_sm()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(colors.foreground)
-                                .child(book_title.to_string()),
+                                .child(book_title),
                         ),
                 )
                 .child(
@@ -229,7 +229,7 @@ pub fn reader_header(
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(colors.muted)
-                        .child(current_page_str.to_string()),
+                        .child(current_page_str),
                 )
                 .child(
                     div()
@@ -381,7 +381,7 @@ pub struct ReaderProps<'a> {
     pub radius: Pixels,
     pub border_px: f32,
     pub radius_xl_px: f32,
-    pub book_title: &'a str,
+    pub book_title: SharedString,
     pub hud: Option<SharedString>,
     pub scroll_handle: Option<&'a ReaderScrollHandle>,
 }
@@ -533,10 +533,10 @@ pub fn render_reader(
         })
     };
 
-    let current_page_str = format!("{} / {}", reader.page + 1, reader.total);
+    let current_page_str = SharedString::from(format!("{} / {}", reader.page + 1, reader.total));
     let top_bar = reader_header(
         props.book_title,
-        &current_page_str,
+        current_page_str,
         reader.fit,
         props.colors,
         on_back,
@@ -586,6 +586,7 @@ pub fn render_reader(
 /// State of the book that is currently open.
 pub struct Reader {
     pub book_id: String,
+    pub book_title: SharedString,
     pub path: PathBuf,
     pub kind: SourceKind,
     /// `None` while the page list is still being read from disk.
@@ -622,6 +623,7 @@ pub struct Reader {
     pub webcomics: bool,
     /// Textures no longer shown, to be freed by the window on its next frame.
     pub released: Vec<Arc<RenderImage>>,
+    pub entries_scratch: Vec<yomu::pagecache::Entry>,
 
     pub images: HashMap<usize, Page>,
     pub pending: HashSet<usize>,
@@ -647,6 +649,7 @@ impl Reader {
         };
         Self {
             book_id: book.id.clone(),
+            book_title: SharedString::from(book.title.clone()),
             path: book.path.clone(),
             kind: book.kind,
             pages: None,
@@ -666,6 +669,7 @@ impl Reader {
             continuous: settings.continuous || settings.webcomics,
             webcomics: settings.webcomics,
             released: Vec::new(),
+            entries_scratch: Vec::new(),
             images: HashMap::new(),
             pending: HashSet::new(),
             cancellations: HashMap::new(),

@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **250 active tests** passing (109 core library unit tests in `src/lib.rs`, 141 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 253 total).
+- **Test Baseline:** **255 active tests** passing (112 core library unit tests in `src/lib.rs`, 143 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 258 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
@@ -110,6 +110,15 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Replaced `HashSet<String>` with borrowed `HashSet<&str>` across `render_all_manga_view` and `render_continue_reading_view`, eliminating hundreds of transient heap string clones per frame.
      - Avoided redundant `name: String` allocation in `directory_groups()` for duplicate members of existing directory buckets.
      - Full test suite passing (250 active tests: 109 lib, 141 bin).
+   - **Phase 3.3C (Completed):** Eliminated reader frame-loop allocations, linear lookups, and redundant string cloning:
+     - Cached `book_title: SharedString` on `Reader` at initialization, eliminating per-frame $O(N)$ linear scans of `self.library` and title string allocations during reading.
+     - Replaced `keep: HashSet<usize>` with scalar range `RangeInclusive<usize>` checks, eliminating per-frame `HashSet` allocations in both single-page and continuous modes.
+     - Optimized `pagecache::plan_eviction_with_keep` to allocate the `remaining` collection only when `total > budget`, achieving zero heap allocations during steady-state cache checks.
+     - Replaced `wanted_set: HashSet<usize>` with direct slice iteration (`!wanted.iter().any(...)`), eliminating `HashSet` creation on background prefetch cancellation checks.
+     - Removed redundant `.to_string()` calls in `reader_header`, consuming `SharedString` directly into GPUI layout elements.
+     - Eliminated repeated `reader.pages.clone()` from `sync_reader` and `request_page`, removing 7–10 atomic reference count increments/decrements per frame.
+     - Reused `reader.entries_scratch` buffer in `sync_reader` to avoid allocating `Vec<Entry>` per frame.
+     - Full test suite passing (255 active tests: 112 lib, 143 bin).
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.
 4. **Phase 4: Dual-Page Spread Reading Mode:**

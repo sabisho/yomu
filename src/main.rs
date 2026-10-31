@@ -912,19 +912,13 @@ impl Yomu {
         };
 
         let yomu = cx.entity();
-        let book_title = self
-            .library
-            .get(&reader.book_id)
-            .map(|b| b.title.clone())
-            .unwrap_or_default();
-
         let props = ui::reader::ReaderProps {
             reader,
             colors: self.colors,
             radius: px(self.radius_px()),
             border_px: self.border_px(),
             radius_xl_px: self.radius_xl_px(),
-            book_title: &book_title,
+            book_title: reader.book_title.clone(),
             hud: self.hud.clone(),
             scroll_handle: reader_scroll_handle.as_ref(),
         };

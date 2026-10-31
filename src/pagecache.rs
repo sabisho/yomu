@@ -87,8 +87,7 @@ pub fn prefetch_order(current: usize, total: usize) -> Vec<usize> {
 /// Which cached pages to drop: everything outside the keep window, then (if still over `budget`)
 /// the pages furthest from `current`. The current page is never dropped.
 pub fn plan_eviction(entries: &[Entry], current: usize, budget: u64) -> Vec<usize> {
-    let keep: std::collections::HashSet<usize> =
-        (current.saturating_sub(KEEP_BEHIND)..=current + KEEP_AHEAD).collect();
+    let keep = current.saturating_sub(KEEP_BEHIND)..=current + KEEP_AHEAD;
     plan_eviction_with_keep(entries, current, budget, &keep)
 }
 
@@ -98,10 +97,9 @@ pub fn plan_eviction_with_keep(
     entries: &[Entry],
     current: usize,
     budget: u64,
-    keep: &std::collections::HashSet<usize>,
+    keep: &std::ops::RangeInclusive<usize>,
 ) -> Vec<usize> {
     let mut evict = Vec::new();
-    let mut remaining = Vec::with_capacity(entries.len());
     let mut total: u64 = 0;
 
     for entry in entries {
@@ -109,11 +107,14 @@ pub fn plan_eviction_with_keep(
             evict.push(entry.index);
         } else {
             total += entry.bytes;
-            remaining.push(entry);
         }
     }
 
     if total > budget {
+        let mut remaining: Vec<&Entry> = entries
+            .iter()
+            .filter(|entry| keep.contains(&entry.index))
+            .collect();
         remaining.sort_by_key(|entry| {
             (
                 keep.contains(&entry.index),
@@ -208,6 +209,37 @@ mod tests {
             plan_eviction(&entries, 4, BUDGET_BYTES),
             plan_eviction(&entries, 4, BUDGET_BYTES)
         );
+    }
+
+    #[test]
+    fn plan_eviction_with_keep_drops_outside_range() {
+        let entries = vec![
+            entry(0, 10),
+            entry(1, 10),
+            entry(2, 10),
+            entry(3, 10),
+            entry(4, 10),
+        ];
+        // Keep window 2..=3
+        let evicted = plan_eviction_with_keep(&entries, 2, BUDGET_BYTES, &(2..=3));
+        assert_eq!(evicted, vec![0, 1, 4]);
+    }
+
+    #[test]
+    fn plan_eviction_with_keep_enforces_budget_within_range() {
+        let entries = vec![
+            entry(2, 600),
+            entry(3, 600), // total 1200 MB > 1024 MB
+        ];
+        let evicted = plan_eviction_with_keep(&entries, 2, BUDGET_BYTES, &(2..=3));
+        // Furthest from current (page 3) should be evicted; current (page 2) preserved
+        assert_eq!(evicted, vec![3]);
+    }
+
+    #[test]
+    fn plan_eviction_with_keep_handles_empty_entries() {
+        let entries: Vec<Entry> = Vec::new();
+        assert!(plan_eviction_with_keep(&entries, 0, BUDGET_BYTES, &(0..=5)).is_empty());
     }
 
     #[test]

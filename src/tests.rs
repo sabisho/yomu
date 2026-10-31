@@ -4065,3 +4065,67 @@ fn test_ui_cover_resolution_with_legacy_and_sized_covers(cx: &mut TestAppContext
         assert!(this.details_cover_available);
     });
 }
+
+#[gpui_kit::test]
+fn test_reader_title_cached_on_open_and_updates_on_book_switch(cx: &mut TestAppContext) {
+    let fx = fixture("reader-title-cache");
+    let (view, cx) = launch(&fx, cx);
+
+    // Open first book
+    open_book_by_index(&fx, &view, cx, 0);
+    let book0_title = view.read_with(cx, |this, _| {
+        this.library.get(&fx.ids[0]).unwrap().title.clone()
+    });
+    view.read_with(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.book_title.as_ref(), book0_title.as_str());
+    });
+
+    // Render reader to ensure header renders with cached title
+    view.update_in(cx, |this, _window, cx| {
+        let reader = this.reader.as_ref().unwrap();
+        let _elem = this.render_reader(reader, cx);
+    });
+
+    // Close and open second book
+    view.update_in(cx, |this, window, cx| {
+        this.close_book(window, cx);
+    });
+    open_book_by_index(&fx, &view, cx, 1);
+    let book1_title = view.read_with(cx, |this, _| {
+        this.library.get(&fx.ids[1]).unwrap().title.clone()
+    });
+    view.read_with(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.book_title.as_ref(), book1_title.as_str());
+    });
+}
+
+#[gpui_kit::test]
+fn test_reader_cancellation_direct_iteration_in_sync_reader(cx: &mut TestAppContext) {
+    let fx = fixture_with_pages("sync-cancel", 20);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Manually register an unwanted background task (page 18) while on page 0
+    let token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let token_clone = token.clone();
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_mut().unwrap();
+        reader.pending.insert(18);
+        reader.cancellations.insert(18, token_clone);
+    });
+
+    // Run sync_reader. On page 0, wanted only covers 0..=5; page 18 is not wanted.
+    view.update_in(cx, |this, window, cx| {
+        this.sync_reader(window, cx, 0.016);
+    });
+
+    // Direct iteration in sync_reader must have cancelled token for page 18
+    assert!(token.load(std::sync::atomic::Ordering::Relaxed));
+    view.read_with(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(!reader.pending.contains(&18));
+        assert!(!reader.cancellations.contains_key(&18));
+    });
+}
