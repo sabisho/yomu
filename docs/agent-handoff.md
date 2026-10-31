@@ -58,11 +58,11 @@ A comprehensive audit of the entire codebase was conducted and validated against
 
 Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
 
-1. **Phase 1: Critical Fixes & Reliability:**
-   - Resolve prefetch cancellation defect in `page_decoded`.
-   - Cache `/proc/meminfo` memory budget via `OnceLock`.
-   - Bound initial allocation capacity in `archive::read_zip_page`.
-2. **Phase 2: Architectural Modularization:**
+1. **Phase 1: Critical Fixes & Reliability (Completed):**
+   - Resolved prefetch cancellation defect in `request_page` and `page_decoded`.
+   - Cached `/proc/meminfo` memory budget via `OnceLock`.
+   - Bounded initial allocation capacity in `archive::read_zip_page` to 8 MiB while supporting pages up to 256 MiB.
+2. **Phase 2: Architectural Modularization (Next):**
    - Relocate `scroll.rs` to `src/ui/scroll.rs`.
    - Extract `src/app/` subsystems from `src/main.rs`.
 3. **Phase 3: Scalability & Performance:**

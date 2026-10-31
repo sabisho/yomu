@@ -229,6 +229,7 @@ impl Yomu {
     }
 
     fn with_dirs(dirs: DataDirs, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let _ = yomu::pagecache::system_memory_budget();
         let dirs = Arc::new(dirs);
         let (library, toast) = match Library::load(&dirs) {
             Ok(library) => (library, None),
@@ -3029,6 +3030,7 @@ impl Yomu {
             reader.cancellations.retain(|ix, token| {
                 if !wanted_set.contains(ix) {
                     token.store(true, std::sync::atomic::Ordering::Relaxed);
+                    reader.pending.remove(ix);
                     false
                 } else {
                     true
@@ -3084,11 +3086,12 @@ impl Yomu {
             ))
         });
 
+        let cancel_token_cb = cancel.clone();
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this
                 .update(cx, |this, cx| {
-                    this.page_decoded(book_id, ix, tier, result, cx)
+                    this.page_decoded(book_id, ix, tier, cancel_token_cb, result, cx)
                 })
                 .ok();
         })
@@ -3100,6 +3103,7 @@ impl Yomu {
         book_id: String,
         ix: usize,
         tier: u32,
+        cancel_token: Arc<std::sync::atomic::AtomicBool>,
         result: Result<(Arc<RenderImage>, (u32, u32), u64)>,
         cx: &mut Context<Self>,
     ) {
@@ -3109,8 +3113,22 @@ impl Yomu {
         if reader.book_id != book_id {
             return;
         }
-        reader.pending.remove(&ix);
-        reader.cancellations.remove(&ix);
+
+        let is_current = reader
+            .cancellations
+            .get(&ix)
+            .is_some_and(|active| Arc::ptr_eq(active, &cancel_token));
+
+        if is_current {
+            reader.pending.remove(&ix);
+            reader.cancellations.remove(&ix);
+        }
+
+        let was_cancelled = cancel_token.load(std::sync::atomic::Ordering::Relaxed);
+        if was_cancelled {
+            return;
+        }
+
         match result {
             Ok((image, orig, bytes)) => {
                 if reader.continuous && ix < reader.page {
@@ -5354,6 +5372,10 @@ fn main() {
     }
 
     let vim_cli_override = args.iter().any(|arg| arg == "--vim" || arg == "--vim-mode");
+
+    // Eagerly initialize the memory budget on application startup before window creation
+    // and before entering the GPUI render loop.
+    let _ = yomu::pagecache::system_memory_budget();
 
     application()
         // GPUI Kit icons are SVG asset paths. Without registering this source,

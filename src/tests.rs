@@ -56,6 +56,36 @@ fn fixture(tag: &str) -> Fixture {
     Fixture { files, dirs, ids }
 }
 
+fn fixture_with_pages(tag: &str, count: usize) -> Fixture {
+    static FIXTURE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = FIXTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("yomu-ui-{tag}-{}-{seq}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let dirs = DataDirs::at(root.join("data")).unwrap();
+
+    let mut files = Vec::new();
+    let path = root.join("comic.cbz");
+    let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    for page in 1..=count {
+        zip.start_file(format!("{page:03}.png"), options).unwrap();
+        zip.write_all(&png_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+    files.push(path);
+
+    let report = library::import_paths(&files, &dirs, &HashSet::new());
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let mut library = Library::default();
+    for book in report.added {
+        library.add(book);
+    }
+    library.save(&dirs).unwrap();
+    let ids = library.books().iter().map(|b| b.id.clone()).collect();
+    Fixture { files, dirs, ids }
+}
+
 fn launch<'a>(
     fx: &Fixture,
     cx: &'a mut TestAppContext,
@@ -3598,4 +3628,174 @@ fn test_continuous_reader_scrollbar_sync_and_mode(cx: &mut TestAppContext) {
     // Verify that the reader's offset was updated to 150.0
     let current_off_y = view.read_with(cx, |this, _| this.reader.as_ref().unwrap().off.1);
     assert_eq!(current_off_y, 150.0);
+}
+
+#[gpui_kit::test]
+fn prefetch_cancellation_does_not_fail_page_and_allows_subsequent_retry(cx: &mut TestAppContext) {
+    let fx = fixture_with_pages("prefetch-cancel", 20);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Book is opened on page 0. Request page 15 explicitly as prefetch:
+    view.update(cx, |this, cx| {
+        this.request_page(15, 1000, cx);
+    });
+
+    // Verify page 15 is pending and has a cancellation token
+    let has_cancel_token = with_reader(&view, cx, |r| {
+        r.pending.contains(&15) && r.cancellations.contains_key(&15)
+    });
+    assert!(has_cancel_token);
+
+    // Now simulate cancellation as would happen during fast scrolling when page 15 is no longer wanted:
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_mut().unwrap();
+        if let Some(token) = reader.cancellations.remove(&15) {
+            token.store(true, std::sync::atomic::Ordering::Relaxed);
+            reader.pending.remove(&15);
+        }
+    });
+
+    // Run until the cancelled task completes
+    cx.run_until_parked();
+
+    // Cancellation must NEVER be recorded in reader.failed:
+    with_reader(&view, cx, |r| {
+        assert!(
+            !r.failed.contains_key(&15),
+            "cancelled page must not be recorded in failed map: {:?}",
+            r.failed.get(&15)
+        );
+        assert!(
+            !r.images.contains_key(&15),
+            "cancelled page was not retained in images"
+        );
+        assert!(
+            !r.pending.contains(&15),
+            "cancelled page must not remain pending"
+        );
+    });
+
+    // Now navigate to page 15 (subsequent retry)
+    view.update(cx, |this, cx| {
+        this.goto_page(15, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    // The retry should have successfully decoded and cached the page
+    with_reader(&view, cx, |r| {
+        assert!(
+            r.images.contains_key(&15),
+            "page 15 should be decoded after retry"
+        );
+        assert!(
+            !r.failed.contains_key(&15),
+            "page 15 must not be in failed after retry"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn genuine_decode_error_is_recorded_in_failed(cx: &mut TestAppContext) {
+    let fx = fixture("genuine-error");
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    let (book_id, cancel_token) = with_reader(&view, cx, |r| {
+        (
+            r.book_id.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+    });
+
+    view.update(cx, |this, cx| {
+        // Register cancellation token as active for page 2
+        this.reader
+            .as_mut()
+            .unwrap()
+            .cancellations
+            .insert(2, cancel_token.clone());
+        this.reader.as_mut().unwrap().pending.insert(2);
+
+        // Deliver a genuine error
+        this.page_decoded(
+            book_id,
+            2,
+            1000,
+            cancel_token,
+            Err(anyhow::anyhow!("corrupted image stream")),
+            cx,
+        );
+    });
+
+    with_reader(&view, cx, |r| {
+        assert_eq!(
+            r.failed.get(&2).map(String::as_str),
+            Some("corrupted image stream"),
+            "genuine error must be recorded in failed map"
+        );
+        assert!(!r.pending.contains(&2));
+        assert!(!r.cancellations.contains_key(&2));
+    });
+}
+
+#[gpui_kit::test]
+fn prefetch_cancellation_race_condition_does_not_clobber_new_task(cx: &mut TestAppContext) {
+    let fx = fixture("cancel-race");
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    let book_id = with_reader(&view, cx, |r| r.book_id.clone());
+
+    let token_1 = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let token_2 = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_mut().unwrap();
+        // Task 1 was active, then cancelled
+        reader.pending.insert(3);
+        reader.cancellations.insert(3, token_1.clone());
+        token_1.store(true, std::sync::atomic::Ordering::Relaxed);
+        reader.pending.remove(&3);
+        reader.cancellations.remove(&3);
+
+        // Task 2 is now active for the same page
+        reader.pending.insert(3);
+        reader.cancellations.insert(3, token_2.clone());
+    });
+
+    // Task 1 arrives with cancellation error:
+    view.update(cx, |this, cx| {
+        this.page_decoded(
+            book_id.clone(),
+            3,
+            1000,
+            token_1,
+            Err(anyhow::anyhow!("page decode cancelled")),
+            cx,
+        );
+    });
+
+    // Verify Task 1 did NOT remove Task 2's pending or cancellation state, and did NOT fail page 3
+    with_reader(&view, cx, |r| {
+        assert!(!r.failed.contains_key(&3));
+        assert!(r.pending.contains(&3), "Task 2 must still be pending");
+        assert!(
+            r.cancellations.contains_key(&3),
+            "Task 2 token must still be in cancellations"
+        );
+    });
+
+    // Now Task 2 completes successfully:
+    view.update(cx, |this, cx| {
+        this.reader.as_mut().unwrap().pending.remove(&3);
+        this.reader.as_mut().unwrap().cancellations.remove(&3);
+        this.request_page(3, 1000, cx);
+    });
+    cx.run_until_parked();
+
+    with_reader(&view, cx, |r| {
+        assert!(r.images.contains_key(&3), "page 3 decoded by Task 2");
+        assert!(!r.failed.contains_key(&3));
+    });
 }

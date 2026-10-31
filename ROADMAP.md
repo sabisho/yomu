@@ -4,25 +4,26 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ---
 
-## 🎯 Phase 1: Critical Fixes & Reliability (Immediate)
+## 🎯 Phase 1: Critical Fixes & Reliability (Completed)
 
 ### 1. Prefetch Task Cancellation Recovery
 - **Goal:** Prevent cancelled prefetch tasks from marking pages as permanently failed.
-- **Remediation:**
-  - Differentiate worker cancellation aborts from genuine decoding errors in `request_page` and `page_decoded`.
-  - Ensure cancelled pages remain requestable when a user navigates back to them.
-  - Add regression test simulating rapid page scrubbing and return.
+- **Status:** Completed.
+  - Passing `cancel_token: Arc<AtomicBool>` to `page_decoded` and verifying identity via `Arc::ptr_eq`.
+  - Cancellation aborts no longer write to `reader.failed`. Cancelled pages remain requestable on navigation.
+  - Added regression unit and UI integration tests verifying cancellation, retry, race resilience, and genuine error handling.
 
 ### 2. UI-Thread I/O Elimination
 - **Goal:** Remove synchronous filesystem reads from active render and animation loops.
-- **Remediation:**
-  - Cache `pagecache::system_memory_budget()` output via `std::sync::OnceLock<u64>` on application launch.
-  - Ensure zero disk reads in `sync_reader` and scroll handlers.
+- **Status:** Completed.
+  - Cached `pagecache::system_memory_budget()` output via `std::sync::OnceLock<u64>`.
+  - Zero disk reads on render, scroll, and animation paths; host memory budget cached once.
 
 ### 3. Archive Buffer Allocation Bounds
 - **Goal:** Guard against archive allocation bombs in `archive::read_zip_page`.
-- **Remediation:**
-  - Cap initial `Vec::with_capacity` to a safe threshold (e.g., `entry.size().min(8 * 1024 * 1024)`) and stream into buffer.
+- **Status:** Completed.
+  - Capped initial `Vec::with_capacity` to `INITIAL_PAGE_BUF_CAPACITY` (8 MiB) while streaming up to `MAX_PAGE_BYTES` (256 MiB).
+  - Preserves legitimate large pages and rejects oversized entries without masking errors.
 
 ---
 

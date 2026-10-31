@@ -13,6 +13,9 @@ use crate::util::natural_cmp;
 /// Refuse to inflate a single page beyond this size (guards against zip bombs).
 const MAX_PAGE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FOLDER_DEPTH: usize = 4;
+/// Initial buffer allocation cap to guard against untrusted zip header size claims.
+/// The buffer will dynamically grow via `read_to_end` up to `MAX_PAGE_BYTES` if needed.
+const INITIAL_PAGE_BUF_CAPACITY: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceKind {
@@ -213,8 +216,16 @@ fn read_zip_page(path: &Path, name: &str) -> Result<Vec<u8>> {
         if entry.size() > MAX_PAGE_BYTES {
             bail!("page {name} is unreasonably large");
         }
-        let mut buf = Vec::with_capacity(entry.size() as usize);
-        entry.take(MAX_PAGE_BYTES).read_to_end(&mut buf)?;
+        let initial_cap = if entry.size() > 0 {
+            (entry.size() as usize).min(INITIAL_PAGE_BUF_CAPACITY)
+        } else {
+            64 * 1024
+        };
+        let mut buf = Vec::with_capacity(initial_cap);
+        let bytes_read = entry.take(MAX_PAGE_BYTES + 1).read_to_end(&mut buf)?;
+        if bytes_read > MAX_PAGE_BYTES as usize {
+            bail!("page {name} is unreasonably large");
+        }
         Ok(buf)
     })();
 
@@ -266,12 +277,28 @@ pub fn read_page(path: &Path, kind: SourceKind, name: &str) -> Result<Vec<u8>> {
         SourceKind::Archive => {
             let format = detect_archive_format(path);
             match format {
-                ArchiveFormat::Zip => {
-                    read_zip_page(path, name).or_else(|_| read_rar_page(path, name))
-                }
-                ArchiveFormat::Rar => {
-                    read_rar_page(path, name).or_else(|_| read_zip_page(path, name))
-                }
+                ArchiveFormat::Zip => match read_zip_page(path, name) {
+                    Ok(data) => Ok(data),
+                    Err(err) => {
+                        let msg = format!("{err:#}");
+                        if msg.contains("not a valid zip") {
+                            read_rar_page(path, name)
+                        } else {
+                            Err(err)
+                        }
+                    }
+                },
+                ArchiveFormat::Rar => match read_rar_page(path, name) {
+                    Ok(data) => Ok(data),
+                    Err(err) => {
+                        let msg = format!("{err:#}");
+                        if msg.contains("not a valid rar") || msg.contains("Not a RAR archive") {
+                            read_zip_page(path, name)
+                        } else {
+                            Err(err)
+                        }
+                    }
+                },
             }
         }
         SourceKind::Folder => {
@@ -423,6 +450,110 @@ mod tests {
             assert_eq!(t1.join().unwrap(), b"page1content");
             assert_eq!(t2.join().unwrap(), b"page2content");
         });
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn legitimate_large_page_reads_successfully() {
+        // Create an uncompressed 9 MiB page (exceeding the 8 MiB initial buffer cap)
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_large_page_{}.cbz", crate::util::now_secs()));
+        let file = File::create(&tmp).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("large.jpg", options).unwrap();
+        let payload = vec![0x42u8; 9 * 1024 * 1024];
+        zip.write_all(&payload).unwrap();
+        zip.finish().unwrap();
+
+        let data = read_page(&tmp, SourceKind::Archive, "large.jpg").unwrap();
+        assert_eq!(data.len(), 9 * 1024 * 1024);
+        assert_eq!(data[0], 0x42);
+        assert_eq!(data[data.len() - 1], 0x42);
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn unreasonable_size_claim_in_zip_is_rejected() {
+        let tmp = std::env::temp_dir().join(format!("yomu_bomb_{}.cbz", crate::util::now_secs()));
+        let file = File::create(&tmp).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("001.jpg", options).unwrap();
+        zip.write_all(b"small_payload").unwrap();
+        zip.finish().unwrap();
+
+        // Mutate the headers' uncompressed_size to exceed MAX_PAGE_BYTES (e.g. 300 MB)
+        let mut bytes = fs::read(&tmp).unwrap();
+        if let Some(pos) = bytes.windows(4).position(|w| w == b"PK\x03\x04") {
+            let uncompressed_size_pos = pos + 22;
+            let huge_size: u32 = 300 * 1024 * 1024;
+            bytes[uncompressed_size_pos..uncompressed_size_pos + 4]
+                .copy_from_slice(&huge_size.to_le_bytes());
+        }
+        if let Some(pos) = bytes.windows(4).position(|w| w == b"PK\x01\x02") {
+            let uncompressed_size_pos = pos + 24;
+            let huge_size: u32 = 300 * 1024 * 1024;
+            bytes[uncompressed_size_pos..uncompressed_size_pos + 4]
+                .copy_from_slice(&huge_size.to_le_bytes());
+        }
+        fs::write(&tmp, &bytes).unwrap();
+
+        let res = read_page(&tmp, SourceKind::Archive, "001.jpg");
+        assert!(res.is_err());
+        let err_msg = format!("{:#}", res.unwrap_err());
+        assert!(
+            err_msg.contains("unreasonably large")
+                || err_msg.contains("invalid")
+                || err_msg.contains("corrupt")
+                || err_msg.contains("failed")
+        );
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn streaming_guard_rejects_zip_bomb_with_small_declared_size() {
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_bomb_stream_{}.cbz", crate::util::now_secs()));
+        let file = File::create(&tmp).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("bomb.jpg", options).unwrap();
+        let chunk = [0u8; 1024 * 1024];
+        // Write 257 MiB of compressible zeroes (compresses to ~250 KB on disk)
+        for _ in 0..257 {
+            zip.write_all(&chunk).unwrap();
+        }
+        zip.finish().unwrap();
+
+        // Mutate the declared uncompressed_size in headers to claim only 1024 bytes.
+        // This ensures entry.size() <= MAX_PAGE_BYTES, bypassing the upfront header check
+        // and forcing execution through the streaming entry.take(MAX_PAGE_BYTES + 1) guard.
+        let mut bytes = fs::read(&tmp).unwrap();
+        let small_size: u32 = 1024;
+        if let Some(pos) = bytes.windows(4).position(|w| w == b"PK\x03\x04") {
+            let uncompressed_size_pos = pos + 22;
+            bytes[uncompressed_size_pos..uncompressed_size_pos + 4]
+                .copy_from_slice(&small_size.to_le_bytes());
+        }
+        if let Some(pos) = bytes.windows(4).position(|w| w == b"PK\x01\x02") {
+            let uncompressed_size_pos = pos + 24;
+            bytes[uncompressed_size_pos..uncompressed_size_pos + 4]
+                .copy_from_slice(&small_size.to_le_bytes());
+        }
+        fs::write(&tmp, &bytes).unwrap();
+
+        let res = read_page(&tmp, SourceKind::Archive, "bomb.jpg");
+        assert!(res.is_err(), "decompression bomb must be rejected");
+        let err_msg = format!("{:#}", res.unwrap_err());
+        assert!(
+            err_msg.contains("is unreasonably large"),
+            "expected 'is unreasonably large', got: {err_msg}"
+        );
 
         let _ = fs::remove_file(&tmp);
     }

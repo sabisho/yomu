@@ -13,27 +13,53 @@ pub const PREFETCH_BEHIND: usize = 3;
 pub const KEEP_BEHIND: usize = 4;
 pub const KEEP_AHEAD: usize = PREFETCH_AHEAD;
 
+use std::sync::OnceLock;
+
 /// Upper bound on decoded page memory (BGRA bytes) held at once (1 GiB default).
 pub const BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 
-/// Computes an adaptive memory budget based on host physical RAM.
-/// Scales from 512 MiB on constrained devices up to 3 GiB on large desktop workstations.
+/// Minimum lower bound for the adaptive memory budget on constrained devices (512 MiB).
+pub const MIN_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Maximum upper bound for the adaptive memory budget on large workstations (3 GiB).
+pub const MAX_BUDGET_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+
+static CACHED_MEMORY_BUDGET: OnceLock<u64> = OnceLock::new();
+
+/// Returns the cached adaptive decoded image memory budget based on host physical RAM.
+/// Scales from 512 MiB on constrained devices up to 3 GiB on large desktop workstations (1/8th of RAM).
+/// Defaults to 1.0 GiB (BUDGET_BYTES) if host memory cannot be determined or on non-Linux platforms.
+///
+/// Host metrics are detected once and cached via `OnceLock` to prevent synchronous filesystem reads on UI hot paths.
 pub fn system_memory_budget() -> u64 {
+    *CACHED_MEMORY_BUDGET.get_or_init(detect_system_memory_budget)
+}
+
+fn detect_system_memory_budget() -> u64 {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
-            for line in meminfo.lines() {
-                if let Some(rest) = line.strip_prefix("MemTotal:")
-                    && let Some(kb_str) = rest.trim().strip_suffix("kB")
-                    && let Ok(kb) = kb_str.trim().parse::<u64>()
-                {
-                    let total_bytes = kb * 1024;
-                    return (total_bytes / 8).clamp(512 * 1024 * 1024, 3 * 1024 * 1024 * 1024);
-                }
-            }
+        if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo")
+            && let Some(budget) = parse_meminfo_budget(&meminfo)
+        {
+            return budget;
         }
     }
     BUDGET_BYTES
+}
+
+/// Parses the total physical memory from `/proc/meminfo` contents and computes 1/8th of RAM,
+/// clamped between 512 MiB and 3.0 GiB.
+pub fn parse_meminfo_budget(meminfo: &str) -> Option<u64> {
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:")
+            && let Some(kb_str) = rest.trim().strip_suffix("kB")
+            && let Ok(kb) = kb_str.trim().parse::<u64>()
+        {
+            let total_bytes = kb.saturating_mul(1024);
+            return Some((total_bytes / 8).clamp(MIN_BUDGET_BYTES, MAX_BUDGET_BYTES));
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,5 +208,32 @@ mod tests {
             plan_eviction(&entries, 4, BUDGET_BYTES),
             plan_eviction(&entries, 4, BUDGET_BYTES)
         );
+    }
+
+    #[test]
+    fn meminfo_parsing_computes_adaptive_budget() {
+        // 2 GB RAM: 1/8th = 256 MiB -> clamped up to MIN_BUDGET_BYTES (512 MiB)
+        let mem_2gb = "MemTotal:        2097152 kB\nMemFree:          123456 kB\n";
+        assert_eq!(parse_meminfo_budget(mem_2gb), Some(MIN_BUDGET_BYTES));
+
+        // 16 GB RAM: 1/8th = 2 GiB
+        let mem_16gb = "MemTotal:       16777216 kB\nMemFree:         8000000 kB\n";
+        assert_eq!(parse_meminfo_budget(mem_16gb), Some(2 * 1024 * 1024 * 1024));
+
+        // 64 GB RAM: 1/8th = 8 GiB -> clamped down to MAX_BUDGET_BYTES (3 GiB)
+        let mem_64gb = "MemTotal:       67108864 kB\nMemFree:        30000000 kB\n";
+        assert_eq!(parse_meminfo_budget(mem_64gb), Some(MAX_BUDGET_BYTES));
+
+        // Malformed or missing MemTotal line
+        assert_eq!(parse_meminfo_budget("MemFree: 100 kB\n"), None);
+        assert_eq!(parse_meminfo_budget(""), None);
+    }
+
+    #[test]
+    fn system_memory_budget_returns_valid_budget_and_caches() {
+        let b1 = system_memory_budget();
+        let b2 = system_memory_budget();
+        assert_eq!(b1, b2);
+        assert!((MIN_BUDGET_BYTES..=MAX_BUDGET_BYTES).contains(&b1));
     }
 }
