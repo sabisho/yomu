@@ -92,6 +92,7 @@ impl Yomu {
         let show_search = is_library_view;
         let show_view_switches = is_library_view;
         let show_grouping = is_library_view;
+        let show_sort = is_library_view;
         let show_import = is_browsing;
 
         let search_input = self.search_input.as_ref();
@@ -105,6 +106,9 @@ impl Yomu {
             is_grid_mode: self.view_mode_grid,
             show_grouping,
             is_group_series: self.library.settings().group_series,
+            show_sort,
+            sort_by: self.library.settings().sort_by,
+            sort_direction: self.library.settings().sort_direction,
             show_import,
             is_client_decorated,
             selection_count: self.selection.len(),
@@ -155,6 +159,14 @@ impl Yomu {
                 move |group, _, cx| {
                     yomu.update(cx, |this, cx| {
                         this.toggle_group_series(group, cx);
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |by, dir, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_sort_mode(by, dir, cx);
                     })
                 }
             },

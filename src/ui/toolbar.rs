@@ -17,6 +17,7 @@ use gpui_kit::{
 
 use super::components::{open_shortcut_str, with_alpha};
 use super::theme::UiColors;
+use yomu::library::{SortBy, SortDirection};
 
 pub struct MainToolbarProps<'a> {
     pub can_go_back: bool,
@@ -28,6 +29,9 @@ pub struct MainToolbarProps<'a> {
     pub is_grid_mode: bool,
     pub show_grouping: bool,
     pub is_group_series: bool,
+    pub show_sort: bool,
+    pub sort_by: SortBy,
+    pub sort_direction: SortDirection,
     pub show_import: bool,
     pub is_client_decorated: bool,
     pub selection_count: usize,
@@ -44,6 +48,7 @@ pub fn render_main_toolbar(
     on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_toggle_grid: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_change_sort: impl Fn(SortBy, SortDirection, &mut Window, &mut App) + 'static,
     on_import_files: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_import_folder: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_close_window: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -51,6 +56,7 @@ pub fn render_main_toolbar(
     let on_toggle_grid = std::rc::Rc::new(on_toggle_grid);
     let on_toggle_grid_false = on_toggle_grid.clone();
     let on_toggle_group_series = std::rc::Rc::new(on_toggle_group_series);
+    let on_change_sort = std::rc::Rc::new(on_change_sort);
     let on_import_files = std::rc::Rc::new(on_import_files);
     let on_import_folder = std::rc::Rc::new(on_import_folder);
     let colors = props.colors;
@@ -290,7 +296,90 @@ pub fn render_main_toolbar(
                                     ),
                             )
                         })
-                        // 3. Import Button: unified rounded-square button matching 28px toolbar controls
+                        // 3. Sort Dropdown
+                        .when(props.show_sort, |this| {
+                            let on_change_sort = on_change_sort.clone();
+                            let current_by = props.sort_by;
+                            let current_dir = props.sort_direction;
+                            let button_radius = px(f32::from(props.radius).min(7.0));
+                            let is_custom_sorted = current_by != SortBy::Default
+                                || current_dir != SortDirection::Ascending;
+                            this.child(
+                                div().debug_selector(|| "toolbar-sort".into()).child(
+                                    Button::new("toolbar-sort")
+                                        .icon(IconName::ArrowUpDown)
+                                        .ghost()
+                                        .with_size(Size::Size(px(28.)))
+                                        .rounded(ButtonRounded::Size(button_radius))
+                                        .border_1()
+                                        .border_color(if is_custom_sorted {
+                                            colors.accent
+                                        } else {
+                                            colors.border
+                                        })
+                                        .bg(with_alpha(
+                                            if is_custom_sorted {
+                                                colors.accent
+                                            } else {
+                                                colors.surface
+                                            },
+                                            if is_custom_sorted { 0.15 } else { 0.6 },
+                                        ))
+                                        .tooltip(format!(
+                                            "Sort: {} ({})",
+                                            current_by.label(),
+                                            current_dir.label(current_by)
+                                        ))
+                                        .dropdown_menu_with_anchor(
+                                            Anchor::TopRight,
+                                            move |mut menu, _, _| {
+                                                let on_change_sort = on_change_sort.clone();
+                                                menu = menu.min_w(px(200.));
+                                                for by in SortBy::ALL {
+                                                    let on_change_sort = on_change_sort.clone();
+                                                    let is_active = current_by == by;
+                                                    let target_dir = if is_active {
+                                                        current_dir.toggle()
+                                                    } else {
+                                                        by.default_direction()
+                                                    };
+                                                    menu = menu.item(
+                                                        PopupMenuItem::new(by.label())
+                                                            .checked(is_active)
+                                                            .on_click(move |_, window, cx| {
+                                                                on_change_sort(
+                                                                    by, target_dir, window, cx,
+                                                                );
+                                                            }),
+                                                    );
+                                                }
+                                                if current_by != SortBy::Default {
+                                                    menu = menu.item(PopupMenuItem::separator());
+                                                    for dir in [
+                                                        SortDirection::Ascending,
+                                                        SortDirection::Descending,
+                                                    ] {
+                                                        let on_change_sort = on_change_sort.clone();
+                                                        let is_checked = current_dir == dir;
+                                                        let label = dir.label(current_by);
+                                                        menu = menu.item(
+                                                            PopupMenuItem::new(label)
+                                                                .checked(is_checked)
+                                                                .on_click(move |_, window, cx| {
+                                                                    on_change_sort(
+                                                                        current_by, dir, window, cx,
+                                                                    );
+                                                                }),
+                                                        );
+                                                    }
+                                                }
+                                                menu
+                                            },
+                                        ),
+                                ),
+                            )
+                        })
+                        // 4. Import Button: unified rounded-square button matching 28px toolbar controls
                         .when(props.show_import, |this| {
                             let on_import_files = on_import_files.clone();
                             let on_import_folder = on_import_folder.clone();

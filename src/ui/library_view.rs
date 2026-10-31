@@ -12,9 +12,10 @@ use gpui_kit::{
     ObjectFit, Pixels, SharedString, Styled, Window, div, img, px, relative,
 };
 
-use crate::library::Book;
+use crate::library::{Book, SortBy, SortDirection};
 use crate::ui::components::{stat_badge, with_alpha};
 use crate::ui::theme::UiColors;
+use yomu::util::natural_cmp;
 
 /// A grouped set of books sharing a parent directory or an explicit series name.
 pub struct LibraryGroup<'a> {
@@ -74,6 +75,83 @@ pub fn directory_groups<'a>(books: impl IntoIterator<Item = &'a Book>) -> Vec<Li
         .collect();
     groups.sort_by_key(|group| group.first_seen);
     groups
+}
+
+/// Sorts library folder groups according to the selected mode and direction.
+pub fn sort_groups<'a>(groups: &mut [LibraryGroup<'a>], by: SortBy, dir: SortDirection) {
+    match by {
+        SortBy::Default => {
+            groups.sort_by_key(|group| group.first_seen);
+            if dir == SortDirection::Descending {
+                groups.reverse();
+            }
+        }
+        SortBy::Title => {
+            groups.sort_by(|a, b| {
+                let ord = natural_cmp(&a.name, &b.name);
+                if dir == SortDirection::Descending {
+                    ord.reverse()
+                } else {
+                    ord
+                }
+                .then_with(|| a.first_seen.cmp(&b.first_seen))
+            });
+        }
+        SortBy::DateAdded => {
+            groups.sort_by(|a, b| {
+                let max_a = a.books.iter().map(|bk| bk.added_at).max().unwrap_or(0);
+                let max_b = b.books.iter().map(|bk| bk.added_at).max().unwrap_or(0);
+                let ord = if dir == SortDirection::Descending {
+                    max_b.cmp(&max_a)
+                } else {
+                    max_a.cmp(&max_b)
+                };
+                ord.then_with(|| natural_cmp(&a.name, &b.name))
+                    .then_with(|| a.first_seen.cmp(&b.first_seen))
+            });
+        }
+        SortBy::LastRead => {
+            groups.sort_by(|a, b| {
+                let max_a = a.books.iter().filter_map(|bk| bk.last_read).max();
+                let max_b = b.books.iter().filter_map(|bk| bk.last_read).max();
+                let ord = match (max_a, max_b) {
+                    (Some(ta), Some(tb)) => {
+                        if dir == SortDirection::Descending {
+                            tb.cmp(&ta)
+                        } else {
+                            ta.cmp(&tb)
+                        }
+                    }
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                };
+                ord.then_with(|| natural_cmp(&a.name, &b.name))
+                    .then_with(|| a.first_seen.cmp(&b.first_seen))
+            });
+        }
+        SortBy::Progress => {
+            groups.sort_by(|a, b| {
+                let pa = if a.books.is_empty() {
+                    0.0
+                } else {
+                    a.books.iter().map(|bk| bk.progress()).sum::<f32>() / a.books.len() as f32
+                };
+                let pb = if b.books.is_empty() {
+                    0.0
+                } else {
+                    b.books.iter().map(|bk| bk.progress()).sum::<f32>() / b.books.len() as f32
+                };
+                let ord = if dir == SortDirection::Descending {
+                    pb.total_cmp(&pa)
+                } else {
+                    pa.total_cmp(&pb)
+                };
+                ord.then_with(|| natural_cmp(&a.name, &b.name))
+                    .then_with(|| a.first_seen.cmp(&b.first_seen))
+            });
+        }
+    }
 }
 
 /// Properties needed to render an individual book grid card.

@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     fs,
     path::PathBuf,
@@ -24,7 +24,7 @@ use gpui_kit::{
 #[cfg(not(test))]
 use yomu::motion;
 use yomu::{
-    library::{Book, CornerRounding, DataDirs, Library},
+    library::{Book, CornerRounding, DataDirs, Library, SortBy, SortDirection, sort_book_indices},
     selection::Selection,
     vim::Vim,
 };
@@ -38,6 +38,15 @@ use crate::ui::theme::{
     DEFAULT_THEME_NAME, UiColors, built_in_theme, built_in_theme_names, custom_theme_path,
     ensure_custom_theme_file, parse_custom_themes, resolve_theme_name,
 };
+
+#[derive(Debug, Clone)]
+pub(crate) struct SortedBooksCache {
+    pub(crate) save_seq: u64,
+    pub(crate) books_len: usize,
+    pub(crate) sort_by: SortBy,
+    pub(crate) sort_direction: SortDirection,
+    pub(crate) indices: Vec<usize>,
+}
 
 /// How far `j`/`k`/`h`/`l` scroll, in logical pixels.
 pub const LINE_STEP: f32 = 64.0;
@@ -157,6 +166,7 @@ pub struct Yomu {
     pub(crate) details_cover_checked: Option<String>,
     pub(crate) details_cover_available: bool,
     pub(crate) details_cover_seq: u64,
+    pub(crate) sorted_books_cache: RefCell<Option<SortedBooksCache>>,
 }
 
 impl Yomu {
@@ -310,6 +320,7 @@ impl Yomu {
             details_cover_checked: None,
             details_cover_available: true,
             details_cover_seq: 0,
+            sorted_books_cache: RefCell::new(None),
         };
 
         state.refresh_downloads_count(cx);
@@ -435,6 +446,52 @@ impl Yomu {
                 .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn set_sort_mode(&mut self, by: SortBy, dir: SortDirection, cx: &mut Context<Self>) {
+        if self.library.settings().sort_by == by && self.library.settings().sort_direction == dir {
+            return;
+        }
+        self.library.settings_mut().sort_by = by;
+        self.library.settings_mut().sort_direction = dir;
+        *self.sorted_books_cache.borrow_mut() = None;
+        self.save_library(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn get_sorted_books(&self) -> Vec<&Book> {
+        let all_books = self.library.books();
+        let sort_by = self.library.settings().sort_by;
+        let sort_direction = self.library.settings().sort_direction;
+
+        if sort_by == SortBy::Default && sort_direction == SortDirection::Ascending {
+            return all_books.iter().collect();
+        }
+
+        let mut cache = self.sorted_books_cache.borrow_mut();
+        let needs_recompute = match cache.as_ref() {
+            Some(c) => {
+                c.save_seq != self.save_seq
+                    || c.books_len != all_books.len()
+                    || c.sort_by != sort_by
+                    || c.sort_direction != sort_direction
+            }
+            None => true,
+        };
+
+        if needs_recompute {
+            let indices = sort_book_indices(all_books, sort_by, sort_direction);
+            *cache = Some(SortedBooksCache {
+                save_seq: self.save_seq,
+                books_len: all_books.len(),
+                sort_by,
+                sort_direction,
+                indices,
+            });
+        }
+
+        let cached = cache.as_ref().unwrap();
+        cached.indices.iter().map(|&idx| &all_books[idx]).collect()
     }
 
     pub fn activate_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {

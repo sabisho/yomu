@@ -470,6 +470,160 @@ fn default_color_scheme() -> String {
     "Catppuccin".to_string()
 }
 
+/// Library sort modes for All Manga and Downloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SortBy {
+    #[default]
+    Default,
+    Title,
+    DateAdded,
+    LastRead,
+    Progress,
+}
+
+impl SortBy {
+    pub const ALL: [SortBy; 5] = [
+        SortBy::Default,
+        SortBy::Title,
+        SortBy::DateAdded,
+        SortBy::LastRead,
+        SortBy::Progress,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Title => "Title",
+            Self::DateAdded => "Date Added",
+            Self::LastRead => "Last Read",
+            Self::Progress => "Reading Progress",
+        }
+    }
+
+    pub fn default_direction(self) -> SortDirection {
+        match self {
+            Self::Default | Self::Title => SortDirection::Ascending,
+            Self::DateAdded | Self::LastRead | Self::Progress => SortDirection::Descending,
+        }
+    }
+}
+
+/// Direction for library sorting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SortDirection {
+    #[default]
+    Ascending,
+    Descending,
+}
+
+impl SortDirection {
+    pub fn label(self, by: SortBy) -> &'static str {
+        match (by, self) {
+            (SortBy::Title, SortDirection::Ascending) => "A–Z",
+            (SortBy::Title, SortDirection::Descending) => "Z–A",
+            (SortBy::DateAdded, SortDirection::Descending) => "Newest",
+            (SortBy::DateAdded, SortDirection::Ascending) => "Oldest",
+            (SortBy::LastRead, SortDirection::Descending) => "Recently Read",
+            (SortBy::LastRead, SortDirection::Ascending) => "Least Recently Read",
+            (SortBy::Progress, SortDirection::Descending) => "Highest Progress",
+            (SortBy::Progress, SortDirection::Ascending) => "Lowest Progress",
+            (SortBy::Default, SortDirection::Ascending) => "Normal",
+            (SortBy::Default, SortDirection::Descending) => "Reverse",
+        }
+    }
+
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Ascending => Self::Descending,
+            Self::Descending => Self::Ascending,
+        }
+    }
+}
+
+/// Compares two books according to the specified sort criteria and direction.
+pub fn compare_books(a: &Book, b: &Book, by: SortBy, dir: SortDirection) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    let ord = match by {
+        SortBy::Default => Ordering::Equal,
+        SortBy::Title => {
+            let res = natural_cmp(&a.title, &b.title);
+            if dir == SortDirection::Descending {
+                res.reverse()
+            } else {
+                res
+            }
+        }
+        SortBy::DateAdded => {
+            let res = if dir == SortDirection::Descending {
+                b.added_at.cmp(&a.added_at)
+            } else {
+                a.added_at.cmp(&b.added_at)
+            };
+            res.then_with(|| natural_cmp(&a.title, &b.title))
+        }
+        SortBy::LastRead => {
+            let res = match (a.last_read, b.last_read) {
+                (Some(ta), Some(tb)) => {
+                    if dir == SortDirection::Descending {
+                        tb.cmp(&ta)
+                    } else {
+                        ta.cmp(&tb)
+                    }
+                }
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            };
+            res.then_with(|| natural_cmp(&a.title, &b.title))
+                .then_with(|| b.added_at.cmp(&a.added_at))
+        }
+        SortBy::Progress => {
+            let pa = a.progress();
+            let pb = b.progress();
+            let res = if dir == SortDirection::Descending {
+                pb.total_cmp(&pa)
+            } else {
+                pa.total_cmp(&pb)
+            };
+            res.then_with(|| natural_cmp(&a.title, &b.title))
+                .then_with(|| b.added_at.cmp(&a.added_at))
+        }
+    };
+
+    ord.then_with(|| a.id.cmp(&b.id))
+}
+
+/// Sorts a slice of borrowed book references stably.
+pub fn sort_books(books: &mut [&Book], by: SortBy, dir: SortDirection) {
+    match by {
+        SortBy::Default => {
+            if dir == SortDirection::Descending {
+                books.reverse();
+            }
+        }
+        _ => {
+            books.sort_by(|a, b| compare_books(a, b, by, dir));
+        }
+    }
+}
+
+/// Computes sorted indices for a slice of books without moving or cloning them.
+pub fn sort_book_indices(books: &[Book], by: SortBy, dir: SortDirection) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..books.len()).collect();
+    match by {
+        SortBy::Default => {
+            if dir == SortDirection::Descending {
+                indices.reverse();
+            }
+        }
+        _ => {
+            indices.sort_by(|&i, &j| compare_books(&books[i], &books[j], by, dir));
+        }
+    }
+    indices
+}
+
 /// Preferences that carry over from book to book and between launches.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Settings {
@@ -512,6 +666,12 @@ pub struct Settings {
     /// Whether Vim keyboard navigation is enabled. Disabled by default.
     #[serde(default)]
     pub vim_mode: bool,
+    /// Library sorting mode (Default, Title, DateAdded, LastRead, Progress).
+    #[serde(default)]
+    pub sort_by: SortBy,
+    /// Library sorting direction (Ascending, Descending).
+    #[serde(default)]
+    pub sort_direction: SortDirection,
     /// Opacity of the window background, `OPACITY_MIN..=OPACITY_MAX`. Raised widget surfaces use
     /// a small opacity lift to stay distinct; page images, covers, and text remain opaque.
     pub opacity: f32,
@@ -536,6 +696,8 @@ impl Default for Settings {
             corner_rounding: CornerRounding::Standard,
             view_mode_grid: true,
             vim_mode: false,
+            sort_by: SortBy::Default,
+            sort_direction: SortDirection::Ascending,
             opacity: OPACITY_MAX,
         }
     }
@@ -624,6 +786,18 @@ impl Settings {
         }
         if let Some(vim_mode) = object.get("vim_mode").and_then(|v| v.as_bool()) {
             settings.vim_mode = vim_mode;
+        }
+        if let Some(sort_by) = object
+            .get("sort_by")
+            .and_then(|v| serde_json::from_value::<SortBy>(v.clone()).ok())
+        {
+            settings.sort_by = sort_by;
+        }
+        if let Some(sort_direction) = object
+            .get("sort_direction")
+            .and_then(|v| serde_json::from_value::<SortDirection>(v.clone()).ok())
+        {
+            settings.sort_direction = sort_direction;
         }
         if let Some(fit) = object
             .get("fit")
@@ -1731,5 +1905,203 @@ mod tests {
         let resolved = dirs.cover_for_size("legacy_only", ThumbnailSize::Large);
         assert_eq!(resolved, legacy_file);
         assert!(resolved.exists());
+    }
+
+    #[test]
+    fn sort_by_title_natural_and_case_insensitive() {
+        let mut b1 = sample_book();
+        b1.id = "1".into();
+        b1.title = "Volume 10".into();
+
+        let mut b2 = sample_book();
+        b2.id = "2".into();
+        b2.title = "volume 2".into();
+
+        let mut b3 = sample_book();
+        b3.id = "3".into();
+        b3.title = "Attack on Titan".into();
+
+        let mut b4 = sample_book();
+        b4.id = "4".into();
+        b4.title = "進撃の巨人".into();
+
+        let mut books = vec![&b1, &b2, &b3, &b4];
+        sort_books(&mut books, SortBy::Title, SortDirection::Ascending);
+        let ids: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        // "Attack on Titan" < "volume 2" < "Volume 10" (natural 2 before 10) < "進撃の巨人"
+        assert_eq!(ids, vec!["3", "2", "1", "4"]);
+
+        sort_books(&mut books, SortBy::Title, SortDirection::Descending);
+        let ids_desc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_desc, vec!["4", "1", "2", "3"]);
+    }
+
+    #[test]
+    fn sort_by_date_added() {
+        let mut b1 = sample_book();
+        b1.id = "1".into();
+        b1.added_at = 100;
+
+        let mut b2 = sample_book();
+        b2.id = "2".into();
+        b2.added_at = 300;
+
+        let mut b3 = sample_book();
+        b3.id = "3".into();
+        b3.added_at = 200;
+
+        let mut books = vec![&b1, &b2, &b3];
+        // Descending is natural for Date Added (Newest first)
+        sort_books(&mut books, SortBy::DateAdded, SortDirection::Descending);
+        let ids_desc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_desc, vec!["2", "3", "1"]);
+
+        // Ascending is Oldest first
+        sort_books(&mut books, SortBy::DateAdded, SortDirection::Ascending);
+        let ids_asc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_asc, vec!["1", "3", "2"]);
+    }
+
+    #[test]
+    fn sort_by_last_read_and_missing_timestamps() {
+        let mut b1 = sample_book();
+        b1.id = "read_recent".into();
+        b1.last_read = Some(500);
+
+        let mut b2 = sample_book();
+        b2.id = "read_old".into();
+        b2.last_read = Some(200);
+
+        let mut b3 = sample_book();
+        b3.id = "unread_1".into();
+        b3.last_read = None;
+        b3.added_at = 50;
+
+        let mut b4 = sample_book();
+        b4.id = "unread_2".into();
+        b4.last_read = None;
+        b4.added_at = 100;
+
+        let mut books = vec![&b3, &b1, &b4, &b2];
+
+        // Descending (Recently Read): read books newest-to-oldest, unread at the bottom
+        sort_books(&mut books, SortBy::LastRead, SortDirection::Descending);
+        let ids_desc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_desc[0], "read_recent");
+        assert_eq!(ids_desc[1], "read_old");
+        assert!(ids_desc[2..].contains(&"unread_1") && ids_desc[2..].contains(&"unread_2"));
+
+        // Ascending (Least Recently Read): read books oldest-to-newest, unread still at bottom
+        sort_books(&mut books, SortBy::LastRead, SortDirection::Ascending);
+        let ids_asc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_asc[0], "read_old");
+        assert_eq!(ids_asc[1], "read_recent");
+        assert!(ids_asc[2..].contains(&"unread_1") && ids_asc[2..].contains(&"unread_2"));
+    }
+
+    #[test]
+    fn sort_by_progress_and_unopened_books() {
+        let mut b1 = sample_book();
+        b1.id = "finished".into();
+        b1.page_count = 10;
+        b1.current_page = 9;
+        b1.opened = true; // 100%
+
+        let mut b2 = sample_book();
+        b2.id = "half".into();
+        b2.page_count = 10;
+        b2.current_page = 4;
+        b2.opened = true; // 50%
+
+        let mut b3 = sample_book();
+        b3.id = "unopened".into();
+        b3.page_count = 10;
+        b3.current_page = 0;
+        b3.opened = false; // 0%
+
+        let mut books = vec![&b2, &b3, &b1];
+
+        // Descending: 100% -> 50% -> 0%
+        sort_books(&mut books, SortBy::Progress, SortDirection::Descending);
+        let ids_desc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_desc, vec!["finished", "half", "unopened"]);
+
+        // Ascending: 0% -> 50% -> 100%
+        sort_books(&mut books, SortBy::Progress, SortDirection::Ascending);
+        let ids_asc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_asc, vec!["unopened", "half", "finished"]);
+    }
+
+    #[test]
+    fn sort_default_preserves_order_and_reverse() {
+        let mut b1 = sample_book();
+        b1.id = "a".into();
+        let mut b2 = sample_book();
+        b2.id = "b".into();
+        let mut b3 = sample_book();
+        b3.id = "c".into();
+
+        let mut books = vec![&b2, &b1, &b3];
+        sort_books(&mut books, SortBy::Default, SortDirection::Ascending);
+        let ids_asc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_asc, vec!["b", "a", "c"]);
+
+        sort_books(&mut books, SortBy::Default, SortDirection::Descending);
+        let ids_desc: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids_desc, vec!["c", "a", "b"]);
+    }
+
+    #[test]
+    fn sort_edge_cases_empty_single_and_ties() {
+        let mut empty: Vec<&Book> = Vec::new();
+        sort_books(&mut empty, SortBy::Title, SortDirection::Ascending);
+        assert!(empty.is_empty());
+
+        let indices = sort_book_indices(&[], SortBy::DateAdded, SortDirection::Descending);
+        assert!(indices.is_empty());
+
+        let b1 = sample_book();
+        let mut single = vec![&b1];
+        sort_books(&mut single, SortBy::Progress, SortDirection::Ascending);
+        assert_eq!(single.len(), 1);
+
+        // Ties with identical timestamp and title should break on id
+        let mut t1 = sample_book();
+        t1.id = "z_tie".into();
+        t1.title = "Same".into();
+        t1.added_at = 50;
+
+        let mut t2 = sample_book();
+        t2.id = "a_tie".into();
+        t2.title = "Same".into();
+        t2.added_at = 50;
+
+        let mut ties = vec![&t1, &t2];
+        sort_books(&mut ties, SortBy::DateAdded, SortDirection::Ascending);
+        assert_eq!(ties[0].id, "a_tie");
+        assert_eq!(ties[1].id, "z_tie");
+    }
+
+    #[test]
+    fn sort_settings_persistence_and_lenient_fallback() {
+        let settings = Settings {
+            sort_by: SortBy::DateAdded,
+            sort_direction: SortDirection::Descending,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&settings).unwrap();
+        let restored = Settings::from_value(&json);
+        assert_eq!(restored.sort_by, SortBy::DateAdded);
+        assert_eq!(restored.sort_direction, SortDirection::Descending);
+
+        // Lenient fallback for missing or corrupted sort settings
+        let corrupt = serde_json::json!({
+            "sort_by": "InvalidMode",
+            "sort_direction": 12345
+        });
+        let fallback = Settings::from_value(&corrupt);
+        assert_eq!(fallback.sort_by, SortBy::Default);
+        assert_eq!(fallback.sort_direction, SortDirection::Ascending);
     }
 }

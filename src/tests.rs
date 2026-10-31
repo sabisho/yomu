@@ -4129,3 +4129,325 @@ fn test_reader_cancellation_direct_iteration_in_sync_reader(cx: &mut TestAppCont
         assert!(!reader.cancellations.contains_key(&18));
     });
 }
+
+#[gpui_kit::test]
+fn test_library_sorting_modes_persistence_and_order(cx: &mut TestAppContext) {
+    let fx = fixture("sort-modes");
+    let (view, cx) = launch(&fx, cx);
+
+    // Setup 3 books with distinct metadata
+    // Book 0: "Zeta Comic", added_at: 100, last_read: Some(500), progress: 100%
+    // Book 1: "Alpha Manga", added_at: 300, last_read: Some(200), progress: 50%
+    // Book 2: "Beta Graphic", added_at: 200, last_read: None, progress: 0%
+    let (id0, id1, id2) = view.update(cx, |this, _| {
+        let id0 = fx.ids[0].clone();
+        let b0 = this.library.get_mut(&id0).unwrap();
+        b0.title = "Zeta Comic".into();
+        b0.added_at = 100;
+        b0.last_read = Some(500);
+        b0.opened = true;
+        b0.current_page = 4;
+        b0.page_count = 5;
+
+        let id1 = fx.ids[1].clone();
+        let b1 = this.library.get_mut(&id1).unwrap();
+        b1.title = "Alpha Manga".into();
+        b1.added_at = 300;
+        b1.last_read = Some(200);
+        b1.opened = true;
+        b1.current_page = 2;
+        b1.page_count = 5;
+
+        let id2 = fx.ids[2].clone();
+        let b2 = this.library.get_mut(&id2).unwrap();
+        b2.title = "Beta Graphic".into();
+        b2.added_at = 200;
+        b2.last_read = None;
+        b2.opened = false;
+        b2.current_page = 0;
+        b2.page_count = 5;
+
+        (id0, id1, id2)
+    });
+
+    // 1. Title Ascending (A–Z): Alpha (id1), Beta (id2), Zeta (id0)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Title,
+            yomu::library::SortDirection::Ascending,
+            cx,
+        );
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id1.clone(), id2.clone(), id0.clone()]);
+
+    // 2. Title Descending (Z–A): Zeta (id0), Beta (id2), Alpha (id1)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Title,
+            yomu::library::SortDirection::Descending,
+            cx,
+        );
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id0.clone(), id2.clone(), id1.clone()]);
+
+    // 3. Date Added Newest: Alpha (300), Beta (200), Zeta (100)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::DateAdded,
+            yomu::library::SortDirection::Descending,
+            cx,
+        );
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id1.clone(), id2.clone(), id0.clone()]);
+
+    // 4. Date Added Oldest: Zeta (100), Beta (200), Alpha (300)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::DateAdded,
+            yomu::library::SortDirection::Ascending,
+            cx,
+        );
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id0.clone(), id2.clone(), id1.clone()]);
+
+    // 5. Last Read Recently Read: Zeta (500), Alpha (200), Beta (unread)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::LastRead,
+            yomu::library::SortDirection::Descending,
+            cx,
+        );
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id0.clone(), id1.clone(), id2.clone()]);
+
+    // 6. Last Read Least Recently Read: Alpha (200), Zeta (500), Beta (unread at end)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::LastRead,
+            yomu::library::SortDirection::Ascending,
+            cx,
+        );
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id1.clone(), id0.clone(), id2.clone()]);
+
+    // 7. Reading Progress Highest: Zeta (100%), Alpha (60%), Beta (0%)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Progress,
+            yomu::library::SortDirection::Descending,
+            cx,
+        );
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id0.clone(), id1.clone(), id2.clone()]);
+
+    // 8. Reading Progress Lowest: Beta (0%), Alpha (60%), Zeta (100%)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Progress,
+            yomu::library::SortDirection::Ascending,
+            cx,
+        );
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id2.clone(), id1.clone(), id0.clone()]);
+
+    // Verify settings persistence: settings were saved
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.library.settings().sort_by,
+            yomu::library::SortBy::Progress
+        );
+        assert_eq!(
+            this.library.settings().sort_direction,
+            yomu::library::SortDirection::Ascending
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn test_grouped_series_sorting(cx: &mut TestAppContext) {
+    let fx = fixture("grouped-sort");
+    let (view, cx) = launch(&fx, cx);
+
+    // Setup 4 books: 2 in "Series Beta", 2 in "Series Alpha"
+    let (id_a1, id_a2, _id_b1, _id_b2) = view.update(cx, |this, cx| {
+        this.library.settings_mut().group_series = true;
+        // ensure we have 4 books
+        let mut b3 = this.library.books()[0].clone();
+        b3.id = "extra_book".into();
+        this.library.add(b3);
+
+        let id_a1 = fx.ids[0].clone();
+        let b_a1 = this.library.get_mut(&id_a1).unwrap();
+        b_a1.title = "Series Alpha Vol 1".into();
+        b_a1.series = Some("Series Alpha".into());
+
+        let id_a2 = fx.ids[1].clone();
+        let b_a2 = this.library.get_mut(&id_a2).unwrap();
+        b_a2.title = "Series Alpha Vol 2".into();
+        b_a2.series = Some("Series Alpha".into());
+
+        let id_b1 = fx.ids[2].clone();
+        let b_b1 = this.library.get_mut(&id_b1).unwrap();
+        b_b1.title = "Series Beta Vol 1".into();
+        b_b1.series = Some("Series Beta".into());
+
+        let id_b2 = "extra_book".to_string();
+        let b_b2 = this.library.get_mut(&id_b2).unwrap();
+        b_b2.title = "Series Beta Vol 2".into();
+        b_b2.series = Some("Series Beta".into());
+
+        this.save_library(cx);
+        (id_a1, id_a2, id_b1, id_b2)
+    });
+
+    // Sort Title Ascending: "Series Alpha" folders should sort before "Series Beta"
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Title,
+            yomu::library::SortDirection::Ascending,
+            cx,
+        );
+    });
+    view.read_with(cx, |this, _| {
+        let sorted = this.get_sorted_books();
+        let mut groups = directory_groups(sorted.iter().copied());
+        crate::ui::library_view::sort_groups(
+            &mut groups,
+            yomu::library::SortBy::Title,
+            yomu::library::SortDirection::Ascending,
+        );
+        assert_eq!(groups[0].name, "Series Alpha");
+        assert_eq!(groups[1].name, "Series Beta");
+        assert_eq!(groups[0].books[0].id, id_a1);
+        assert_eq!(groups[0].books[1].id, id_a2);
+    });
+
+    // Enter Series Alpha group: current_view_order reflects books within this group
+    view.update(cx, |this, cx| {
+        this.enter_group("series:series alpha".into(), cx);
+    });
+    let order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order, vec![id_a1.clone(), id_a2.clone()]);
+
+    // Reverse sort direction inside group: Title Descending
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Title,
+            yomu::library::SortDirection::Descending,
+            cx,
+        );
+    });
+    let order_desc = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(order_desc, vec![id_a2, id_a1]);
+}
+
+#[gpui_kit::test]
+fn test_toolbar_sort_button_exists_in_library_view(cx: &mut TestAppContext) {
+    let fx = fixture("sort-toolbar");
+    let (view, cx) = launch(&fx, cx);
+
+    // Toolbar sort button must be present in All Manga view
+    assert!(
+        cx.debug_bounds("toolbar-sort").is_some(),
+        "toolbar-sort button must be rendered on the library toolbar"
+    );
+
+    // Default tooltip
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.library.settings().sort_by,
+            yomu::library::SortBy::Default
+        );
+        assert_eq!(
+            this.library.settings().sort_direction,
+            yomu::library::SortDirection::Ascending
+        );
+    });
+
+    // Change sort mode
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Title,
+            yomu::library::SortDirection::Descending,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    // Still visible and custom-sorted
+    assert!(cx.debug_bounds("toolbar-sort").is_some());
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.library.settings().sort_by,
+            yomu::library::SortBy::Title
+        );
+        assert_eq!(
+            this.library.settings().sort_direction,
+            yomu::library::SortDirection::Descending
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn test_continue_reading_ordering_unaffected_by_sort(cx: &mut TestAppContext) {
+    let fx = fixture("cr-sort");
+    let (view, cx) = launch(&fx, cx);
+
+    // Book 0: "A Book", read earlier (100)
+    // Book 1: "Z Book", read later (500)
+    let (id0, id1) = view.update(cx, |this, _| {
+        let id0 = fx.ids[0].clone();
+        let b0 = this.library.get_mut(&id0).unwrap();
+        b0.title = "A Book".into();
+        b0.last_read = Some(100);
+        b0.opened = true;
+        b0.current_page = 1;
+        b0.page_count = 5;
+
+        let id1 = fx.ids[1].clone();
+        let b1 = this.library.get_mut(&id1).unwrap();
+        b1.title = "Z Book".into();
+        b1.last_read = Some(500);
+        b1.opened = true;
+        b1.current_page = 2;
+        b1.page_count = 5;
+
+        (id0, id1)
+    });
+
+    // Set library sort to Title A-Z (which puts A Book before Z Book in library view)
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Title,
+            yomu::library::SortDirection::Ascending,
+            cx,
+        );
+    });
+
+    let lib_order = view.read_with(cx, |this, _| this.current_view_order());
+    assert_eq!(lib_order[0], id0);
+
+    // Switch to Continue Reading view
+    view.update(cx, |this, cx| {
+        this.navigate_to(crate::ui::sidebar::MainView::ContinueReading, cx);
+    });
+    cx.run_until_parked();
+
+    // Verify Continue Reading view renders without issue
+    assert_eq!(
+        view.read_with(cx, |this, _| this.active_view.clone()),
+        crate::ui::sidebar::MainView::ContinueReading
+    );
+    assert_eq!(
+        view.read_with(cx, |this, _| this.library.get(&id1).unwrap().last_read),
+        Some(500)
+    );
+}

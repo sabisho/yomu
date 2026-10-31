@@ -16,7 +16,7 @@ use crate::app::state::Yomu;
 use crate::ui;
 use crate::ui::library_view::{
     BookCardProps, directory_groups, render_book_card, render_book_list_row, render_folder_card,
-    render_folder_list_row,
+    render_folder_list_row, sort_groups,
 };
 use crate::ui::theme::UiColors;
 use yomu::library::Book;
@@ -238,10 +238,12 @@ impl Yomu {
                     .is_some_and(|s| s.to_lowercase().contains(&query))
         };
 
+        let sorted_books = self.get_sorted_books();
+
         let books: Vec<&Book> = if self.library.settings().group_series
             && let Some(open_key) = self.open_group.as_deref()
         {
-            let groups = directory_groups(self.library.books());
+            let groups = directory_groups(sorted_books);
             if let Some(group) = groups.into_iter().find(|g| g.key == open_key) {
                 group
                     .books
@@ -249,16 +251,14 @@ impl Yomu {
                     .filter(|b| matches_query(b))
                     .collect()
             } else {
-                self.library
-                    .books()
-                    .iter()
+                self.get_sorted_books()
+                    .into_iter()
                     .filter(|b| matches_query(b))
                     .collect()
             }
         } else {
-            self.library
-                .books()
-                .iter()
+            sorted_books
+                .into_iter()
                 .filter(|b| matches_query(b))
                 .collect()
         };
@@ -296,7 +296,10 @@ impl Yomu {
         let mut cards: Vec<AnyElement> = Vec::new();
 
         if self.library.settings().group_series && self.open_group.is_none() {
-            let groups = directory_groups(books.iter().copied());
+            let mut groups = directory_groups(books.iter().copied());
+            let sort_by = self.library.settings().sort_by;
+            let sort_direction = self.library.settings().sort_direction;
+            sort_groups(&mut groups, sort_by, sort_direction);
             let mut grouped_ids: HashSet<&str> = HashSet::new();
 
             for group in &groups {

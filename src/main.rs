@@ -745,6 +745,7 @@ impl Yomu {
     // ------------------------------------------------------------------------------------
 
     /// Book ids in library order.
+    #[allow(dead_code)]
     fn library_order(&self) -> Vec<String> {
         self.library
             .books()
@@ -755,15 +756,16 @@ impl Yomu {
 
     /// Book ids in the currently viewed scope (the open group, or the full library).
     pub(crate) fn current_view_order(&self) -> Vec<String> {
+        let sorted = self.get_sorted_books();
         if self.library.settings().group_series
             && let Some(open_key) = self.open_group.as_deref()
         {
-            let groups = directory_groups(self.library.books());
+            let groups = directory_groups(sorted.iter().copied());
             if let Some(group) = groups.into_iter().find(|g| g.key == open_key) {
                 return group.books.iter().map(|book| book.id.clone()).collect();
             }
         }
-        self.library_order()
+        sorted.iter().map(|book| book.id.clone()).collect()
     }
 
     pub(crate) fn prune_open_group(&mut self) {
