@@ -81,6 +81,11 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Established pure `ReaderProps` and decoupled presentation rendering from `Yomu` application entity state via standard event callbacks.
      - Reduced `src/main.rs` by >300 lines to a concise adapter calling `ui::reader::render_reader(props, ...)`.
      - Added unit tests for `ReaderScrollHandle` and `reader_progress_bar` (241 total active tests passing: 106 lib, 135 bin).
+   - **Phase 2E.2 (Completed):** Extracted `src/app/actions.rs` for menus, dialogs, and action orchestration:
+     - Relocated book/group/library context menu generation (`open_book_menu`, `open_context_menu`, `open_group_context_menu`, `open_library_menu`), menu hover selection tracking (`menu_hover`), action routing (`run_book_action`, `perform_book_action`, `run_library_menu_action`), confirmation routing (`confirm_accept`), series dialog handling (`open_series_dialog`, `save_series_dialog`), and removal workflows (`request_remove_books`, `remove_books`, `request_remove_selected`, `remove_selected`, `remove_book`).
+     - Preserved all shutdown guards (`is_quitting` checks), confirmation flows, selection semantics, toast feedback, and persistence coordination.
+     - Maintained view adapters (`render_menu`, `render_library_menu`, `render_confirm`, `render_properties`, `render_series_dialog`, `render_collection_dialog`) in `src/main.rs`.
+     - Full test suite passing (241 total active tests: 106 lib, 135 bin).
    - **Phase 2E (Next):** Remaining Phase 2E structural cleanup and window lifecycle orchestration.
 3. **Phase 3: Scalability & Performance:**
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
