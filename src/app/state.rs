@@ -16,11 +16,10 @@ use std::{
 };
 
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::scroll::ScrollbarHandle;
 use gpui_kit::component::{Theme as KitTheme, ThemeConfig};
 use gpui_kit::{
-    App, AppContext, Bounds, Context, Entity, FocusHandle, Focusable, Pixels, Point, RenderImage,
-    ScrollHandle, SharedString, Size, Window, point, px, size,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, Point, RenderImage, ScrollHandle,
+    SharedString, Window, px,
 };
 #[cfg(not(test))]
 use yomu::motion;
@@ -76,36 +75,7 @@ pub enum NavDestination {
     Details(String),
 }
 
-#[derive(Clone)]
-pub struct ReaderScrollHandle {
-    pub bounds: Bounds<Pixels>,
-    pub offset_y: f32,
-    pub content_height: f32,
-    pub sync: Rc<Cell<Option<f32>>>,
-    pub max_offset: f32,
-}
-
-impl ScrollbarHandle for ReaderScrollHandle {
-    fn viewport_bounds(&self) -> Bounds<Pixels> {
-        self.bounds
-    }
-
-    fn offset(&self) -> Point<Pixels> {
-        point(px(0.), px(-self.offset_y))
-    }
-
-    fn set_offset(&self, offset: Point<Pixels>) {
-        let target_y = (-f32::from(offset.y)).clamp(0.0, self.max_offset);
-        self.sync.set(Some(target_y));
-    }
-
-    fn content_size(&self) -> Size<Pixels> {
-        size(
-            self.bounds.size.width,
-            px(self.content_height.max(f32::from(self.bounds.size.height))),
-        )
-    }
-}
+pub use crate::ui::reader::ReaderScrollHandle;
 
 pub struct Yomu {
     pub(crate) focus_handle: FocusHandle,

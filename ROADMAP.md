@@ -44,7 +44,8 @@ This document outlines prioritized future work, planned features, and tracked te
   - **Phase 2D.1:** Created `src/app/keybindings.rs` extracting keyboard shortcut dispatch (`on_key`), action execution (`apply`), library shortcuts (`on_library_key`), modal overlay shortcuts (`on_overlay_key`), and Vim command-line editing/theme preview synchronization (`in_cmdline`, `cmdline_text`, `replace_cmdline`, `cancel_cmdline`, `sync_theme_preview`, `restore_theme_preview`).
   - **Phase 2D.2:** Created `src/app/persistence.rs` extracting application-level persistence coordination (`save_library`, `save_library_debounced`, `flush_save_background`, `request_quit`, non-blocking zero-I/O `impl Drop for Yomu`), non-blocking asynchronous dispatch across all UI handlers, graceful shutdown flush via `request_quit` and `on_window_should_close`, error recovery dialog with `ForceQuit`, and monotonic sequencing via `save_seq`, lock-free `last_saved_seq: Arc<AtomicU64>`, and background `write_lock: Arc<Mutex<()>>`.
   - **Phase 2D.3:** Created `src/app/desktop.rs` extracting XDG desktop entry generation (`desktop_entry_content`), application and hicolor icon installation across resolutions (`HICOLOR_ICON_SIZES`, `LOGO_PNG`, `app_icon`), and desktop environment integration installer (`install_desktop_integration_to`, `install_desktop_integration`).
-  - **Next Subsystems:** Phase 2E (Window lifecycle & app initialization cleanup).
+  - **Phase 2E.1:** Relocated reader visual presentation responsibilities (`render_reader`, `page_layer`, `reader_header`, `reader_progress_bar`, `lateral_turners`, `ReaderScrollHandle`) from `src/main.rs` into `src/ui/reader.rs`, establishing pure presentation props and callbacks while reducing `src/main.rs` to a concise adapter.
+  - **Next Subsystems:** Remaining Phase 2E structural cleanup and window lifecycle orchestration.
 
 ---
 

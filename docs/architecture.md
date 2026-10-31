@@ -68,7 +68,7 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `history_view.rs` | Reading history screen | Chronological reading log of in-progress and completed books with progress bars and quick navigation. |
 | `settings_view.rs` | Split-pane macOS preferences | 6 dedicated categories (General, Appearance, Reader, Library, Shortcuts, Advanced) with native GPUI Kit switches, dropdowns, and tables. |
 | `overlays.rs` | Modal dialogs, menus, command prompt, help | Consolidated modal layer. Uses `OverlayStyle` for consistent geometry. Floating command prompt with live auto-completion; shortcuts modal. |
-| `reader.rs` | Reader viewport state and continuous strip | Edge-to-edge canvas; autohiding header with fit and reading direction controls; floating progress pill; lateral chevrons. |
+| `reader.rs` | Reader viewport state, continuous strip, and visual presentation | Edge-to-edge canvas with decoded page layers (`page_layer`); autohiding header with fit mode and window controls (`reader_header`); floating progress bar (`reader_progress_bar`); lateral turn chevrons (`lateral_turners`); and continuous vertical scrollbar integration (`ReaderScrollHandle`). |
 | `components.rs` | Shared atomic visual primitives | Window controls, responsive grid math, status badges, and genre tags. |
 | `theme.rs` | Theme management and TOML loader | Bridges GPUI Kit themes and custom `themes.toml` files with automatic SHA-256 fingerprint reloading. |
 
@@ -81,7 +81,7 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `keybindings.rs` | Keyboard event routing, Vim token translation, overlay shortcuts, command-line prompt, and action execution | Implements `on_key`, `apply`, `on_library_key`, `on_overlay_key`, and Vim command prompt helpers on `Yomu`; respects Vim-mode settings, overlay priority, and platform modifier standards. |
 | `persistence.rs` | Application persistence, debounced autosave, atomic filesystem synchronization, and graceful shutdown flush | Manages `save_library` (immediate non-blocking background dispatch), `save_library_debounced` (500ms trailing timer for page turns/scrolling), `flush_save_background`, `request_quit` (async wait on in-flight saves before exiting), non-blocking zero-I/O `Drop for Yomu`, full-window native GPUI pointer occlusion barrier, and error recovery confirmation dialog with `ForceQuit`; enforces monotonic `save_seq` ordering via `Arc<AtomicU64>`, background-only `write_lock: Arc<Mutex<()>>`, and 4-tier shutdown mutation isolation; guarantees zero synchronous filesystem I/O or mutex contention on the UI thread during rendering, scrolling, or user interaction. |
 | `desktop.rs` | Desktop environment integration, application icons, and XDG desktop entry installation | Implements `desktop_entry_content`, `app_icon`, `install_desktop_integration_to`, and `install_desktop_integration`; embeds logo and hicolor icons across standard desktop resolutions; preserves user customizations when `--force` is omitted; platform-gated for Linux with graceful non-Linux bails. |
-| `main.rs` | Executable entry point, window initialization, GPUI lifecycle, event dispatch, and reader render | Focused on top-level runtime startup, action dispatch, and `Render` trait implementation. |
+| `main.rs` | Executable entry point, window initialization, GPUI lifecycle, event dispatch, and view adapters | Focused on top-level runtime startup, action dispatch, view adapters, and `Render` trait implementation. |
 
 ---
 

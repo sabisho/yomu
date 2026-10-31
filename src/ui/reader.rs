@@ -1,13 +1,27 @@
-//! Reader state, continuous vertical layout, page transitions, and inertial scroll management.
+//! Reader state, visual presentation, continuous vertical layout, page transitions, and inertial scroll management.
 
 use std::{
+    cell::Cell,
     collections::{HashMap, HashSet},
     path::PathBuf,
+    rc::Rc,
     sync::Arc,
     time::Instant,
 };
 
-use gpui_kit::{RenderImage, TouchPhase, Window};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::scroll::{ScrollableElement, ScrollbarHandle};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Icon, Side as MenuSide, Sizable};
+use gpui_kit::prelude::*;
+use gpui_kit::{
+    AnyElement, App, Bounds, ClickEvent, Div, FontWeight, Hsla, InteractiveElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, PinchEvent, Pixels, Point,
+    RenderImage, ScrollEvent, SharedString, Size, Stateful, Styled, TouchPhase, Window, div, img,
+    point, px, relative, size,
+};
 use yomu::{
     archive::SourceKind,
     layout::{self, Arrive, FitMode, Viewport},
@@ -15,6 +29,9 @@ use yomu::{
     motion::{self, KineticScroll, PageTransition},
     vim::Vim,
 };
+
+use super::components::{centered, pill, with_alpha};
+use super::theme::UiColors;
 
 pub fn viewport_of(window: &Window) -> Viewport {
     let size = window.viewport_size();
@@ -85,6 +102,485 @@ pub struct ReaderSyncOutcome {
     pub wanted: Vec<(usize, u32)>,
     pub animating: bool,
     pub progress_changed: Option<(String, usize)>,
+}
+
+/// Scrollbar handle synchronizing GPUI vertical scrollbar dragging with continuous reader scroll offset.
+#[derive(Clone)]
+pub struct ReaderScrollHandle {
+    pub bounds: Bounds<Pixels>,
+    pub offset_y: f32,
+    pub content_height: f32,
+    pub sync: Rc<Cell<Option<f32>>>,
+    pub max_offset: f32,
+}
+
+impl ScrollbarHandle for ReaderScrollHandle {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        self.bounds
+    }
+
+    fn offset(&self) -> Point<Pixels> {
+        point(px(0.), px(-self.offset_y))
+    }
+
+    fn set_offset(&self, offset: Point<Pixels>) {
+        let target_y = (-f32::from(offset.y)).clamp(0.0, self.max_offset);
+        self.sync.set(Some(target_y));
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        size(
+            self.bounds.size.width,
+            px(self.content_height.max(f32::from(self.bounds.size.height))),
+        )
+    }
+}
+
+/// One page image at an exact position and size.
+pub fn page_layer(
+    image: &Arc<RenderImage>,
+    left: f32,
+    top: f32,
+    display: (f32, f32),
+) -> AnyElement {
+    img(image.clone())
+        .absolute()
+        .left(px(left))
+        .top(px(top))
+        .w(px(display.0))
+        .h(px(display.1))
+        .object_fit(ObjectFit::Fill)
+        .into_any_element()
+}
+
+/// Horizontal reading progress bar along the bottom of the viewport.
+pub fn reader_progress_bar(fraction: f32, accent: Hsla) -> Div {
+    div()
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .h(px(2.))
+        .w(relative(fraction))
+        .bg(accent)
+}
+
+/// Autohiding top navigation and header overlay for the reader canvas.
+pub fn reader_header(
+    book_title: &str,
+    current_page_str: &str,
+    fit_mode: FitMode,
+    colors: UiColors,
+    on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_set_fit: impl Fn(FitMode, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let on_set_fit = Rc::new(on_set_fit);
+    div()
+        .id("reader-top-hover-area")
+        .group("reader-top")
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .h(px(56.))
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(
+            div()
+                .group_hover("reader-top", |s| s.opacity(1.0))
+                .opacity(0.0)
+                .w_full()
+                .h(px(52.))
+                .px_4()
+                .bg(with_alpha(colors.background, 0.92))
+                .border_b_1()
+                .border_color(with_alpha(colors.border, 0.5))
+                .shadow_lg()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            Button::new("reader-back-btn")
+                                .ghost()
+                                .small()
+                                .label("← Library")
+                                .tooltip("Back to library (Esc)")
+                                .rounded(ButtonRounded::Medium)
+                                .on_click(move |event, window, cx| {
+                                    on_back(event, window, cx);
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(colors.foreground)
+                                .child(book_title.to_string()),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(colors.muted)
+                        .child(current_page_str.to_string()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("reader-fit-toggle")
+                                .ghost()
+                                .small()
+                                .dropdown_caret(true)
+                                .rounded(ButtonRounded::Medium)
+                                .tooltip("Display fit mode")
+                                .label(fit_mode.label())
+                                .dropdown_menu({
+                                    let on_set_fit = on_set_fit.clone();
+                                    move |mut menu, _, _| {
+                                        menu = menu.check_side(MenuSide::Left).min_w(px(140.));
+                                        let options = [
+                                            FitMode::Page,
+                                            FitMode::Width,
+                                            FitMode::Height,
+                                            FitMode::Original,
+                                        ];
+                                        for &mode in &options {
+                                            let on_set_fit = on_set_fit.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(mode.label())
+                                                    .checked(mode == fit_mode)
+                                                    .on_click(move |_, window, cx| {
+                                                        on_set_fit(mode, window, cx);
+                                                    }),
+                                            );
+                                        }
+                                        menu
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("reader-fullscreen-toggle")
+                                .ghost()
+                                .small()
+                                .rounded(ButtonRounded::Medium)
+                                .tooltip("Toggle fullscreen (F11)")
+                                .icon(IconName::Maximize)
+                                .on_click(move |_, window, _| window.toggle_fullscreen()),
+                        ),
+                ),
+        )
+}
+
+/// Floating lateral chevrons for navigating previous and next pages.
+pub fn lateral_turners(
+    colors: UiColors,
+    radius: Pixels,
+    on_prev: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_next: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> (Stateful<Div>, Stateful<Div>) {
+    let left_chevron = div()
+        .id("reader-prev-hover-area")
+        .group("reader-prev")
+        .absolute()
+        .left_0()
+        .top(relative(0.35))
+        .bottom(relative(0.35))
+        .w(px(72.))
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .flex()
+        .items_center()
+        .pl_4()
+        .child(
+            div()
+                .id("reader-prev-chevron")
+                .group_hover("reader-prev", |s| s.opacity(1.0))
+                .opacity(0.0)
+                .size(px(40.))
+                .rounded(radius)
+                .bg(with_alpha(colors.background, 0.85))
+                .border_1()
+                .border_color(with_alpha(colors.border, 0.5))
+                .shadow_md()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|s| s.bg(with_alpha(colors.accent, 0.2)))
+                .tooltip(|window, cx| Tooltip::new("Previous page (Left or K)").build(window, cx))
+                .on_click(move |event, window, cx| {
+                    on_prev(event, window, cx);
+                })
+                .child(
+                    Icon::new(IconName::ChevronLeft)
+                        .size(px(20.))
+                        .text_color(colors.foreground),
+                ),
+        );
+
+    let right_chevron = div()
+        .id("reader-next-hover-area")
+        .group("reader-next")
+        .absolute()
+        .right_0()
+        .top(relative(0.35))
+        .bottom(relative(0.35))
+        .w(px(72.))
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .flex()
+        .items_center()
+        .justify_end()
+        .pr_4()
+        .child(
+            div()
+                .id("reader-next-chevron")
+                .group_hover("reader-next", |s| s.opacity(1.0))
+                .opacity(0.0)
+                .size(px(40.))
+                .rounded(radius)
+                .bg(with_alpha(colors.background, 0.85))
+                .border_1()
+                .border_color(with_alpha(colors.border, 0.5))
+                .shadow_md()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|s| s.bg(with_alpha(colors.accent, 0.2)))
+                .tooltip(|window, cx| Tooltip::new("Next page (Right or J)").build(window, cx))
+                .on_click(move |event, window, cx| {
+                    on_next(event, window, cx);
+                })
+                .child(
+                    Icon::new(IconName::ChevronRight)
+                        .size(px(20.))
+                        .text_color(colors.foreground),
+                ),
+        );
+
+    (left_chevron, right_chevron)
+}
+
+/// Configuration properties for reader presentation.
+pub struct ReaderProps<'a> {
+    pub reader: &'a Reader,
+    pub colors: UiColors,
+    pub radius: Pixels,
+    pub border_px: f32,
+    pub radius_xl_px: f32,
+    pub book_title: &'a str,
+    pub hud: Option<SharedString>,
+    pub scroll_handle: Option<&'a ReaderScrollHandle>,
+}
+
+/// Renders the complete reader view: pages canvas, progress indicator, HUD pills,
+/// lateral turn chevrons, autohiding header, shortcuts help overlay, and continuous scrollbar.
+#[allow(clippy::too_many_arguments)]
+pub fn render_reader(
+    props: ReaderProps<'_>,
+    on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_set_fit: impl Fn(FitMode, &mut Window, &mut App) + 'static,
+    on_turn_prev: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_turn_next: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_mouse_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    on_mouse_move: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
+    on_mouse_up: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+    on_scroll: impl Fn(&ScrollEvent, &mut Window, &mut App) + 'static,
+    on_pinch: impl Fn(&PinchEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let reader = props.reader;
+    let vp = reader.viewport;
+
+    // Pages are drawn at a size and position we compute ourselves, so what you see is exactly
+    // what the fit mode and zoom say, independent of the texture's pixel size. During a page
+    // turn the outgoing and incoming pages are both drawn, shifted along the same strip.
+    let mut content: Vec<AnyElement> = Vec::new();
+    if let Some(error) = &reader.error {
+        content.push(centered(
+            format!("Couldn't open this book: {error}"),
+            props.colors,
+        ));
+    } else if reader.continuous {
+        let width = vp.width * reader.zoom;
+        let page_w = width.max(1.0);
+        let gap = if reader.webcomics {
+            0.0
+        } else {
+            12.0 * reader.zoom
+        };
+        let left = (vp.width - width) / 2.0 - reader.off.0;
+        let visible_top = reader.off.1;
+        let visible_bottom = visible_top + vp.height;
+        let mut top = 0.0;
+        for ix in 0..reader.total {
+            let (w, h) = reader.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
+            let height = page_w * h as f32 / w.max(1) as f32;
+            let overlap = if reader.webcomics && ix + 1 < reader.total {
+                1.0
+            } else {
+                0.0
+            };
+            if top > visible_bottom {
+                break;
+            }
+            if top + height + overlap >= visible_top {
+                if let Some(page) = reader.images.get(&ix) {
+                    content.push(page_layer(
+                        &page.image,
+                        left,
+                        top - reader.off.1,
+                        (width, height + overlap),
+                    ));
+                } else if let Some(error) = reader.failed.get(&ix) {
+                    content.push(centered(
+                        format!("Couldn't decode page {}: {error}", ix + 1),
+                        props.colors,
+                    ));
+                }
+            }
+            top += height + gap;
+        }
+    } else {
+        let (shift_out, shift_in) = match &reader.transition {
+            Some(transition) => (
+                transition.outgoing_shift() * vp.width,
+                transition.incoming_shift() * vp.width,
+            ),
+            None => (0.0, 0.0),
+        };
+        if let Some(outgoing) = &reader.outgoing {
+            content.push(page_layer(
+                &outgoing.image,
+                outgoing.origin.0 + shift_out,
+                outgoing.origin.1,
+                outgoing.display,
+            ));
+        }
+        if let Some(page) = reader.current() {
+            let display = layout::display_size(reader.fit, reader.zoom, Reader::orig_of(page), &vp);
+            let (left, top) = layout::origin(reader.off, display, &vp);
+            content.push(page_layer(&page.image, left + shift_in, top, display));
+        } else if reader.outgoing.is_none() {
+            if let Some(error) = reader.failed.get(&reader.page) {
+                content.push(centered(
+                    format!("Couldn't decode page {}: {error}", reader.page + 1),
+                    props.colors,
+                ));
+            } else if reader.pages.is_none() {
+                content.push(centered("Opening…", props.colors));
+            }
+            // otherwise: blank for the moment it takes the first page to decode
+        }
+    }
+
+    let fraction = (reader.page + 1) as f32 / reader.total.max(1) as f32;
+    let progress_line = reader_progress_bar(fraction, props.colors.accent);
+
+    let info = reader.show_info.then(|| {
+        pill(
+            div().absolute().bottom_4().left_0().right_0(),
+            format!(
+                "{} / {}  ·  {}  ·  {}%  ·  {}",
+                reader.page + 1,
+                reader.total,
+                reader.fit.label(),
+                (reader.zoom * 100.0).round() as i32,
+                if reader.webcomics {
+                    "webcomics"
+                } else if reader.continuous {
+                    "continuous"
+                } else {
+                    "single page"
+                }
+            ),
+            props.colors,
+            props.radius,
+        )
+    });
+    let hud = props.hud.map(|text| {
+        pill(
+            div().absolute().top_4().left_0().right_0(),
+            text,
+            props.colors,
+            props.radius,
+        )
+    });
+
+    let vim_status = if reader.vim.in_cmdline() {
+        None
+    } else {
+        reader.vim.status().map(|text| {
+            pill(
+                div().absolute().bottom_4().left_0().right_0(),
+                text,
+                props.colors,
+                props.radius,
+            )
+            .into_any_element()
+        })
+    };
+
+    let current_page_str = format!("{} / {}", reader.page + 1, reader.total);
+    let top_bar = reader_header(
+        props.book_title,
+        &current_page_str,
+        reader.fit,
+        props.colors,
+        on_back,
+        on_set_fit,
+    );
+
+    let (left_chevron, right_chevron) =
+        lateral_turners(props.colors, props.radius, on_turn_prev, on_turn_next);
+
+    div()
+        .size_full()
+        .relative()
+        .overflow_hidden()
+        .bg(props.colors.background)
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            on_mouse_down(event, window, cx);
+        })
+        .on_mouse_move(move |event, window, cx| {
+            on_mouse_move(event, window, cx);
+        })
+        .on_mouse_up(MouseButton::Left, move |event, window, cx| {
+            on_mouse_up(event, window, cx);
+        })
+        .on_scroll(move |event, window, cx| {
+            on_scroll(event, window, cx);
+        })
+        .on_pinch(move |event, window, cx| {
+            on_pinch(event, window, cx);
+        })
+        .children(content)
+        .child(progress_line)
+        .children(info)
+        .children(hud)
+        .children(vim_status)
+        .child(top_bar)
+        .child(left_chevron)
+        .child(right_chevron)
+        .children(reader.show_help.then(|| {
+            super::overlays::help_overlay(props.colors, props.border_px, props.radius_xl_px)
+        }))
+        .when_some(props.scroll_handle, |this, handle| {
+            this.vertical_scrollbar(handle)
+        })
+        .into_any_element()
 }
 
 /// State of the book that is currently open.
@@ -549,5 +1045,44 @@ mod tests {
         let (first, last) = reader.continuous_visible_range(tops[2], tops[5] + 1.0, &vp);
         assert_eq!(first, 2);
         assert_eq!(last, 5);
+    }
+
+    #[test]
+    fn test_reader_scroll_handle_scrollbar_contract() {
+        let sync = Rc::new(Cell::new(None));
+        let handle = ReaderScrollHandle {
+            bounds: Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(800.), px(600.)),
+            },
+            offset_y: 150.0,
+            content_height: 2400.0,
+            sync: sync.clone(),
+            max_offset: 1800.0,
+        };
+
+        assert_eq!(handle.viewport_bounds(), handle.bounds);
+        assert_eq!(handle.offset(), point(px(0.), px(-150.0)));
+        assert_eq!(handle.content_size(), size(px(800.), px(2400.0)));
+
+        handle.set_offset(point(px(0.), px(-500.0)));
+        assert_eq!(sync.get(), Some(500.0));
+
+        // Clamping to [0.0, max_offset]
+        handle.set_offset(point(px(0.), px(-2500.0)));
+        assert_eq!(sync.get(), Some(1800.0));
+
+        handle.set_offset(point(px(0.), px(100.0)));
+        assert_eq!(sync.get(), Some(0.0));
+    }
+
+    #[test]
+    fn test_reader_progress_bar_constructs() {
+        let accent = gpui_kit::hsla(0.6, 0.8, 0.5, 1.0);
+        let mut bar = reader_progress_bar(0.75, accent);
+        assert_eq!(
+            bar.style().background,
+            Some(gpui_kit::Fill::Color(accent.into()))
+        );
     }
 }

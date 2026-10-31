@@ -76,7 +76,12 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Protected asynchronous import completion loops and file-picker error callbacks against mutating application state or presenting UI toasts during shutdown.
      - Added 23 deterministic concurrency, monotonicity, shutdown, input barrier, import cancellation, token identity, and ForceQuit regression tests in `src/app/persistence.rs` (236 total active tests passing: 106 lib, 130 bin).
    - **Phase 2D.3 (Completed):** Extracted `app/desktop.rs` handling XDG desktop entry content (`desktop_entry_content`), application window icon decodes (`app_icon`), standard hicolor icon resolution tables (`HICOLOR_ICON_SIZES`), and Linux desktop integration installer (`install_desktop_integration_to`, `install_desktop_integration`) with conditional compilation.
-   - **Phase 2E (Next):** Window lifecycle & app initialization cleanup.
+   - **Phase 2E.1 (Completed):** Relocated reader visual presentation from `src/main.rs` into `src/ui/reader.rs`:
+     - Moved `render_reader`, `page_layer`, `reader_header`, `reader_progress_bar`, `lateral_turners`, and `ReaderScrollHandle` into `src/ui/reader.rs`.
+     - Established pure `ReaderProps` and decoupled presentation rendering from `Yomu` application entity state via standard event callbacks.
+     - Reduced `src/main.rs` by >300 lines to a concise adapter calling `ui::reader::render_reader(props, ...)`.
+     - Added unit tests for `ReaderScrollHandle` and `reader_progress_bar` (241 total active tests passing: 106 lib, 135 bin).
+   - **Phase 2E (Next):** Remaining Phase 2E structural cleanup and window lifecycle orchestration.
 3. **Phase 3: Scalability & Performance:**
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.

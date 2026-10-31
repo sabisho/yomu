@@ -16,12 +16,9 @@ use std::{
 };
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Side as MenuSide, Sizable, Theme as KitTheme};
+use gpui_kit::component::{Icon, Theme as KitTheme};
 #[allow(unused_imports)]
 use gpui_kit::popup::{PopupAnchor, PopupConstraintAdjustment, PopupGravity, PopupOptions};
 #[allow(unused_imports)]
@@ -35,8 +32,10 @@ use gpui_kit::{
     actions, anchored, application, canvas, deferred, div, ease_out_quint, img, point, prelude::*,
     px, relative, size,
 };
+#[cfg(test)]
+use yomu::layout;
 use yomu::{
-    layout::{self, Arrive, FitMode},
+    layout::{Arrive, FitMode},
     library::{
         self, Book, BorderSize, CornerRounding, Settings, ThemeModePreference, ThumbnailSize,
     },
@@ -66,7 +65,6 @@ pub use app::{
     ReaderScrollHandle, SCROLL_CATCH_GUARD, Side, WHEEL_LINE, Yomu,
 };
 
-use ui::components::{centered, page_layer, pill, with_alpha};
 use ui::library_view::{
     BookCardProps, LibraryGroup, directory_groups, render_book_card, render_book_list_row,
     render_folder_card, render_folder_list_row,
@@ -2695,89 +2693,6 @@ impl Yomu {
     fn render_reader(&self, reader: &Reader, cx: &mut Context<Self>) -> AnyElement {
         let vp = reader.viewport;
 
-        // Pages are drawn at a size and position we compute ourselves, so what you see is exactly
-        // what the fit mode and zoom say, independent of the texture's pixel size. During a page
-        // turn the outgoing and incoming pages are both drawn, shifted along the same strip.
-        let mut content: Vec<AnyElement> = Vec::new();
-        if let Some(error) = &reader.error {
-            content.push(centered(
-                format!("Couldn't open this book: {error}"),
-                self.colors,
-            ));
-        } else if reader.continuous {
-            let width = vp.width * reader.zoom;
-            let page_w = width.max(1.0);
-            let gap = if reader.webcomics {
-                0.0
-            } else {
-                12.0 * reader.zoom
-            };
-            let left = (vp.width - width) / 2.0 - reader.off.0;
-            let visible_top = reader.off.1;
-            let visible_bottom = visible_top + vp.height;
-            let mut top = 0.0;
-            for ix in 0..reader.total {
-                let (w, h) = reader.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
-                let height = page_w * h as f32 / w.max(1) as f32;
-                let overlap = if reader.webcomics && ix + 1 < reader.total {
-                    1.0
-                } else {
-                    0.0
-                };
-                if top > visible_bottom {
-                    break;
-                }
-                if top + height + overlap >= visible_top {
-                    if let Some(page) = reader.images.get(&ix) {
-                        content.push(page_layer(
-                            &page.image,
-                            left,
-                            top - reader.off.1,
-                            (width, height + overlap),
-                        ));
-                    } else if let Some(error) = reader.failed.get(&ix) {
-                        content.push(centered(
-                            format!("Couldn't decode page {}: {error}", ix + 1),
-                            self.colors,
-                        ));
-                    }
-                }
-                top += height + gap;
-            }
-        } else {
-            let (shift_out, shift_in) = match &reader.transition {
-                Some(transition) => (
-                    transition.outgoing_shift() * vp.width,
-                    transition.incoming_shift() * vp.width,
-                ),
-                None => (0.0, 0.0),
-            };
-            if let Some(outgoing) = &reader.outgoing {
-                content.push(page_layer(
-                    &outgoing.image,
-                    outgoing.origin.0 + shift_out,
-                    outgoing.origin.1,
-                    outgoing.display,
-                ));
-            }
-            if let Some(page) = reader.current() {
-                let display =
-                    layout::display_size(reader.fit, reader.zoom, Reader::orig_of(page), &vp);
-                let (left, top) = layout::origin(reader.off, display, &vp);
-                content.push(page_layer(&page.image, left + shift_in, top, display));
-            } else if reader.outgoing.is_none() {
-                if let Some(error) = reader.failed.get(&reader.page) {
-                    content.push(centered(
-                        format!("Couldn't decode page {}: {error}", reader.page + 1),
-                        self.colors,
-                    ));
-                } else if reader.pages.is_none() {
-                    content.push(centered("Opening…", self.colors));
-                }
-                // otherwise: blank for the moment it takes the first page to decode
-            }
-        }
-
         let reader_scroll_handle = if reader.continuous {
             let doc_height = reader.continuous_total_height(&vp);
             if doc_height > vp.height {
@@ -2799,332 +2714,116 @@ impl Yomu {
             None
         };
 
-        let fraction = (reader.page + 1) as f32 / reader.total.max(1) as f32;
-        let progress_line = div()
-            .absolute()
-            .bottom_0()
-            .h(px(2.))
-            .w(relative(fraction))
-            .bg(self.colors.accent);
-        let progress_line = progress_line.left_0();
-
-        let info = reader.show_info.then(|| {
-            pill(
-                div().absolute().bottom_4().left_0().right_0(),
-                format!(
-                    "{} / {}  ·  {}  ·  {}%  ·  {}",
-                    reader.page + 1,
-                    reader.total,
-                    reader.fit.label(),
-                    (reader.zoom * 100.0).round() as i32,
-                    if reader.webcomics {
-                        "webcomics"
-                    } else if reader.continuous {
-                        "continuous"
-                    } else {
-                        "single page"
-                    }
-                ),
-                self.colors,
-                px(self.radius_px()),
-            )
-        });
-        let hud = self.hud.clone().map(|text| {
-            pill(
-                div().absolute().top_4().left_0().right_0(),
-                text,
-                self.colors,
-                px(self.radius_px()),
-            )
-        });
-
-        let vim_status = if reader.vim.in_cmdline() {
-            None
-        } else {
-            reader.vim.status().map(|text| {
-                pill(
-                    div().absolute().bottom_4().left_0().right_0(),
-                    text,
-                    self.colors,
-                    px(self.radius_px()),
-                )
-                .into_any_element()
-            })
-        };
-
         let yomu = cx.entity();
         let book_title = self
             .library
             .get(&reader.book_id)
             .map(|b| b.title.clone())
             .unwrap_or_default();
-        let current_page_str = format!("{} / {}", reader.page + 1, reader.total);
-        let fit_mode = reader.fit;
 
-        let top_bar = div()
-            .id("reader-top-hover-area")
-            .group("reader-top")
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .h(px(56.))
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(|_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .group_hover("reader-top", |s| s.opacity(1.0))
-                    .opacity(0.0)
-                    .w_full()
-                    .h(px(52.))
-                    .px_4()
-                    .bg(with_alpha(self.colors.background, 0.92))
-                    .border_b_1()
-                    .border_color(with_alpha(self.colors.border, 0.5))
-                    .shadow_lg()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                Button::new("reader-back-btn")
-                                    .ghost()
-                                    .small()
-                                    .label("← Library")
-                                    .tooltip("Back to library (Esc)")
-                                    .rounded(ButtonRounded::Medium)
-                                    .on_click({
-                                        let yomu = yomu.clone();
-                                        move |_, window, cx| {
-                                            yomu.update(cx, |this, cx| this.close_book(window, cx));
-                                        }
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(self.colors.foreground)
-                                    .child(book_title),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(self.colors.muted)
-                            .child(current_page_str),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Button::new("reader-fit-toggle")
-                                    .ghost()
-                                    .small()
-                                    .dropdown_caret(true)
-                                    .rounded(ButtonRounded::Medium)
-                                    .tooltip("Display fit mode")
-                                    .label(fit_mode.label())
-                                    .dropdown_menu({
-                                        let yomu = yomu.clone();
-                                        move |mut menu, _, _| {
-                                            menu = menu.check_side(MenuSide::Left).min_w(px(140.));
-                                            let options = [
-                                                FitMode::Page,
-                                                FitMode::Width,
-                                                FitMode::Height,
-                                                FitMode::Original,
-                                            ];
-                                            for &mode in &options {
-                                                let yomu = yomu.clone();
-                                                menu = menu.item(
-                                                    PopupMenuItem::new(mode.label())
-                                                        .checked(mode == fit_mode)
-                                                        .on_click(move |_, _, cx| {
-                                                            yomu.update(cx, |this, cx| {
-                                                                this.set_fit(mode, cx);
-                                                            });
-                                                        }),
-                                                );
-                                            }
-                                            menu
-                                        }
-                                    }),
-                            )
-                            .child(
-                                Button::new("reader-fullscreen-toggle")
-                                    .ghost()
-                                    .small()
-                                    .rounded(ButtonRounded::Medium)
-                                    .tooltip("Toggle fullscreen (F11)")
-                                    .icon(IconName::Maximize)
-                                    .on_click(move |_, window, _| window.toggle_fullscreen()),
-                            ),
-                    ),
-            );
+        let props = ui::reader::ReaderProps {
+            reader,
+            colors: self.colors,
+            radius: px(self.radius_px()),
+            border_px: self.border_px(),
+            radius_xl_px: self.radius_xl_px(),
+            book_title: &book_title,
+            hud: self.hud.clone(),
+            scroll_handle: reader_scroll_handle.as_ref(),
+        };
 
-        let left_chevron = div()
-            .id("reader-prev-hover-area")
-            .group("reader-prev")
-            .absolute()
-            .left_0()
-            .top(relative(0.35))
-            .bottom(relative(0.35))
-            .w(px(72.))
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .flex()
-            .items_center()
-            .pl_4()
-            .child(
-                div()
-                    .id("reader-prev-chevron")
-                    .group_hover("reader-prev", |s| s.opacity(1.0))
-                    .opacity(0.0)
-                    .size(px(40.))
-                    .rounded(px(self.radius_px()))
-                    .bg(with_alpha(self.colors.background, 0.85))
-                    .border_1()
-                    .border_color(with_alpha(self.colors.border, 0.5))
-                    .shadow_md()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(with_alpha(self.colors.accent, 0.2)))
-                    .tooltip(|window, cx| {
-                        Tooltip::new("Previous page (Left or K)").build(window, cx)
-                    })
-                    .on_click({
-                        let yomu = yomu.clone();
-                        move |_, _, cx| {
-                            yomu.update(cx, |this, cx| {
-                                this.turn_by(false, 1, Arrive::Start, cx);
-                            })
-                        }
-                    })
-                    .child(
-                        Icon::new(IconName::ChevronLeft)
-                            .size(px(20.))
-                            .text_color(self.colors.foreground),
-                    ),
-            );
+        let yomu_back = yomu.clone();
+        let on_back = move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            yomu_back.update(cx, |this, cx| this.close_book(window, cx));
+        };
 
-        let right_chevron = div()
-            .id("reader-next-hover-area")
-            .group("reader-next")
-            .absolute()
-            .right_0()
-            .top(relative(0.35))
-            .bottom(relative(0.35))
-            .w(px(72.))
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .flex()
-            .items_center()
-            .justify_end()
-            .pr_4()
-            .child(
-                div()
-                    .id("reader-next-chevron")
-                    .group_hover("reader-next", |s| s.opacity(1.0))
-                    .opacity(0.0)
-                    .size(px(40.))
-                    .rounded(px(self.radius_px()))
-                    .bg(with_alpha(self.colors.background, 0.85))
-                    .border_1()
-                    .border_color(with_alpha(self.colors.border, 0.5))
-                    .shadow_md()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(with_alpha(self.colors.accent, 0.2)))
-                    .tooltip(|window, cx| Tooltip::new("Next page (Right or J)").build(window, cx))
-                    .on_click({
-                        let yomu = yomu.clone();
-                        move |_, _, cx| {
-                            yomu.update(cx, |this, cx| {
-                                this.turn_by(true, 1, Arrive::Start, cx);
-                            })
-                        }
-                    })
-                    .child(
-                        Icon::new(IconName::ChevronRight)
-                            .size(px(20.))
-                            .text_color(self.colors.foreground),
-                    ),
-            );
+        let yomu_fit = yomu.clone();
+        let on_set_fit = move |mode: FitMode, _: &mut Window, cx: &mut App| {
+            yomu_fit.update(cx, |this, cx| this.set_fit(mode, cx));
+        };
 
-        div()
-            .size_full()
-            .relative()
-            .overflow_hidden()
-            .bg(self.colors.background)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, _| {
-                    this.drag_start((f32::from(event.position.x), f32::from(event.position.y)));
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                let at = (f32::from(event.position.x), f32::from(event.position.y));
+        let yomu_prev = yomu.clone();
+        let on_turn_prev = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            yomu_prev.update(cx, |this, cx| {
+                this.turn_by(false, 1, Arrive::Start, cx);
+            });
+        };
+
+        let yomu_next = yomu.clone();
+        let on_turn_next = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            yomu_next.update(cx, |this, cx| {
+                this.turn_by(true, 1, Arrive::Start, cx);
+            });
+        };
+
+        let yomu_down = yomu.clone();
+        let on_mouse_down = move |event: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+            yomu_down.update(cx, |this, _| {
+                this.drag_start((f32::from(event.position.x), f32::from(event.position.y)));
+            });
+        };
+
+        let yomu_move = yomu.clone();
+        let on_mouse_move = move |event: &MouseMoveEvent, window: &mut Window, cx: &mut App| {
+            let at = (f32::from(event.position.x), f32::from(event.position.y));
+            let pressed = event.pressed_button == Some(MouseButton::Left);
+            let vp = viewport_of(window);
+            yomu_move.update(cx, |this, cx| {
                 this.cursor_pos = Some(at);
-                let pressed = event.pressed_button == Some(MouseButton::Left);
-                this.drag_move(at, pressed, viewport_of(window), cx);
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    this.drag_end(f32::from(event.position.x), viewport_of(window), cx);
-                }),
-            )
-            .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
-                let delta = event.delta.pixel_delta(px(WHEEL_LINE));
-                let discrete = matches!(event.delta, ScrollDelta::Lines(_));
-                let control = event.modifiers.control || event.modifiers.platform;
-                this.on_wheel(
-                    WheelParams::new(
-                        (f32::from(delta.x), f32::from(delta.y)),
-                        control,
-                        (f32::from(event.position.x), f32::from(event.position.y)),
-                        discrete,
-                        event.touch_phase,
-                        viewport_of(window),
-                    ),
-                    cx,
-                );
-            }))
-            .on_pinch(cx.listener(|this, event: &PinchEvent, window, cx| {
-                let at = (f32::from(event.position.x), f32::from(event.position.y));
-                this.on_pinch(at, event.delta, event.phase, viewport_of(window), cx);
-            }))
-            .children(content)
-            .child(progress_line)
-            .children(info)
-            .children(hud)
-            .children(vim_status)
-            .child(top_bar)
-            .child(left_chevron)
-            .child(right_chevron)
-            .children(reader.show_help.then(|| {
-                ui::overlays::help_overlay(self.colors, self.border_px(), self.radius_xl_px())
-            }))
-            .when_some(reader_scroll_handle.as_ref(), |this, handle| {
-                this.vertical_scrollbar(handle)
-            })
-            .into_any_element()
+                this.drag_move(at, pressed, vp, cx);
+            });
+        };
+
+        let yomu_up = yomu.clone();
+        let on_mouse_up = move |event: &MouseUpEvent, window: &mut Window, cx: &mut App| {
+            let x = f32::from(event.position.x);
+            let vp = viewport_of(window);
+            yomu_up.update(cx, |this, cx| {
+                this.drag_end(x, vp, cx);
+            });
+        };
+
+        let yomu_wheel = yomu.clone();
+        let on_scroll = move |event: &ScrollEvent, window: &mut Window, cx: &mut App| {
+            let delta = event.delta.pixel_delta(px(WHEEL_LINE));
+            let discrete = matches!(event.delta, ScrollDelta::Lines(_));
+            let control = event.modifiers.control || event.modifiers.platform;
+            let params = WheelParams::new(
+                (f32::from(delta.x), f32::from(delta.y)),
+                control,
+                (f32::from(event.position.x), f32::from(event.position.y)),
+                discrete,
+                event.touch_phase,
+                viewport_of(window),
+            );
+            yomu_wheel.update(cx, |this, cx| {
+                this.on_wheel(params, cx);
+            });
+        };
+
+        let yomu_pinch = yomu;
+        let on_pinch = move |event: &PinchEvent, window: &mut Window, cx: &mut App| {
+            let at = (f32::from(event.position.x), f32::from(event.position.y));
+            let delta = event.delta;
+            let phase = event.phase;
+            let vp = viewport_of(window);
+            yomu_pinch.update(cx, |this, cx| {
+                this.on_pinch(at, delta, phase, vp, cx);
+            });
+        };
+
+        ui::reader::render_reader(
+            props,
+            on_back,
+            on_set_fit,
+            on_turn_prev,
+            on_turn_next,
+            on_mouse_down,
+            on_mouse_move,
+            on_mouse_up,
+            on_scroll,
+            on_pinch,
+        )
     }
 
     fn render_command_box(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

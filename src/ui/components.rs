@@ -1,15 +1,10 @@
 //! Reusable UI elements, dialog buttons, and layout helpers.
 
-use std::sync::Arc;
-
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, ObjectFit, Pixels, RenderImage, Rgba, SharedString, Styled,
-    StyledImage, Window, div, img, px,
-};
+use gpui_kit::{AnyElement, App, ClickEvent, Div, Pixels, Rgba, SharedString, Styled, Window, div};
 
 use super::theme::UiColors;
 use crate::library::ThumbnailSize;
@@ -136,23 +131,6 @@ pub fn overlay_shade(colors: UiColors) -> gpui_kit::Hsla {
     } else {
         colors.background
     }
-}
-
-/// One page image at an exact position and size (see `render_reader`).
-pub fn page_layer(
-    image: &Arc<RenderImage>,
-    left: f32,
-    top: f32,
-    display: (f32, f32),
-) -> AnyElement {
-    img(image.clone())
-        .absolute()
-        .left(px(left))
-        .top(px(top))
-        .w(px(display.0))
-        .h(px(display.1))
-        .object_fit(ObjectFit::Fill)
-        .into_any_element()
 }
 
 pub fn centered(text: impl Into<SharedString>, colors: UiColors) -> AnyElement {
