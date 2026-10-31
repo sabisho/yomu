@@ -5,6 +5,7 @@ use super::*;
 use gpui_kit::{Entity, Modifiers, TestAppContext, VisualTestContext, point};
 use image::Frame;
 use std::{
+    collections::HashSet,
     fs,
     io::{Cursor, Write},
 };
@@ -13,8 +14,8 @@ use ui::reader::Page;
 use yomu::archive::SourceKind;
 use yomu::imaging;
 use yomu::layout::Viewport;
-use yomu::library::{DataDirs, Library};
-use yomu::menu::Entry;
+use yomu::library::{Book, DataDirs, Library};
+use yomu::menu::{BookAction, Entry};
 use yomu::motion::{KineticScroll, PageTransition};
 use yomu::pagecache;
 use yomu::vim::{Action, Amount, Dir};

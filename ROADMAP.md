@@ -46,6 +46,16 @@ This document outlines prioritized future work, planned features, and tracked te
   - **Phase 2D.3:** Created `src/app/desktop.rs` extracting XDG desktop entry generation (`desktop_entry_content`), application and hicolor icon installation across resolutions (`HICOLOR_ICON_SIZES`, `LOGO_PNG`, `app_icon`), and desktop environment integration installer (`install_desktop_integration_to`, `install_desktop_integration`).
   - **Phase 2E.1:** Relocated reader visual presentation responsibilities (`render_reader`, `page_layer`, `reader_header`, `reader_progress_bar`, `lateral_turners`, `ReaderScrollHandle`) from `src/main.rs` into `src/ui/reader.rs`, establishing pure presentation props and callbacks while reducing `src/main.rs` to a concise adapter.
   - **Phase 2E.2:** Created `src/app/actions.rs` extracting menu generation (`open_book_menu`, `open_context_menu`, `open_group_context_menu`, `open_library_menu`), menu interaction tracking (`menu_hover`), action dispatch (`run_book_action`, `perform_book_action`, `run_library_menu_action`), confirmation routing (`confirm_accept`), series dialog handling (`open_series_dialog`, `save_series_dialog`), and book/selection removal workflows (`request_remove_books`, `remove_books`, `request_remove_selected`, `remove_selected`, `remove_book`).
+  - **Phase 2E.3:** Created `src/app/views/` decomposing all view presentation adapters out of `src/main.rs`:
+    - `views/shell.rs`: Two-pane shell layout composition (`render_two_pane_shell`), sidebar/toolbar props and callback wiring, content scroll container, and view routing.
+    - `views/library.rs`: Grid/list rows and cards (`render_book_card`, `render_book_list_row`, `render_folder_card`, `render_folder_list_row`), `render_all_manga_view`, and `render_downloads_view`.
+    - `views/continue_reading.rs`: Continue reading hero banner, up next queue, and recently added grid adapter (`render_continue_reading_view`).
+    - `views/collections.rs`: Smart categories and custom collection manager adapter (`render_collections_screen`).
+    - `views/history.rs`: Reading history screen adapter (`render_history_view`).
+    - `views/details.rs`: Dedicated manga metadata inspector adapter (`render_details_screen`).
+    - `views/settings.rs`: Settings modal view adapter and preferences tab callback wiring (`render_settings`).
+    - `views/overlays.rs`: Modal overlays (`render_overlay`, `overlay_style`, `render_menu`, `render_library_menu`, `render_confirm`, `render_properties`, `render_series_dialog`, `render_collection_dialog`) and Vim bottom command box (`render_command_box`).
+    - Reduced `src/main.rs` to application entry, root window frame coordination (`impl Render for Yomu`), texture GC, shutdown barrier, and root action listeners.
   - **Next Subsystems:** Remaining Phase 2E structural cleanup and window lifecycle orchestration.
 
 ---

@@ -84,7 +84,11 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
    - **Phase 2E.2 (Completed):** Extracted `src/app/actions.rs` for menus, dialogs, and action orchestration:
      - Relocated book/group/library context menu generation (`open_book_menu`, `open_context_menu`, `open_group_context_menu`, `open_library_menu`), menu hover selection tracking (`menu_hover`), action routing (`run_book_action`, `perform_book_action`, `run_library_menu_action`), confirmation routing (`confirm_accept`), series dialog handling (`open_series_dialog`, `save_series_dialog`), and removal workflows (`request_remove_books`, `remove_books`, `request_remove_selected`, `remove_selected`, `remove_book`).
      - Preserved all shutdown guards (`is_quitting` checks), confirmation flows, selection semantics, toast feedback, and persistence coordination.
-     - Maintained view adapters (`render_menu`, `render_library_menu`, `render_confirm`, `render_properties`, `render_series_dialog`, `render_collection_dialog`) in `src/main.rs`.
+     - Full test suite passing (241 total active tests: 106 lib, 135 bin).
+   - **Phase 2E.3 (Completed):** Extracted `src/app/views/` for shell and view presentation adapters:
+     - Relocated view adapters into dedicated submodules: `shell.rs` (two-pane shell, sidebar/toolbar adapters), `library.rs` (card/list items, all manga, downloads), `continue_reading.rs` (dashboard hero banner and up next queue), `collections.rs` (smart and custom collection grids), `history.rs` (reading history log), `details.rs` (manga inspector screen), `settings.rs` (settings modal view and tab callback wiring), and `overlays.rs` (modal dialogs, context menus, and bottom command box).
+     - Maintained `render_reader` in `src/main.rs` as the direct top-level reader branch adapter for `Render for Yomu`.
+     - Reduced `src/main.rs` to ~1,250 lines, focused on application startup, root `Render` implementation (frame timing, texture GC, shutdown barrier), and root event listeners.
      - Full test suite passing (241 total active tests: 106 lib, 135 bin).
    - **Phase 2E (Next):** Remaining Phase 2E structural cleanup and window lifecycle orchestration.
 3. **Phase 3: Scalability & Performance:**
