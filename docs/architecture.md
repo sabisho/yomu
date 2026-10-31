@@ -10,7 +10,13 @@ Yomu is structured into three clean architectural tiers:
 
 ```text
 GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
-  ├─ View Router (MainView)
+  ├─ Application Orchestration (`src/app/`, `src/main.rs`)
+  │    ├─ State & Router (`src/app/state.rs`) ── root state, navigation history, lifecycle init
+  │    ├─ Reader Controller (`src/app/reader_controller.rs`) ── page decode tasks, prefetch queue, navigation, gestures
+  │    ├─ Keybindings (`src/app/keybindings.rs`) ── keyboard event routing, Vim tokens, command-line prompt, action execution
+  │    ├─ Persistence (`src/app/persistence.rs`) ── debounced autosave, atomic writes, background flush coordination
+  │    └─ Main (`src/main.rs`) ── entry point, window setup, and event dispatch
+  ├─ Presentation Shell (`src/ui/`)
   │    ├─ Sidebar (src/ui/sidebar.rs) ── persistent 240px navigation
   │    ├─ Toolbar (src/ui/toolbar.rs) ── search, view mode, selection bar
   │    ├─ Library View (src/ui/library_view.rs) ── cards, folders, list rows
@@ -20,10 +26,9 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
   │    ├─ History (src/ui/history_view.rs) ── in-progress & completed manga
   │    ├─ Settings (src/ui/settings_view.rs) ── 6-tab split-pane preferences
   │    ├─ Overlays (src/ui/overlays.rs) ── dialogs, menus, command prompt, help
-  │    └─ Reader (src/ui/reader.rs) ── edge-to-edge canvas with autohiding HUD
+  │    ├─ Reader (src/ui/reader.rs) ── edge-to-edge canvas with autohiding HUD
+  │    └─ Momentum Controller (src/ui/scroll.rs) ── platform momentum adapter
   ├─ Core Library (src/library.rs) ── JSON persistence & XDG data management
-  ├─ Reader Controller ── page decode tasks, prefetch queue, and GPU texture lifecycle
-  ├─ Momentum Controller (src/scroll.rs -> planned src/ui/scroll.rs) ── platform momentum adapter
   └─ Background Executors ── multithreaded decode, resize, and import pipeline
 ```
 
@@ -48,11 +53,11 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `menu.rs` | Context menu item generation, validation, and confirmation requirements | Decides available book and library actions; UI renders and dispatches them. |
 | `util.rs` | Natural sorting, FNV-1a path hashing, date/size formatting | Reusable pure helpers. |
 
-### UI & Presentation Modules (`src/ui/` & `src/scroll.rs`)
+### UI & Presentation Modules (`src/ui/`)
 
 | Module | Responsibility | Design & Integration |
 |---|---|---|
-| `scroll.rs` | Cross-platform momentum scrolling coordinator (`PlatformScrollController`) | Connects pure `motion::KineticScroll` to GPUI `ScrollHandle`. Preserves native AppKit momentum on macOS; provides kinetic glide on Linux and Windows. Planned relocation to `src/ui/scroll.rs`. |
+| `scroll.rs` | Cross-platform momentum scrolling coordinator (`PlatformScrollController`) | Connects pure `motion::KineticScroll` to GPUI `ScrollHandle`. Preserves native AppKit momentum on macOS; provides kinetic glide on Linux and Windows. Located in `src/ui/scroll.rs`. |
 | `sidebar.rs` | Persistent 240px navigation sidebar | Native macOS traffic lights on macOS; clean sections on Linux/Windows. Navigates between primary sections with badge counts. |
 | `toolbar.rs` | Unified 52px header toolbar | Symmetrical back button, centered search with `⌘K`/`Ctrl+K` shortcut, view mode toggle, import action, and in-place selection toolbar. |
 | `library_view.rs` | Book cards, folder cards, and list rows | Responsive card sizing from `ThumbnailSize`. Selection highlights, hover states, and drag/click handling. |
@@ -65,6 +70,16 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `reader.rs` | Reader viewport state and continuous strip | Edge-to-edge canvas; autohiding header with fit and reading direction controls; floating progress pill; lateral chevrons. |
 | `components.rs` | Shared atomic visual primitives | Window controls, responsive grid math, status badges, and genre tags. |
 | `theme.rs` | Theme management and TOML loader | Bridges GPUI Kit themes and custom `themes.toml` files with automatic SHA-256 fingerprint reloading. |
+
+### Application Orchestration (`src/app/` & `src/main.rs`)
+
+| Module | Responsibility | Invariants & Boundaries |
+|---|---|---|
+| `state.rs` | Root application state (`struct Yomu`), navigation history, and lifecycle initialization | Holds `pub(crate)` fields for `Yomu` across binary crate modules; implements `new`, `with_dirs`, navigation router (`navigate_to`, `navigate_to_dest`, `apply_destination`, `navigate_back`, `navigate_forward`), search activation, and theme file watcher. |
+| `reader_controller.rs` | Reader lifecycle, background decoding queue, prefetch planning, zoom/fit/continuous modes, and gestures | Decoupled from GPUI presentation views; coordinates async archive decoding and prefetch scheduling off UI thread; strictly preserves Phase 1 task identity and cancellation invariants. |
+| `keybindings.rs` | Keyboard event routing, Vim token translation, overlay shortcuts, command-line prompt, and action execution | Implements `on_key`, `apply`, `on_library_key`, `on_overlay_key`, and Vim command prompt helpers on `Yomu`; respects Vim-mode settings, overlay priority, and platform modifier standards. |
+| `persistence.rs` | Application persistence, debounced autosave, atomic filesystem synchronization, and graceful shutdown flush | Manages `save_library` (immediate non-blocking background dispatch), `save_library_debounced` (500ms trailing timer for page turns/scrolling), `flush_save_background`, `request_quit` (async wait on in-flight saves before exiting), non-blocking zero-I/O `Drop for Yomu`, full-window native GPUI pointer occlusion barrier, and error recovery confirmation dialog with `ForceQuit`; enforces monotonic `save_seq` ordering via `Arc<AtomicU64>`, background-only `write_lock: Arc<Mutex<()>>`, and 4-tier shutdown mutation isolation; guarantees zero synchronous filesystem I/O or mutex contention on the UI thread during rendering, scrolling, or user interaction. |
+| `main.rs` | Executable entry point, window initialization, GPUI lifecycle, event dispatch, and reader render | Focused on top-level runtime startup, desktop integration installer, action dispatch, and `Render` trait implementation. |
 
 ---
 

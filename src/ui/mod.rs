@@ -8,6 +8,7 @@ pub mod history_view;
 pub mod library_view;
 pub mod overlays;
 pub mod reader;
+pub mod scroll;
 pub mod settings_view;
 pub mod sidebar;
 pub mod theme;

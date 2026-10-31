@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **202 active tests** passing (100 core library unit tests in `src/lib.rs`, 102 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 205 total).
+- **Test Baseline:** **236 active tests** passing (106 core library unit tests in `src/lib.rs`, 130 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 239 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
@@ -62,9 +62,20 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
    - Resolved prefetch cancellation defect in `request_page` and `page_decoded`.
    - Cached `/proc/meminfo` memory budget via `OnceLock`.
    - Bounded initial allocation capacity in `archive::read_zip_page` to 8 MiB while supporting pages up to 256 MiB.
-2. **Phase 2: Architectural Modularization (Next):**
-   - Relocate `scroll.rs` to `src/ui/scroll.rs`.
-   - Extract `src/app/` subsystems from `src/main.rs`.
+2. **Phase 2: Architectural Modularization:**
+   - **Phase 2A (Completed):** Relocated `src/scroll.rs` to `src/ui/scroll.rs`, fully decoupling `src/lib.rs` from GPUI.
+   - **Phase 2B (Completed):** Established `src/app/` module; extracted `app/state.rs` with `Yomu` root state, navigation router, and lifecycle initialization.
+   - **Phase 2C (Completed):** Extracted `app/reader_controller.rs` handling reader lifecycle, async decode queue, prefetch cancellation safety, zoom/fit/reading modes, and gesture navigation.
+   - **Phase 2D.1 (Completed):** Extracted `app/keybindings.rs` handling keyboard shortcut event dispatch (`on_key`), Vim actions (`apply`), overlay keys (`on_overlay_key`), library keys (`on_library_key`), and command-line prompt editing / live theme preview sync.
+   - **Phase 2D.2 (Completed & Remediated):** Extracted `app/persistence.rs` and resolved UI persistence concurrency:
+     - Replaced all ~38 synchronous `save_library()` calls across UI handlers with non-blocking asynchronous dispatch (`save_library(cx)` for discrete actions, `save_library_debounced(cx)` for page turns and scroll progress).
+     - Replaced blocking mutex checks on the UI thread with lock-free `last_saved_seq: Arc<AtomicU64>` and serialized background writes via `write_lock: Arc<Mutex<()>>`.
+     - Implemented graceful async shutdown (`request_quit(cx)`), window close interception (`on_window_should_close` and CSD titlebar), non-blocking zero-I/O `Drop for Yomu`, full-window native GPUI pointer occlusion barrier (`HitboxBehavior::BlockMouse`), and error recovery dialog with `ForceQuit`.
+     - Enforced 4-tier shutdown isolation: presentation occluding barrier, root action guards, domain mutation boundaries, and `save_library` safety gates.
+     - Implemented cooperative import cancellation with `Arc<AtomicBool>` token checkpointed across directory traversal, candidate enumeration, archive reads, cover generation, and book reporting.
+     - Protected asynchronous import completion loops and file-picker error callbacks against mutating application state or presenting UI toasts during shutdown.
+     - Added 23 deterministic concurrency, monotonicity, shutdown, input barrier, import cancellation, token identity, and ForceQuit regression tests in `src/app/persistence.rs` (236 total active tests passing: 106 lib, 130 bin).
+   - **Phase 2D.3 (Next):** Extract desktop integration (`app/desktop.rs`).
 3. **Phase 3: Scalability & Performance:**
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.

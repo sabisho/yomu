@@ -29,20 +29,21 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ## 🏗️ Phase 2: Architectural Modularization
 
-### 4. Core Domain GUI-Independence
+### 4. Core Domain GUI-Independence (Phase 2A — Completed)
 - **Goal:** Ensure `src/lib.rs` is strictly decoupled from GPUI.
-- **Remediation:**
-  - Move `src/scroll.rs` (`PlatformScrollController`) into `src/ui/scroll.rs`.
-  - Retain pure mathematical kinetic decay in `src/motion.rs`.
+- **Status:** Completed.
+  - Relocated `src/scroll.rs` (`PlatformScrollController`) into `src/ui/scroll.rs`.
+  - Removed `pub mod scroll;` from `src/lib.rs`. The core domain library is now 100% GUI-independent with zero GPUI dependencies.
+  - Retained pure mathematical kinetic decay in `src/motion.rs`.
 
-### 5. Decomposition of `src/main.rs`
-- **Goal:** Reduce `src/main.rs` (5,426 lines) to a clean binary entry point (< 100 lines).
-- **Proposed Module Structure:**
-  - `src/app/state.rs`: `Yomu` entity definition, navigation history, and view router.
-  - `src/app/reader_controller.rs`: Async decode queue, prefetch coordination, texture drop lifecycle.
-  - `src/app/keybindings.rs`: Keyboard event routing, shortcuts, and Vim action dispatch.
-  - `src/app/desktop.rs`: Client-side decorations, app icon, and desktop entry installation.
-  - `src/app/persistence.rs`: Debounced background atomic autosave scheduler.
+### 5. Decomposition of `src/main.rs` (Phases 2B, 2C, 2D.1 & 2D.2 — Completed)
+- **Goal:** Establish `src/app/` and decompose monolithic orchestration logic out of `src/main.rs`.
+- **Status:** In Progress (Phases 2B, 2C, 2D.1, and 2D.2 Completed).
+  - **Phase 2B:** Created `src/app/state.rs` extracting `struct Yomu`, `NavDestination`, `ReaderScrollHandle`, `Side`, `ImportEvent`, timing constants, lifecycle initialization, settings helpers, and navigation routing.
+  - **Phase 2C:** Created `src/app/reader_controller.rs` extracting reader lifecycle (`open_book`, `close_book`, `pages_listed`), page navigation (`goto_page`, `jump_to`, `turn_by`, `step`), zoom/fit/continuous/webcomics modes, reader gesture handlers (`on_wheel`, `on_pinch`, `drag_start`, `drag_move`, `drag_end`), background decode task queue, cancellation token management, and cache eviction synchronization (`sync_reader`, `request_page`, `page_decoded`).
+  - **Phase 2D.1:** Created `src/app/keybindings.rs` extracting keyboard shortcut dispatch (`on_key`), action execution (`apply`), library shortcuts (`on_library_key`), modal overlay shortcuts (`on_overlay_key`), and Vim command-line editing/theme preview synchronization (`in_cmdline`, `cmdline_text`, `replace_cmdline`, `cancel_cmdline`, `sync_theme_preview`, `restore_theme_preview`).
+  - **Phase 2D.2:** Created `src/app/persistence.rs` extracting application-level persistence coordination (`save_library`, `save_library_debounced`, `flush_save_background`, `request_quit`, non-blocking zero-I/O `impl Drop for Yomu`), non-blocking asynchronous dispatch across all UI handlers, graceful shutdown flush via `request_quit` and `on_window_should_close`, error recovery dialog with `ForceQuit`, and monotonic sequencing via `save_seq`, lock-free `last_saved_seq: Arc<AtomicU64>`, and background `write_lock: Arc<Mutex<()>>`.
+  - **Next Subsystems:** `desktop.rs` (desktop integration installer, desktop entry generation, icon installation).
 
 ---
 

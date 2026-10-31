@@ -38,6 +38,7 @@ pub enum ConfirmAction {
     ClearThumbnailCache,
     ClearAllData,
     DeleteCollection(String),
+    ForceQuit,
 }
 
 pub struct ConfirmDialog {
@@ -271,7 +272,10 @@ pub fn render_confirm_dialog(
                     .child(panel_button(
                         "confirm-accept",
                         dialog.confirm_label,
-                        if matches!(dialog.action, ConfirmAction::ClearAllData) {
+                        if matches!(
+                            dialog.action,
+                            ConfirmAction::ClearAllData | ConfirmAction::ForceQuit
+                        ) {
                             ButtonKind::Danger
                         } else {
                             ButtonKind::Primary

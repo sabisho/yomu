@@ -3,12 +3,21 @@
 
 use super::*;
 use gpui_kit::{Entity, Modifiers, TestAppContext, VisualTestContext, point};
+use image::Frame;
 use std::{
     fs,
     io::{Cursor, Write},
 };
+use ui::overlays::command_suggestions;
+use ui::reader::Page;
 use yomu::archive::SourceKind;
+use yomu::imaging;
+use yomu::layout::Viewport;
+use yomu::library::{DataDirs, Library};
+use yomu::menu::Entry;
 use yomu::motion::{KineticScroll, PageTransition};
+use yomu::pagecache;
+use yomu::vim::{Action, Amount, Dir};
 
 fn png_bytes() -> Vec<u8> {
     let image = image::RgbaImage::from_pixel(60, 90, image::Rgba([90, 40, 160, 255]));
@@ -611,7 +620,7 @@ fn reset_to_defaults_confirms_and_restores_everything(cx: &mut TestAppContext) {
     view.update(cx, |this, _| {
         let settings = this.library.settings_mut();
         settings.fit = FitMode::Width;
-        this.save_library();
+        this.save_library_sync();
     });
     view.update(cx, |this, cx| this.request_reset_settings(cx));
     cx.run_until_parked();
@@ -664,7 +673,7 @@ fn settings_survive_a_restart(cx: &mut TestAppContext) {
         let id = fx.ids[2].clone();
         view.update(cx, |this, _| {
             this.library.settings_mut().fit = FitMode::Width;
-            this.save_library();
+            this.save_library_sync();
         });
         set_progress(&view, cx, &id, 2);
         act(&view, cx, &id, BookAction::MarkRead);
@@ -687,6 +696,7 @@ fn border_and_rounding_settings_survive_a_restart_and_reset(cx: &mut TestAppCont
             this.set_border_size(BorderSize::Thick, cx);
             this.set_corner_rounding(CornerRounding::Rounded, cx);
         });
+        cx.run_until_parked();
         assert_eq!(
             view.read_with(cx, |this, _| this.library.settings().border_size),
             BorderSize::Thick
@@ -759,7 +769,7 @@ fn view_mode_grid_and_list_toggle_and_persistence(cx: &mut TestAppContext) {
         view.update(cx, |this, _| {
             this.view_mode_grid = false;
             this.library.settings_mut().view_mode_grid = false;
-            this.save_library();
+            this.save_library_sync();
         });
         assert!(!view.read_with(cx, |this, _| this.view_mode_grid));
     }
@@ -774,7 +784,7 @@ fn view_mode_grid_and_list_toggle_and_persistence(cx: &mut TestAppContext) {
         view.update(cx, |this, _| {
             this.view_mode_grid = true;
             this.library.settings_mut().view_mode_grid = true;
-            this.save_library();
+            this.save_library_sync();
         });
         assert!(view.read_with(cx, |this, _| this.view_mode_grid));
     }
@@ -1678,6 +1688,9 @@ fn settle_animations(view: &Entity<Yomu>, cx: &mut VisualTestContext) {
     for _ in 0..600 {
         cx.run_until_parked();
         if view.read_with(cx, |this, _| this.last_frame.is_none()) {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(500));
+            cx.run_until_parked();
             return;
         }
         view.update(cx, |_, cx| cx.notify());
@@ -1730,6 +1743,9 @@ fn left_to_right_navigation_in_both_directions_at_the_start_middle_and_end(
 
     // every step was saved
     cx.simulate_keystrokes("right right");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(500));
+    cx.run_until_parked();
     assert_eq!(saved(&fx, &fx.ids[0]).unwrap().current_page, 2);
 }
 
@@ -1970,12 +1986,14 @@ fn reduced_motion_and_the_animate_command_turn_animation_off(cx: &mut TestAppCon
         this.goto_page(2, Arrive::Start, cx);
         assert!(this.reader.as_ref().unwrap().transition.is_none());
     });
+    cx.run_until_parked();
     assert!(!saved_settings(&fx).animate);
 
     // the toggle form flips it back
     view.update_in(cx, |this, window, cx| {
         this.apply(Action::SetAnimations(None), viewport_of(window), window, cx);
     });
+    cx.run_until_parked();
     assert!(saved_settings(&fx).animate);
     view.update(cx, |this, cx| {
         this.goto_page(3, Arrive::Start, cx);
@@ -2662,9 +2680,10 @@ fn continuous_reading_debounced_autosave_persists_on_flush(cx: &mut TestAppConte
         this.save_library_debounced(cx);
     });
 
-    view.update(cx, |this, _| {
-        this.save_library();
+    view.update(cx, |this, cx| {
+        this.save_library(cx);
     });
+    cx.run_until_parked();
 
     assert_eq!(saved(&fx, &id).unwrap().current_page, 3);
 }
@@ -3387,6 +3406,7 @@ fn test_disable_animations_setting_and_reduced_motion_override(cx: &mut TestAppC
         assert!(this.library.settings().disable_animations);
         assert!(!this.animations_enabled());
     });
+    cx.run_until_parked();
 
     // Verify it persists on disk
     let on_disk = Library::load(&fx.dirs).unwrap();

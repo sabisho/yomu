@@ -46,7 +46,7 @@ use std::time::Instant;
 
 use gpui_kit::{ScrollDelta, ScrollEvent, ScrollHandle, TouchPhase, point, px};
 
-use crate::motion::{self, KineticScroll};
+use yomu::motion::{self, KineticScroll};
 
 /// Assumed baseline frame interval (16ms ~ 60Hz) when no prior frame timestamp exists.
 pub const DEFAULT_FRAME_DT: f32 = 0.016;
@@ -101,12 +101,14 @@ impl PlatformScrollController {
 
     /// True if an inertial glide simulation is actively animating.
     #[inline]
+    #[allow(dead_code)]
     pub fn is_animating(&self) -> bool {
         self.is_animating
     }
 
     /// True if gesture velocity tracking is actively awaiting finger release/stillness timeout.
     #[inline]
+    #[allow(dead_code)]
     pub fn is_awaiting_release(&self) -> bool {
         self.kinetic.is_awaiting_release()
     }

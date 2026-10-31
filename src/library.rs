@@ -4,6 +4,10 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context, Result, bail};
@@ -748,13 +752,13 @@ impl Library {
         dirs.clear_covers()
     }
 
-    /// Clear all app data: books, reading history, marks, reset settings, and delete covers.
-    pub fn clear_all_data(&mut self, dirs: &DataDirs) -> Result<()> {
+    /// Clear all in-memory library data: books, reading history, marks, collections, favorites,
+    /// and reset settings to default.
+    pub fn clear_all_data(&mut self) {
         self.books.clear();
+        self.collections.clear();
+        self.favorites.clear();
         self.settings = Settings::default();
-        let _ = dirs.clear_covers();
-        self.save(dirs)?;
-        Ok(())
     }
 
     /// Rebuild/ensure cover thumbnails exist for the requested size. Returns count of newly generated covers.
@@ -848,6 +852,11 @@ enum Candidate {
     Folder(PathBuf),
 }
 
+#[inline]
+fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|c| c.load(Ordering::Relaxed))
+}
+
 /// Import files and folders. Folders are scanned recursively: every `.cbz`/`.zip` becomes a book,
 /// and every folder that directly contains images becomes a book too.
 ///
@@ -857,7 +866,7 @@ pub fn import_paths(
     dirs: &DataDirs,
     existing: &HashSet<String>,
 ) -> ImportReport {
-    import_paths_with_progress(paths, dirs, existing, |_| {})
+    import_paths_with_progress_cancellable(paths, dirs, existing, None, |_| {})
 }
 
 /// Import volumes in scan order and report each completed book immediately. The callback runs
@@ -867,20 +876,48 @@ pub fn import_paths_with_progress<F>(
     paths: &[PathBuf],
     dirs: &DataDirs,
     existing: &HashSet<String>,
+    on_book: F,
+) -> ImportReport
+where
+    F: FnMut(&Book),
+{
+    import_paths_with_progress_cancellable(paths, dirs, existing, None, on_book)
+}
+
+/// Import volumes in scan order with cooperative cancellation support. Reports each completed
+/// book immediately. If `cancel` is set during scanning, archive extraction, or thumbnail
+/// generation, the worker stops early without starting expensive new work and returns a partial
+/// report of books completed prior to cancellation.
+pub fn import_paths_with_progress_cancellable<F>(
+    paths: &[PathBuf],
+    dirs: &DataDirs,
+    existing: &HashSet<String>,
+    cancel: Option<&Arc<AtomicBool>>,
     mut on_book: F,
 ) -> ImportReport
 where
     F: FnMut(&Book),
 {
+    let cancel = cancel.map(Arc::as_ref);
     let mut report = ImportReport::default();
     let mut candidates = Vec::new();
 
     for path in paths {
-        collect(path, 0, true, &mut candidates, &mut report.errors);
+        if is_cancelled(cancel) {
+            return report;
+        }
+        collect(path, 0, true, &mut candidates, &mut report.errors, cancel);
+    }
+
+    if is_cancelled(cancel) {
+        return report;
     }
 
     let mut seen = existing.clone();
     for candidate in candidates {
+        if is_cancelled(cancel) {
+            return report;
+        }
         let (path, kind) = match &candidate {
             Candidate::Archive(p) => (p.as_path(), SourceKind::Archive),
             Candidate::Folder(p) => (p.as_path(), SourceKind::Folder),
@@ -890,14 +927,22 @@ where
             report.skipped += 1;
             continue;
         }
-        match build_book(path, kind, dirs) {
+        match build_book(path, kind, dirs, cancel) {
             Ok(book) => {
+                if is_cancelled(cancel) {
+                    return report;
+                }
                 on_book(&book);
                 report.added.push(book);
             }
-            Err(err) => report
-                .errors
-                .push(format!("{}: {err:#}", display_name(path))),
+            Err(err) => {
+                if is_cancelled(cancel) {
+                    return report;
+                }
+                report
+                    .errors
+                    .push(format!("{}: {err:#}", display_name(path)));
+            }
         }
     }
     report
@@ -909,14 +954,25 @@ fn collect(
     explicit: bool,
     out: &mut Vec<Candidate>,
     errors: &mut Vec<String>,
+    cancel: Option<&AtomicBool>,
 ) {
+    if is_cancelled(cancel) {
+        return;
+    }
     let path = match path.canonicalize() {
         Ok(p) => p,
         Err(err) => {
+            if is_cancelled(cancel) {
+                return;
+            }
             errors.push(format!("{}: {err}", display_name(path)));
             return;
         }
     };
+
+    if is_cancelled(cancel) {
+        return;
+    }
 
     if path.is_file() {
         let name = display_name(&path);
@@ -928,30 +984,53 @@ fn collect(
             ));
         }
     } else if path.is_dir() {
+        if is_cancelled(cancel) {
+            return;
+        }
         if archive::folder_has_images(&path) {
             out.push(Candidate::Folder(path));
         } else if depth < MAX_SCAN_DEPTH {
             let mut children: Vec<PathBuf> = match fs::read_dir(&path) {
                 Ok(entries) => entries.flatten().map(|e| e.path()).collect(),
                 Err(err) => {
+                    if is_cancelled(cancel) {
+                        return;
+                    }
                     errors.push(format!("{}: {err}", display_name(&path)));
                     return;
                 }
             };
+            if is_cancelled(cancel) {
+                return;
+            }
             children.sort_by(|a, b| natural_cmp(&display_name(a), &display_name(b)));
             for child in children {
+                if is_cancelled(cancel) {
+                    return;
+                }
                 if display_name(&child).starts_with('.') {
                     continue;
                 }
-                collect(&child, depth + 1, false, out, errors);
+                collect(&child, depth + 1, false, out, errors, cancel);
             }
         }
     }
 }
 
-fn build_book(path: &Path, kind: SourceKind, dirs: &DataDirs) -> Result<Book> {
+fn build_book(
+    path: &Path,
+    kind: SourceKind,
+    dirs: &DataDirs,
+    cancel: Option<&AtomicBool>,
+) -> Result<Book> {
+    if is_cancelled(cancel) {
+        bail!("import cancelled");
+    }
     let id = book_id(path);
     let pages = archive::list_pages(path, kind)?;
+    if is_cancelled(cancel) {
+        bail!("import cancelled");
+    }
     if pages.is_empty() {
         bail!("no images found");
     }
@@ -959,12 +1038,21 @@ fn build_book(path: &Path, kind: SourceKind, dirs: &DataDirs) -> Result<Book> {
     // The first page is usually the cover, but fall back to the next few if it will not decode.
     let mut cover_written = false;
     for name in pages.iter().take(3) {
+        if is_cancelled(cancel) {
+            bail!("import cancelled");
+        }
         let Ok(bytes) = archive::read_page(path, kind, name) else {
             continue;
         };
+        if is_cancelled(cancel) {
+            bail!("import cancelled");
+        }
         if let Ok(jpeg) =
             imaging::make_cover_jpeg(&bytes, imaging::COVER_MAX_W, imaging::COVER_MAX_H)
         {
+            if is_cancelled(cancel) {
+                bail!("import cancelled");
+            }
             let _ = fs::write(dirs.root.join("covers").join(format!("{id}.jpg")), &jpeg);
             let _ = fs::create_dir_all(dirs.cover_dir_for_size(ThumbnailSize::Medium));
             let _ = fs::write(
@@ -975,6 +1063,9 @@ fn build_book(path: &Path, kind: SourceKind, dirs: &DataDirs) -> Result<Book> {
             cover_written = true;
             break;
         }
+    }
+    if is_cancelled(cancel) {
+        bail!("import cancelled");
     }
     if !cover_written {
         bail!("could not decode a cover image");
@@ -1376,5 +1467,94 @@ mod tests {
         let loaded = Library::load(&dirs).unwrap();
         assert!(!loaded.settings().remember_zoom);
         assert_eq!(loaded.settings().zoom, 1.75);
+    }
+
+    #[test]
+    fn import_cancellable_stops_early_when_token_set_initially() {
+        let tmp = temp_dir("cancel-init");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let cbz1 = tmp.join("vol1.cbz");
+        let cbz2 = tmp.join("vol2.cbz");
+        write_cbz(&cbz1, &["1.png"]);
+        write_cbz(&cbz2, &["1.png"]);
+
+        let cancel = Arc::new(AtomicBool::new(true));
+        let mut reported = Vec::new();
+        let report = import_paths_with_progress_cancellable(
+            &[cbz1, cbz2],
+            &dirs,
+            &HashSet::new(),
+            Some(&cancel),
+            |b| reported.push(b.id.clone()),
+        );
+
+        assert!(report.added.is_empty(), "no books should be added");
+        assert!(report.errors.is_empty(), "cancellation is not an error");
+        assert_eq!(report.skipped, 0);
+        assert!(reported.is_empty());
+    }
+
+    #[test]
+    fn import_cancellable_returns_partial_results_on_midway_cancellation() {
+        let tmp = temp_dir("cancel-midway");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let cbz1 = tmp.join("a_vol1.cbz");
+        let cbz2 = tmp.join("b_vol2.cbz");
+        let cbz3 = tmp.join("c_vol3.cbz");
+        write_cbz(&cbz1, &["1.png"]);
+        write_cbz(&cbz2, &["1.png"]);
+        write_cbz(&cbz3, &["1.png"]);
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_hook = Arc::clone(&cancel);
+        let mut reported = Vec::new();
+
+        let report = import_paths_with_progress_cancellable(
+            &[cbz1, cbz2, cbz3],
+            &dirs,
+            &HashSet::new(),
+            Some(&cancel),
+            |book| {
+                reported.push(book.id.clone());
+                // Cancel immediately after the first book is reported
+                cancel_hook.store(true, Ordering::Relaxed);
+            },
+        );
+
+        assert_eq!(report.added.len(), 1, "only first book should be added");
+        assert_eq!(reported.len(), 1);
+        assert_eq!(report.added[0].title, "a vol1");
+        assert!(
+            dirs.cover(&report.added[0].id).exists(),
+            "first book cover must exist"
+        );
+        assert!(
+            report.errors.is_empty(),
+            "cancellation must not add errors: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn import_cancellable_stops_during_recursive_folder_scan() {
+        let tmp = temp_dir("cancel-scan");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let root = tmp.join("manga");
+        fs::create_dir_all(root.join("Sub1")).unwrap();
+        fs::create_dir_all(root.join("Sub2")).unwrap();
+        write_cbz(&root.join("Sub1").join("v1.cbz"), &["1.png"]);
+        write_cbz(&root.join("Sub2").join("v2.cbz"), &["1.png"]);
+
+        let cancel = Arc::new(AtomicBool::new(true));
+        let report = import_paths_with_progress_cancellable(
+            &[root],
+            &dirs,
+            &HashSet::new(),
+            Some(&cancel),
+            |_| {},
+        );
+
+        assert!(report.added.is_empty());
+        assert!(report.errors.is_empty());
     }
 }
