@@ -11,70 +11,44 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **202 tests passing** (100 core library unit tests in `src/lib.rs`, 102 binary UI integration tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 205 total).
+- **Test Baseline:** **202 active tests** passing (100 core library unit tests in `src/lib.rs`, 102 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 205 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
 
-## 2. Recently Completed Work (Phases 0–5)
+## 2. Completed Audit & Standards Validation (Phase 6)
 
-### Phase 5: GPUI Kit 0.8.1 Component Audit and Modernization
-- **Comprehensive Component Audit:** Systematically audited all UI modules (`toolbar`, `sidebar`, `settings_view`, `details`, `continue_reading`, `collections_view`, `library_view`, `overlays`, `components`).
-- **Icon Buttons Modernization:** Replaced manual `div()` icon buttons with official `gpui_kit::component::button::Button` using `.ghost().with_size(...)` across:
-  - Sidebar settings button (`sidebar-settings-btn`)
-  - Settings close button (`settings-close-btn`)
-  - Manga details more-options button (`details-more-menu-btn`)
-  - Continue Reading hero more-options button (`hero-more-btn`)
-  - Collections menu action button (`col-menu-<id>`)
-  - Toolbar sidebar toggle button (`toolbar-sidebar-toggle`)
-  - Toolbar group back navigation button (`group-back`)
-  - Toolbar client-side decoration close button (`toolbar-csd-close`)
-- **Segmented Controls Modernization:** Converted manual div switches for grouping (`toolbar-grouping-segmented`) and view mode (`toolbar-viewmode-segmented`) to official `ButtonGroup::new(...)` with `Button::new(...).ghost().selected(...)`. Re-exported `Selectable` trait in `vendor/gpui-component/src/lib.rs`.
-- **Keyboard Shortcut Badges:** Replaced manual text shortcut badge in the main search input with official `gpui_kit::component::kbd::Kbd`.
-- **Preserved Custom Routing & HIG Layout:** Preserved custom modal/overlay routing in `overlays.rs` and reader canvas architecture, maintaining complete test coverage without introducing unnecessary abstractions.
-- **Verification:** All 202 tests pass (100 core domain tests, 102 binary integration tests). Zero warnings under strict Clippy and rustc. Clean formatting under `cargo fmt`.
+### Architecture & Performance Audit Validation
+A comprehensive audit of the entire codebase was conducted and validated against the actual codebase and GPUI Kit 0.8.1 dependency tree:
 
-### Phase 4: GPUI Kit 0.8.1 Upgrade, Native Scrollbars & Platform Scroll Bounce
-- **GPUI Kit & Upstream Upgrade:** Upgraded `gpui-kit` to `=0.8.1` and upstream runtime to `gpui-pre = 0.3.10`.
-- **API Migration:** Migrated deprecated `ScrollWheelEvent` -> `ScrollEvent` and `.on_scroll_wheel()` -> `.on_scroll()`.
-- **Auto-Hiding Native Scrollbars:** Configured `Theme::set_scrollbar_mode(ScrollbarMode::Scrolling, cx)` on application initialization. Scrollbars remain invisible while idle, appear dynamically when scrolling begins, and automatically fade out when scrolling ceases.
-- **Dynamic Theme-Aware Scrollbar Styling:** Added `"scrollbar.thumb.background"` and `"scrollbar.thumb.hover.background"` theme tokens to all 6 built-in themes (Catppuccin Mocha, Macchiato, Frappé, Latte, Gruvbox Dark, Gruvbox Light) with transparent track background and contrasting hover thumb states.
-- **Scrollable Area Implementation:** Replaced raw `overflow_y_scroll()` with official `ScrollableElement` (`overflow_y_scrollbar()`) across All Manga grid, sidebar navigation, continue reading, collections, history, manga details, settings view, and command suggestions overlay.
-- **Continuous Reader Scrollbar:** Implemented custom `ScrollbarHandle` (`ReaderScrollHandle`) for continuous vertical and webcomics reader modes with bidirectional scroll offset synchronization.
-- **Native Boundary Scroll Bounce:** Enabled `.scroll_bounce(true)` across all vertical scrollable containers, combined with `.scroll_wheel(false)` to preserve Linux/Windows kinetic momentum while providing native spring-back physics.
-- **Test Coverage:** Added `test_continuous_reader_scrollbar_sync_and_mode` verifying continuous reader scrollbar reflection and handle offset synchronization. All 205 tests pass cleanly.
-
-### Phase 0: Baseline & Test Discrepancy Resolution
-- Resolved the 98 vs 99 UI test discrepancy: confirmed 102 total binary runner tests (98 in `tests.rs` + 3 in `ui/theme.rs` + 1 in `ui/reader.rs` = 99 active + 3 ignored benchmarks).
-- Verified equivalence between duplicate library rendering in `src/main.rs` and `src/ui/library_view.rs`.
-
-### Phase 1: Consolidate Library Rendering
-- Fully wired `src/ui/library_view.rs` for rendering book cards, folder cards, and list rows.
-- Eliminated 620 lines of redundant duplicate rendering logic from `src/main.rs`.
-
-### Phase 2: Lifecycle, Startup & Vendor Cleanup
-- **Search Input Lifecycle:** Moved `search_input` initialization and event subscription from `render()` into `Yomu::with_dirs`. Prevents duplicate subscriptions and eliminates entity recreation in render loops.
-- **Desktop Integration:** Removed automatic filesystem writes and `update-icon-cache` spawns on application launch. Created safe, non-destructive `install_desktop_integration_to` exposed via `--install-desktop` / `--install-icons` CLI flags with `--force` protection.
-- **Vendor Cleanup:** Removed dead vendored crates `vendor/xattr` and `vendor/stacksafe-macro` (-1,600 lines) after confirming Cargo dependency resolution and pure-Rust decoders.
-- **Documentation Correction:** Corrected misleading claims regarding pure-Rust decoders vs `unrar` C++ library bindings.
-- Added regression tests `test_search_input_lifecycle` and `test_desktop_integration_install` (increasing binary tests to 101).
-
-### Phase 3: Architectural Modularization of `main.rs`
-- **Overlays Extraction (`src/ui/overlays.rs`):** Extracted confirm dialogs, properties dialog, series dialog, collection dialog, context menus, floating command prompt (`render_command_box`, `command_suggestions`), and reader help modal (`help_overlay`, `HELP`). Introduced `OverlayStyle` to bundle visual parameters cleanly.
-- **History View Extraction (`src/ui/history_view.rs`):** Extracted reading history screen into a dedicated view module, matching the pattern of other sidebar screens.
-- **Dead Code Removal:** Excised unused `icon_button` and redundant imports.
-- **Net Result:** Reduced `src/main.rs` from 6,809 lines to 5,360 lines (-1,449 lines / -21.3%) without altering rendering behavior or performance.
+1. **Critical Defect: Prefetch Cancellation Bug**
+   - *Status:* Validated. `page_decoded` treats worker task aborts (`"page decode cancelled"`) as permanent decode failures in `reader.failed`, permanently bricking pages when users scrub rapidly and return.
+   - *Remediation Planned:* Differentiate cancellations from decoding errors and ensure cancelled tasks are never added to `reader.failed`.
+2. **Critical Defect: UI-Thread Synchronous I/O**
+   - *Status:* Validated. `pagecache::system_memory_budget()` executes `std::fs::read_to_string("/proc/meminfo")` on every animation frame via `sync_reader`.
+   - *Remediation Planned:* Cache the budget once at startup via `std::sync::OnceLock<u64>` (adhering to the adaptive 512 MiB to 3.0 GiB policy with 1.0 GiB fallback).
+3. **Architectural Boundary Leak:**
+   - *Status:* Validated. `src/lib.rs` exports `pub mod scroll;`, which imports `gpui_kit`, violating GUI-independent domain separation.
+   - *Remediation Planned:* Relocate `scroll.rs` to `src/ui/scroll.rs`.
+4. **Main Module Congestion:**
+   - *Status:* Validated. `src/main.rs` stands at 5,426 lines and coordinates windowing, gesture recognition, Vim token dispatch, and rendering wrappers.
+   - *Remediation Planned:* Decompose into `src/app/` (`state.rs`, `reader_controller.rs`, `keybindings.rs`, `desktop.rs`, `persistence.rs`).
+5. **Collection Scalability:**
+   - *Status:* Validated. `Library::get()` is an $O(N)$ linear scan, leading to $O(N^2)$ comparisons during card grid rendering.
+   - *Remediation Planned:* Use a secondary index `HashMap<String, usize>` without introducing unnecessary external dependencies.
+6. **Dependency & Vendor Hygiene:**
+   - *Status:* Validated. `memmap2` is completely unused in `Cargo.toml`. `vendor/gpui-component` is maintained solely for a single re-export of `Selectable`.
 
 ---
 
 ## 3. Known Limitations & Technical Debt
 
 1. **Wayland Compositor Visual Verification:**
-   - Headless simulated GPUI integration tests validate layout, interaction, focus, and state transitions, but do not validate visual appearance (translucent surfaces, backdrop blur, compositor shadows) under real Wayland compositors (e.g., Niri, Sway, GNOME Mutter, KDE KWin).
+   - Headless simulated GPUI tests validate layout, interaction, focus, and state transitions, but do not validate visual appearance (translucent surfaces, backdrop blur, compositor shadows) under real Wayland compositors (e.g., Niri, Sway, GNOME Mutter, KDE KWin).
    - *Rule for agents:* Never claim visual verification on Wayland unless manually inspected on a real desktop session.
-2. **Remaining Congestion in `src/main.rs`:**
-   - `src/main.rs` still hosts the two-pane shell router (`render_two_pane_shell`), reader input gesture handling (`on_wheel`, `on_pinch`, `drag_*`), and keyboard vim action dispatching (`on_key`, `apply`).
-3. **Cross-Platform Scrolling:**
+2. **Congestion in `src/main.rs` & `src/tests.rs`:**
+   - `src/main.rs` (5,426 lines) and `src/tests.rs` (3,601 lines) are oversized and require modular extraction.
+3. **Cross-Platform Momentum Scrolling:**
    - Linux and Windows rely on `PlatformScrollController`'s kinetic inertia glide loop because GPUI does not yet synthesize momentum events on non-macOS platforms.
    - *Action required:* Monitor official GPUI Kit releases for native cross-platform momentum support.
 
@@ -84,11 +58,15 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 
 Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
 
-1. **Double-Page Spread Reading Mode:**
-   - Support reading two pages side-by-side (portrait manga pairs) with automatic single-page display for wide landscape covers.
-2. **Library Sorting Options:**
-   - Provide sorting controls (Title, Last Read, Date Added, Page Count) in the library toolbar.
-3. **CB7 Archive Support:**
-   - Integrate 7z archive reader support alongside existing CBZ, CBR, ZIP, and RAR handlers.
-4. **Upstream GPUI Momentum Migration:**
-   - Replace `scroll.rs` custom kinetic decay once upstream GPUI provides official Linux/Windows momentum events.
+1. **Phase 1: Critical Fixes & Reliability:**
+   - Resolve prefetch cancellation defect in `page_decoded`.
+   - Cache `/proc/meminfo` memory budget via `OnceLock`.
+   - Bound initial allocation capacity in `archive::read_zip_page`.
+2. **Phase 2: Architectural Modularization:**
+   - Relocate `scroll.rs` to `src/ui/scroll.rs`.
+   - Extract `src/app/` subsystems from `src/main.rs`.
+3. **Phase 3: Scalability & Performance:**
+   - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
+   - Eliminate deep library cloning on background autosave.
+4. **Phase 4: Dual-Page Spread Reading Mode:**
+   - Side-by-side portrait page display with landscape spread auto-fallback.

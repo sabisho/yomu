@@ -2,15 +2,16 @@
 
 ## Runtime Topology
 
-Yomu is structured into two strict architectural layers:
+Yomu is structured into three clean architectural tiers:
 
-1. **Core Domain Layer (`src/lib.rs` / `yomu` crate):** Pure Rust (`#![forbid(unsafe_code)]`), decoupled from GPUI and windowing. Responsible for archive unpacking, SIMD image decoding and scaling, geometry calculations, memory cache policies, vim key parsing, search matching, selection rules, and JSON persistence. Fully deterministic and testable without a window or graphics compositor.
-2. **UI & Window Orchestration (`src/main.rs` + `src/ui/`):** Built on GPUI Kit 0.8.1 (`gpui-pre = 0.3.10` runtime). Manages the application window, state routing between the two-pane desktop shell and edge-to-edge immersive reader, input dispatch, official GPUI Kit auto-hiding scrollbars (`ScrollbarMode::Scrolling`), native scroll bounce (`.scroll_bounce(true)`), and background task scheduling.
+1. **Core Domain Layer (`src/lib.rs` / `yomu` crate):** GUI-independent Rust (`#![forbid(unsafe_code)]`), decoupled from GPUI, windowing, and presentation frameworks. Combines pure algorithms (geometry calculations, cache eviction planning, Vim grammar parsing, search filtering, selection state machines) with filesystem and persistence operations (archive enumeration, SIMD image decoding and scaling, atomic JSON persistence). Fully testable without a window or graphics compositor.
+2. **UI Presentation Layer (`src/ui/`):** Built on GPUI Kit 0.8.1 (`gpui-pre = 0.3.10` runtime). Encapsulates views, components, dialogs, theme loading, and platform-adaptive momentum scrolling adapters (`ui::scroll`).
+3. **Application Orchestration (`src/main.rs` / planned `src/app/`):** Manages the application window lifecycle, top-level state routing, input dispatch, background decode task scheduling, GPU texture garbage collection, and debounced persistence.
 
 ```text
-GPUI Kit Window / Yomu (src/main.rs)
+GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
   ├─ View Router (MainView)
-  │    ├─ Sidebar (src/ui/sidebar.rs) ── persistent 240px macOS navigation
+  │    ├─ Sidebar (src/ui/sidebar.rs) ── persistent 240px navigation
   │    ├─ Toolbar (src/ui/toolbar.rs) ── search, view mode, selection bar
   │    ├─ Library View (src/ui/library_view.rs) ── cards, folders, list rows
   │    ├─ Continue Reading (src/ui/continue_reading.rs) ── hero banner & queue
@@ -21,8 +22,8 @@ GPUI Kit Window / Yomu (src/main.rs)
   │    ├─ Overlays (src/ui/overlays.rs) ── dialogs, menus, command prompt, help
   │    └─ Reader (src/ui/reader.rs) ── edge-to-edge canvas with autohiding HUD
   ├─ Core Library (src/library.rs) ── JSON persistence & XDG data management
-  ├─ Reader Engine ── archive page listing, decode queue, and texture cache
-  ├─ Momentum Controller (src/scroll.rs) ── platform-adaptive scrolling
+  ├─ Reader Controller ── page decode tasks, prefetch queue, and GPU texture lifecycle
+  ├─ Momentum Controller (src/scroll.rs -> planned src/ui/scroll.rs) ── platform momentum adapter
   └─ Background Executors ── multithreaded decode, resize, and import pipeline
 ```
 
@@ -34,24 +35,24 @@ GPUI Kit Window / Yomu (src/main.rs)
 
 | Module | Responsibility | Invariants & Boundaries |
 |---|---|---|
-| `archive.rs` | Enumerate and read CBZ/CBR/ZIP/RAR pages and image folders | Natural-sorts entries; filters hidden/system files; prevents archive inflation attacks. Never mutates source archives on disk. |
-| `imaging.rs` | Decode supported image formats (JPEG, PNG, WebP, GIF), SIMD scaling, JPEG cover generation | Decoupled from GPUI. Pixel buffers are BGRA for GPUI textures. Large images decode and scale off the UI thread via `zune-jpeg` and `fast_image_resize`. |
+| `archive.rs` | Enumerate and read CBZ/CBR/ZIP/RAR pages and image folders | Natural-sorts entries; filters hidden/system files; enforces bounded allocation caps against archive bombs. Never mutates source archives on disk. |
+| `imaging.rs` | Decode supported image formats (JPEG, PNG, WebP, GIF), SIMD scaling, JPEG cover generation | Strictly decoupled from GPUI. Pixel buffers are BGRA for GPUI textures. Large images decode and scale off the UI thread via `zune-jpeg` and `fast_image_resize`. |
 | `library.rs` | Book models, reading progress, marks, user settings, JSON persistence, and import pipeline | Format version 3. Backwards-compatible and lenient with missing fields. Deleting books or collections never deletes original comic files. |
 | `collections.rs` | Smart categories (Favorites, Reading, Want to Read, Completed) and custom user collections | Grouping metadata only; decoupled from book archive storage. |
 | `layout.rs` | Fit modes (Page, Width, Height, Original), zoom calculation, viewport geometry, decode tiers | Pure math. Page indices are strictly zero-based and ordered in reading sequence regardless of RTL display travel. |
-| `motion.rs` | Frame-time scroll easing, page-turn transitions, reduced-motion detection | Driven by delta time ($dt$), not frame counts. Respects desktop reduced-motion preferences. |
-| `scroll.rs` | Cross-platform momentum scrolling coordinator (`PlatformScrollController`) | Preserves native AppKit momentum on macOS; supplies smooth kinetic glide on Linux and Windows via official `ScrollHandle` APIs. |
-| `pagecache.rs` | Prefetch order and texture eviction planning | Pure policy. Preserves current page texture even if it exceeds budget. Adaptive decoded image budget: 1.0 GiB default (scales 512 MiB to 3.0 GiB based on host RAM). |
+| `motion.rs` | Frame-time scroll easing, page-turn transitions, reduced-motion detection | Driven by delta time ($dt$), not frame counts. Pure analytical decay; zero UI dependencies. |
+| `pagecache.rs` | Prefetch order and texture eviction planning | Pure policy. Preserves current page texture even if it exceeds budget. Adaptive decoded image budget: defaults to 1.0 GiB (`BUDGET_BYTES`) and scales between 512 MiB and 3.0 GiB based on 1/8th of detected host RAM. Static metrics cached to prevent UI-thread I/O. |
 | `vim.rs` | Parse key tokens, counts, motions, and `:` command-line strings into typed `Action`s | Pure parser without UI dependencies. The UI applies the resulting `Action` enum. |
 | `selection.rs` | Multi-selection state, toggle, and range selection anchors | Pure state machine. Emits selected IDs in stable library order for deterministic batch operations. |
 | `search.rs` | Case-insensitive title, source path, and series substring matching | Pure helper. Query state is transient in the UI and never alters persisted library order. |
 | `menu.rs` | Context menu item generation, validation, and confirmation requirements | Decides available book and library actions; UI renders and dispatches them. |
 | `util.rs` | Natural sorting, FNV-1a path hashing, date/size formatting | Reusable pure helpers. |
 
-### UI Modules (`src/ui/`)
+### UI & Presentation Modules (`src/ui/` & `src/scroll.rs`)
 
 | Module | Responsibility | Design & Integration |
 |---|---|---|
+| `scroll.rs` | Cross-platform momentum scrolling coordinator (`PlatformScrollController`) | Connects pure `motion::KineticScroll` to GPUI `ScrollHandle`. Preserves native AppKit momentum on macOS; provides kinetic glide on Linux and Windows. Planned relocation to `src/ui/scroll.rs`. |
 | `sidebar.rs` | Persistent 240px navigation sidebar | Native macOS traffic lights on macOS; clean sections on Linux/Windows. Navigates between primary sections with badge counts. |
 | `toolbar.rs` | Unified 52px header toolbar | Symmetrical back button, centered search with `⌘K`/`Ctrl+K` shortcut, view mode toggle, import action, and in-place selection toolbar. |
 | `library_view.rs` | Book cards, folder cards, and list rows | Responsive card sizing from `ThumbnailSize`. Selection highlights, hover states, and drag/click handling. |
@@ -82,6 +83,7 @@ GPUI Kit Window / Yomu (src/main.rs)
 4. Off-UI threads decode and resize requested pages to match the active viewport scale (`imaging::decode_fit_bgra`).
 5. Decoded BGRA pixel buffers are uploaded as GPUI textures.
 6. Dropped textures are placed in `garbage` and explicitly released in `Yomu::render` via `window.drop_image`.
+7. **Task Cancellation Guarantee:** Prefetch tasks cancelled due to rapid scrubbing are safely dropped without polluting `reader.failed`.
 
 ### 3. Navigation and History
 1. View state is driven by `Yomu.active_view` (`MainView`).
@@ -122,7 +124,10 @@ Corner radii follow user preferences (`CornerRounding::None`, `Small`, `Medium`,
   - Library data: `$XDG_DATA_HOME/yomu/library.json` (overridable via `YOMU_DATA_DIR`).
   - Generated covers: `$XDG_DATA_HOME/yomu/covers/<book-id>.jpg`.
   - Custom themes: `$XDG_CONFIG_HOME/yomu/themes.toml`.
-- **Invariants:**
-  - Deleting books or collections from the UI **never** removes comic archives or folders from user disk.
-  - Page indices are strictly zero-based internally. Reading direction (LTR vs RTL) alters only visual motion and navigation mapping, never archive indexing.
-  - If `library.json` fails to parse, a timestamped `.corrupt` backup is created automatically to prevent data loss.
+- **Architectural Invariants:**
+  1. Deleting books or collections from the UI **never** removes comic archives or folders from user disk.
+  2. Page indices are strictly zero-based internally. Reading direction (LTR vs RTL) alters only visual motion and navigation mapping, never archive indexing.
+  3. If `library.json` fails to parse, a timestamped `.corrupt` backup is created automatically to prevent data loss.
+  4. **Adaptive Decoded Memory Budget:** Decoded page memory is bounded by `pagecache::system_memory_budget()`, which defaults to 1.0 GiB (`BUDGET_BYTES`) and scales between 512 MiB and 3.0 GiB based on 1/8th of detected host RAM.
+  5. **No Synchronous I/O on UI Thread:** Never read files, procfs, or metadata inside the render loop or animation frames.
+  6. **Asynchronous Cancellation Safety:** Cancellation is not an error; aborted prefetch tasks must not mark pages as permanently failed.
