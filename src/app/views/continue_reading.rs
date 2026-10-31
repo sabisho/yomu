@@ -96,10 +96,10 @@ impl Yomu {
         let mut cards: Vec<AnyElement> = Vec::new();
         if self.library.settings().group_series {
             let groups = directory_groups(books.iter());
-            let mut grouped_ids = HashSet::new();
+            let mut grouped_ids: HashSet<&str> = HashSet::new();
             for group in &groups {
                 for b in &group.books {
-                    grouped_ids.insert(b.id.clone());
+                    grouped_ids.insert(b.id.as_str());
                 }
             }
 
@@ -113,7 +113,10 @@ impl Yomu {
                 let latest_added = group.books.iter().map(|b| b.added_at).max().unwrap_or(0);
                 entries.push(RecentEntry::Group(group, latest_added));
             }
-            for book in books.iter().filter(|b| !grouped_ids.contains(&b.id)) {
+            for book in books
+                .iter()
+                .filter(|b| !grouped_ids.contains(b.id.as_str()))
+            {
                 entries.push(RecentEntry::Book(book, book.added_at));
             }
 
@@ -134,12 +137,9 @@ impl Yomu {
                     RecentEntry::Group(group, _) => {
                         let first = group.books[0];
                         let cover_path = self.dirs.cover_for_size(&first.id, thumb_size);
-                        let book_ids: Vec<String> =
-                            group.books.iter().map(|b| b.id.clone()).collect();
                         cards.push(self.render_folder_card(
                             &group.key,
                             &group.name,
-                            &book_ids,
                             group.books.len(),
                             cover_path,
                             card_w,

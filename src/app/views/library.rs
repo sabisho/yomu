@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -30,14 +31,14 @@ impl Yomu {
         colors: UiColors,
         yomu: &Entity<Self>,
     ) -> AnyElement {
-        let book_id = book.id.clone();
+        let book_id: Arc<str> = Arc::from(book.id.as_str());
         let thumb_size = self.library.settings().thumbnail_size;
         let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
         let is_selected = self.selection.contains(&book.id);
         let border_px = self.border_px();
 
         let yomu_click = yomu.clone();
-        let id_click = book_id.clone();
+        let id_click = Arc::clone(&book_id);
         let on_click = move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
             let ctrl = event.modifiers().control || event.modifiers().platform;
             let shift = event.modifiers().shift;
@@ -80,14 +81,14 @@ impl Yomu {
         colors: UiColors,
         yomu: &Entity<Self>,
     ) -> AnyElement {
-        let book_id = book.id.clone();
+        let book_id: Arc<str> = Arc::from(book.id.as_str());
         let thumb_size = self.library.settings().thumbnail_size;
         let cover_path = self.dirs.cover_for_size(&book.id, thumb_size);
         let is_selected = self.selection.contains(&book.id);
         let border_px = self.border_px();
 
         let yomu_click = yomu.clone();
-        let id_click = book_id.clone();
+        let id_click = Arc::clone(&book_id);
         let on_click = move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
             let ctrl = event.modifiers().control || event.modifiers().platform;
             let shift = event.modifiers().shift;
@@ -124,7 +125,6 @@ impl Yomu {
         &self,
         group_key: &str,
         group_name: &str,
-        book_ids: &[String],
         count: usize,
         cover_path: PathBuf,
         radius: Pixels,
@@ -132,25 +132,26 @@ impl Yomu {
         border_px: f32,
         yomu: &Entity<Self>,
     ) -> AnyElement {
+        let key_arc: Arc<str> = Arc::from(group_key);
+        let name_arc: Arc<str> = Arc::from(group_name);
+
         let yomu_click = yomu.clone();
-        let group_key_click = group_key.to_string();
+        let key_click = Arc::clone(&key_arc);
         let on_click = move |_event: &ClickEvent, _window: &mut Window, cx: &mut App| {
-            let key = group_key_click.clone();
+            let key = key_click.to_string();
             yomu_click.update(cx, |this, cx| {
                 this.enter_group(key, cx);
             });
         };
 
         let yomu_right = yomu.clone();
-        let group_key_right = group_key.to_string();
-        let group_name_right = group_name.to_string();
-        let book_ids_right = book_ids.to_vec();
+        let key_right = key_arc;
+        let name_right = name_arc;
         let on_right_click = move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-            let key = group_key_right.clone();
-            let name = group_name_right.clone();
-            let ids = book_ids_right.clone();
+            let key = Arc::clone(&key_right);
+            let name = Arc::clone(&name_right);
             yomu_right.update(cx, |this, cx| {
-                this.open_group_context_menu(&key, &name, &ids, event.position, cx);
+                this.open_group_context_menu_by_key(&key, &name, event.position, cx);
             });
         };
 
@@ -172,7 +173,6 @@ impl Yomu {
         &self,
         group_key: &str,
         group_name: &str,
-        book_ids: &[String],
         count: usize,
         cover_path: PathBuf,
         card_w: f32,
@@ -182,25 +182,26 @@ impl Yomu {
         yomu: &Entity<Self>,
     ) -> AnyElement {
         let border_px = self.border_px();
+        let key_arc: Arc<str> = Arc::from(group_key);
+        let name_arc: Arc<str> = Arc::from(group_name);
+
         let yomu_click = yomu.clone();
-        let group_key_click = group_key.to_string();
+        let key_click = Arc::clone(&key_arc);
         let on_click = move |_event: &ClickEvent, _window: &mut Window, cx: &mut App| {
-            let key = group_key_click.clone();
+            let key = key_click.to_string();
             yomu_click.update(cx, |this, cx| {
                 this.enter_group(key, cx);
             });
         };
 
         let yomu_right = yomu.clone();
-        let group_key_right = group_key.to_string();
-        let group_name_right = group_name.to_string();
-        let book_ids_right = book_ids.to_vec();
+        let key_right = key_arc;
+        let name_right = name_arc;
         let on_right_click = move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-            let key = group_key_right.clone();
-            let name = group_name_right.clone();
-            let ids = book_ids_right.clone();
+            let key = Arc::clone(&key_right);
+            let name = Arc::clone(&name_right);
             yomu_right.update(cx, |this, cx| {
-                this.open_group_context_menu(&key, &name, &ids, event.position, cx);
+                this.open_group_context_menu_by_key(&key, &name, event.position, cx);
             });
         };
 
@@ -296,24 +297,20 @@ impl Yomu {
 
         if self.library.settings().group_series && self.open_group.is_none() {
             let groups = directory_groups(books.iter().copied());
-            let mut grouped_ids = HashSet::new();
+            let mut grouped_ids: HashSet<&str> = HashSet::new();
 
             for group in &groups {
                 for b in &group.books {
-                    grouped_ids.insert(b.id.clone());
+                    grouped_ids.insert(b.id.as_str());
                 }
                 let first = group.books[0];
-                let group_key = group.key.clone();
-                let group_name = group.name.clone();
                 let count = group.books.len();
                 let cover_path = self.dirs.cover_for_size(&first.id, thumb_size);
 
                 if is_grid {
-                    let book_ids: Vec<String> = group.books.iter().map(|b| b.id.clone()).collect();
                     cards.push(self.render_folder_card(
-                        &group_key,
-                        &group_name,
-                        &book_ids,
+                        &group.key,
+                        &group.name,
                         count,
                         cover_path,
                         card_w,
@@ -323,11 +320,9 @@ impl Yomu {
                         &yomu,
                     ));
                 } else {
-                    let book_ids: Vec<String> = group.books.iter().map(|b| b.id.clone()).collect();
                     cards.push(self.render_folder_list_row(
-                        &group_key,
-                        &group_name,
-                        &book_ids,
+                        &group.key,
+                        &group.name,
                         count,
                         cover_path,
                         radius,
@@ -338,7 +333,10 @@ impl Yomu {
                 }
             }
 
-            for book in books.iter().filter(|b| !grouped_ids.contains(&b.id)) {
+            for book in books
+                .iter()
+                .filter(|b| !grouped_ids.contains(b.id.as_str()))
+            {
                 if is_grid {
                     cards.push(self.render_book_card(book, card_w, cover_h, radius, colors, &yomu));
                 } else {

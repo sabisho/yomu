@@ -35,23 +35,27 @@ pub fn directory_groups<'a>(books: impl IntoIterator<Item = &'a Book>) -> Vec<Li
             .as_deref()
             .map(str::trim)
             .filter(|name| !name.is_empty());
-        let (key, name) = if let Some(series) = manual_series {
-            (
-                format!("series:{}", series.to_lowercase()),
-                series.to_string(),
-            )
+        let key = if let Some(series) = manual_series {
+            format!("series:{}", series.to_lowercase())
         } else {
             let parent = book.path.parent().unwrap_or_else(|| Path::new("."));
-            let display = parent
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| parent.display().to_string());
-            (format!("directory:{}", parent.display()), display)
+            format!("directory:{}", parent.display())
         };
-        buckets
-            .entry(key)
-            .and_modify(|(_, _, members)| members.push(book))
-            .or_insert_with(|| (name, index, vec![book]));
+
+        if let Some((_, _, members)) = buckets.get_mut(&key) {
+            members.push(book);
+        } else {
+            let name = if let Some(series) = manual_series {
+                series.to_string()
+            } else {
+                let parent = book.path.parent().unwrap_or_else(|| Path::new("."));
+                parent
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| parent.display().to_string())
+            };
+            buckets.insert(key, (name, index, vec![book]));
+        }
     }
 
     let mut groups: Vec<_> = buckets

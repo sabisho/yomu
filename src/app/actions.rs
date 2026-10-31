@@ -12,6 +12,7 @@ use yomu::library::Book;
 use yomu::menu::{self, BookAction};
 
 use crate::app::state::Yomu;
+use crate::ui::library_view::directory_groups;
 use crate::ui::overlays::{
     BookMenu, ConfirmAction, ConfirmDialog, LibraryMenu, Overlay, PropertiesDialog, SeriesDialog,
 };
@@ -102,6 +103,24 @@ impl Yomu {
         };
         self.overlay = Some(Overlay::Menu(menu));
         cx.notify();
+    }
+
+    pub(crate) fn open_group_context_menu_by_key(
+        &mut self,
+        group_key: &str,
+        group_name: &str,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_quitting {
+            return;
+        }
+        let book_ids: Vec<String> = directory_groups(self.library.books())
+            .into_iter()
+            .find(|g| g.key == group_key)
+            .map(|g| g.books.iter().map(|b| b.id.clone()).collect())
+            .unwrap_or_default();
+        self.open_group_context_menu(group_key, group_name, &book_ids, position, cx);
     }
 
     #[allow(dead_code)]

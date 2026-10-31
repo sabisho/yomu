@@ -88,12 +88,21 @@ This document outlines prioritized future work, planned features, and tracked te
   - Enhanced `import_single_book` to populate `small`, `medium`, and `large` cover targets immediately on import.
   - Added unit and UI integration tests for sized cover resolution, legacy migration, fallback tracking, and missing cover behavior (250 active tests passing: 109 lib, 141 bin).
 
-### 9. Background Persistence Zero-Copy Snapshots
+### 9. Reduction of Library Card Rendering Allocations (Phase 3.3B — Completed)
+- **Goal:** Minimize redundant heap allocations, cloned string identifiers, and temporary collections in library grid, list, and folder rendering paths.
+- **Status:** Completed.
+  - Replaced redundant `book.id.clone()` in card and list-row click/right-click closures with `Arc<str>` reference counts (`Arc::from(book.id.as_str())`), halving book ID heap allocations per card and row.
+  - Eliminated full `Vec<String>` cloning of all group member book IDs during folder card and row rendering; group context menus now resolve member IDs on demand via `open_group_context_menu_by_key` only when a folder is right-clicked.
+  - Replaced `HashSet<String>` with borrowed `HashSet<&str>` for grouped book ID filtering across `render_all_manga_view` and `render_continue_reading_view`, eliminating hundreds of transient heap string clones per frame.
+  - Optimized `directory_groups` to check `buckets.get_mut(&key)` before allocating `name: String`, avoiding redundant string allocations for subsequent books in existing buckets.
+  - Maintained architecture freeze, retained GPUI's static lifetime requirements for rendered UI labels, and passed full verification suite (250 active tests passing: 109 lib, 141 bin).
+
+### 10. Background Persistence Zero-Copy Snapshots
 - **Goal:** Eliminate deep-cloning entire `Library` vectors during debounced autosave.
 - **Remediation:**
   - Pass lightweight serialization diffs or immutable snapshots to background write threads.
 
-### 9. Dependency & Vendor Hygiene
+### 11. Dependency & Vendor Hygiene
 - **Goal:** Reduce repository footprint and simplify upstream maintenance.
 - **Remediation:**
   - Remove dead dependency `memmap2` from `Cargo.toml`.
@@ -103,7 +112,7 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ## 🎨 Phase 4: UI/UX Refinement & Restrained Animations
 
-### 9. Restrained UI Motion Transitions
+### 12. Restrained UI Motion Transitions
 - **Goal:** Introduce subtle, interruptible desktop motion that strictly adheres to `disable_animations`.
 - **Candidates (Starting Guidelines):**
   - Sidebar collapse/expand: ~160–180 ms cubic ease-out width transition.
@@ -114,21 +123,21 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ## 📖 Phase 5: Feature Expansion
 
-### 10. Dual-Page Spread Reading Mode
+### 13. Dual-Page Spread Reading Mode
 - **Goal:** Display two portrait pages side-by-side to replicate physical manga reading.
 - **Behavior:**
   - Automatic single-page fallback for wide landscape pages (spread covers).
   - Respect reading direction (Right-to-Left pairs right page first; Left-to-Right pairs left page first).
   - Toggle via reader key `d` and `:spread [on|off]` command, with persistence in `Settings`.
 
-### 11. Library Sorting Options
+### 14. Library Sorting Options
 - **Goal:** Allow users to sort library cards and list rows beyond the default import order.
 - **Criteria:**
   - Sort by: Title (alphabetical/natural), Last Read (recency), Date Added (import timestamp), Page Count, Reading Progress.
   - Direction: Ascending / Descending toggle.
   - Persist active sort preference in `library.json` without altering source file order.
 
-### 12. CB7 / 7z Archive Support
+### 15. CB7 / 7z Archive Support
 - **Goal:** Support `.cb7` and `.7z` comic archives alongside CBZ, CBR, ZIP, and RAR.
 
 ---

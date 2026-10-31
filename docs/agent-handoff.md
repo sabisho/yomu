@@ -104,6 +104,12 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Removed synchronous `.exists()` disk `stat` syscalls from `DataDirs::cover_for_size()`.
      - Preserved legacy unsized cover compatibility via automatic startup migration in `DataDirs::at()` and in-memory fallback ID tracking (`legacy_fallback_ids`).
      - Added unit and UI tests for sized, legacy, missing, and fallback cover handling (250 active tests passing: 109 lib, 141 bin).
+   - **Phase 3.3B (Completed):** Reduced heap allocations in library card and list-row rendering:
+     - Replaced redundant `book.id.clone()` in card and row event handlers with `Arc<str>` reference counts (`Arc::from(book.id.as_str())`), halving book ID string allocations per card and row.
+     - Decoupled folder card/row right-click handlers from member ID vector cloning, extracting `open_group_context_menu_by_key` to resolve group IDs on demand only when the context menu is opened.
+     - Replaced `HashSet<String>` with borrowed `HashSet<&str>` across `render_all_manga_view` and `render_continue_reading_view`, eliminating hundreds of transient heap string clones per frame.
+     - Avoided redundant `name: String` allocation in `directory_groups()` for duplicate members of existing directory buckets.
+     - Full test suite passing (250 active tests: 109 lib, 141 bin).
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.
 4. **Phase 4: Dual-Page Spread Reading Mode:**
