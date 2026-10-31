@@ -15,6 +15,7 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
   │    ├─ Reader Controller (`src/app/reader_controller.rs`) ── page decode tasks, prefetch queue, navigation, gestures
   │    ├─ Keybindings (`src/app/keybindings.rs`) ── keyboard event routing, Vim tokens, command-line prompt, action execution
   │    ├─ Persistence (`src/app/persistence.rs`) ── debounced autosave, atomic writes, background flush coordination
+  │    ├─ Desktop (`src/app/desktop.rs`) ── desktop entry generation, icon installation, XDG integration
   │    └─ Main (`src/main.rs`) ── entry point, window setup, and event dispatch
   ├─ Presentation Shell (`src/ui/`)
   │    ├─ Sidebar (src/ui/sidebar.rs) ── persistent 240px navigation
@@ -79,7 +80,8 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `reader_controller.rs` | Reader lifecycle, background decoding queue, prefetch planning, zoom/fit/continuous modes, and gestures | Decoupled from GPUI presentation views; coordinates async archive decoding and prefetch scheduling off UI thread; strictly preserves Phase 1 task identity and cancellation invariants. |
 | `keybindings.rs` | Keyboard event routing, Vim token translation, overlay shortcuts, command-line prompt, and action execution | Implements `on_key`, `apply`, `on_library_key`, `on_overlay_key`, and Vim command prompt helpers on `Yomu`; respects Vim-mode settings, overlay priority, and platform modifier standards. |
 | `persistence.rs` | Application persistence, debounced autosave, atomic filesystem synchronization, and graceful shutdown flush | Manages `save_library` (immediate non-blocking background dispatch), `save_library_debounced` (500ms trailing timer for page turns/scrolling), `flush_save_background`, `request_quit` (async wait on in-flight saves before exiting), non-blocking zero-I/O `Drop for Yomu`, full-window native GPUI pointer occlusion barrier, and error recovery confirmation dialog with `ForceQuit`; enforces monotonic `save_seq` ordering via `Arc<AtomicU64>`, background-only `write_lock: Arc<Mutex<()>>`, and 4-tier shutdown mutation isolation; guarantees zero synchronous filesystem I/O or mutex contention on the UI thread during rendering, scrolling, or user interaction. |
-| `main.rs` | Executable entry point, window initialization, GPUI lifecycle, event dispatch, and reader render | Focused on top-level runtime startup, desktop integration installer, action dispatch, and `Render` trait implementation. |
+| `desktop.rs` | Desktop environment integration, application icons, and XDG desktop entry installation | Implements `desktop_entry_content`, `app_icon`, `install_desktop_integration_to`, and `install_desktop_integration`; embeds logo and hicolor icons across standard desktop resolutions; preserves user customizations when `--force` is omitted; platform-gated for Linux with graceful non-Linux bails. |
+| `main.rs` | Executable entry point, window initialization, GPUI lifecycle, event dispatch, and reader render | Focused on top-level runtime startup, action dispatch, and `Render` trait implementation. |
 
 ---
 

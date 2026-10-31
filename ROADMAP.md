@@ -36,14 +36,15 @@ This document outlines prioritized future work, planned features, and tracked te
   - Removed `pub mod scroll;` from `src/lib.rs`. The core domain library is now 100% GUI-independent with zero GPUI dependencies.
   - Retained pure mathematical kinetic decay in `src/motion.rs`.
 
-### 5. Decomposition of `src/main.rs` (Phases 2B, 2C, 2D.1 & 2D.2 — Completed)
+### 5. Decomposition of `src/main.rs` (Phases 2B, 2C, 2D.1, 2D.2 & 2D.3 — Completed)
 - **Goal:** Establish `src/app/` and decompose monolithic orchestration logic out of `src/main.rs`.
-- **Status:** In Progress (Phases 2B, 2C, 2D.1, and 2D.2 Completed).
+- **Status:** In Progress (Phases 2B, 2C, 2D.1, 2D.2, and 2D.3 Completed).
   - **Phase 2B:** Created `src/app/state.rs` extracting `struct Yomu`, `NavDestination`, `ReaderScrollHandle`, `Side`, `ImportEvent`, timing constants, lifecycle initialization, settings helpers, and navigation routing.
   - **Phase 2C:** Created `src/app/reader_controller.rs` extracting reader lifecycle (`open_book`, `close_book`, `pages_listed`), page navigation (`goto_page`, `jump_to`, `turn_by`, `step`), zoom/fit/continuous/webcomics modes, reader gesture handlers (`on_wheel`, `on_pinch`, `drag_start`, `drag_move`, `drag_end`), background decode task queue, cancellation token management, and cache eviction synchronization (`sync_reader`, `request_page`, `page_decoded`).
   - **Phase 2D.1:** Created `src/app/keybindings.rs` extracting keyboard shortcut dispatch (`on_key`), action execution (`apply`), library shortcuts (`on_library_key`), modal overlay shortcuts (`on_overlay_key`), and Vim command-line editing/theme preview synchronization (`in_cmdline`, `cmdline_text`, `replace_cmdline`, `cancel_cmdline`, `sync_theme_preview`, `restore_theme_preview`).
   - **Phase 2D.2:** Created `src/app/persistence.rs` extracting application-level persistence coordination (`save_library`, `save_library_debounced`, `flush_save_background`, `request_quit`, non-blocking zero-I/O `impl Drop for Yomu`), non-blocking asynchronous dispatch across all UI handlers, graceful shutdown flush via `request_quit` and `on_window_should_close`, error recovery dialog with `ForceQuit`, and monotonic sequencing via `save_seq`, lock-free `last_saved_seq: Arc<AtomicU64>`, and background `write_lock: Arc<Mutex<()>>`.
-  - **Next Subsystems:** `desktop.rs` (desktop integration installer, desktop entry generation, icon installation).
+  - **Phase 2D.3:** Created `src/app/desktop.rs` extracting XDG desktop entry generation (`desktop_entry_content`), application and hicolor icon installation across resolutions (`HICOLOR_ICON_SIZES`, `LOGO_PNG`, `app_icon`), and desktop environment integration installer (`install_desktop_integration_to`, `install_desktop_integration`).
+  - **Next Subsystems:** Phase 2E (Window lifecycle & app initialization cleanup).
 
 ---
 

@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **236 active tests** passing (106 core library unit tests in `src/lib.rs`, 130 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 239 total).
+- **Test Baseline:** **239 active tests** passing (106 core library unit tests in `src/lib.rs`, 133 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 242 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
@@ -75,7 +75,8 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Implemented cooperative import cancellation with `Arc<AtomicBool>` token checkpointed across directory traversal, candidate enumeration, archive reads, cover generation, and book reporting.
      - Protected asynchronous import completion loops and file-picker error callbacks against mutating application state or presenting UI toasts during shutdown.
      - Added 23 deterministic concurrency, monotonicity, shutdown, input barrier, import cancellation, token identity, and ForceQuit regression tests in `src/app/persistence.rs` (236 total active tests passing: 106 lib, 130 bin).
-   - **Phase 2D.3 (Next):** Extract desktop integration (`app/desktop.rs`).
+   - **Phase 2D.3 (Completed):** Extracted `app/desktop.rs` handling XDG desktop entry content (`desktop_entry_content`), application window icon decodes (`app_icon`), standard hicolor icon resolution tables (`HICOLOR_ICON_SIZES`), and Linux desktop integration installer (`install_desktop_integration_to`, `install_desktop_integration`) with conditional compilation.
+   - **Phase 2E (Next):** Window lifecycle & app initialization cleanup.
 3. **Phase 3: Scalability & Performance:**
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.

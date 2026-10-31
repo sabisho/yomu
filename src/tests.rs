@@ -3584,7 +3584,7 @@ fn test_desktop_integration_install() {
     std::fs::create_dir_all(&tmp).unwrap();
 
     // First install: should create all files and return true (updated)
-    let updated = crate::install_desktop_integration_to(&tmp, false).unwrap();
+    let updated = crate::app::desktop::install_desktop_integration_to(&tmp, false).unwrap();
     assert!(updated);
 
     let desktop_file = tmp.join("applications/yomu.desktop");
@@ -3596,23 +3596,23 @@ fn test_desktop_integration_install() {
     assert!(icon_128.exists());
 
     // Second install without force: files exist, should not update (returns false)
-    let updated_second = crate::install_desktop_integration_to(&tmp, false).unwrap();
+    let updated_second = crate::app::desktop::install_desktop_integration_to(&tmp, false).unwrap();
     assert!(!updated_second);
 
     // Customise the desktop file
     std::fs::write(&desktop_file, "Customized desktop file").unwrap();
 
     // Re-run without force: should NOT overwrite customized file
-    let updated_third = crate::install_desktop_integration_to(&tmp, false).unwrap();
+    let updated_third = crate::app::desktop::install_desktop_integration_to(&tmp, false).unwrap();
     assert!(!updated_third);
     let content = std::fs::read_to_string(&desktop_file).unwrap();
     assert_eq!(content, "Customized desktop file");
 
     // Re-run with force: should overwrite customized file
-    let updated_forced = crate::install_desktop_integration_to(&tmp, true).unwrap();
+    let updated_forced = crate::app::desktop::install_desktop_integration_to(&tmp, true).unwrap();
     assert!(updated_forced);
     let content_forced = std::fs::read_to_string(&desktop_file).unwrap();
-    assert!(content_forced.contains("[Desktop Entry]"));
+    assert_eq!(content_forced, crate::app::desktop::desktop_entry_content());
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

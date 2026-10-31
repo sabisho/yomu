@@ -1,5 +1,6 @@
 //! Application orchestration, state management, and view routing.
 
+pub mod desktop;
 pub mod keybindings;
 pub mod persistence;
 pub mod reader_controller;
