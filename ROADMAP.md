@@ -79,7 +79,16 @@ This document outlines prioritized future work, planned features, and tracked te
   - Maintained architecture freeze and storage invariants: no unnecessary hash maps, caches, or duplicated state introduced.
   - Added UI test coverage for grouped, ungrouped, search-filtered, and missing group rendering paths (246 active tests passing: 106 lib, 140 bin).
 
-### 8. Background Persistence Zero-Copy Snapshots
+### 8. Elimination of Synchronous Cover Filesystem Checks & Path Re-allocation (Phase 3.3A — Completed)
+- **Goal:** Remove synchronous `.exists()` / `metadata()` filesystem calls and multi-join path reallocations from cover rendering paths.
+- **Status:** Completed.
+  - Precomputed base cover directories (`covers/`, `small/`, `medium/`, `large/`) in `DataDirs` at initialization, eliminating 4–7 `PathBuf` heap joins per card.
+  - Removed all synchronous `.exists()` filesystem checks from `DataDirs::cover_for_size()`.
+  - Implemented automatic legacy cover migration in `DataDirs::at()` linking/copying legacy `covers/<id>.jpg` files to sized directories, plus in-memory fallback ID tracking (`legacy_fallback_ids`) for unmigrated environments.
+  - Enhanced `import_single_book` to populate `small`, `medium`, and `large` cover targets immediately on import.
+  - Added unit and UI integration tests for sized cover resolution, legacy migration, fallback tracking, and missing cover behavior (250 active tests passing: 109 lib, 141 bin).
+
+### 9. Background Persistence Zero-Copy Snapshots
 - **Goal:** Eliminate deep-cloning entire `Library` vectors during debounced autosave.
 - **Remediation:**
   - Pass lightweight serialization diffs or immutable snapshots to background write threads.

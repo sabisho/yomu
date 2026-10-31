@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **246 active tests** passing (106 core library unit tests in `src/lib.rs`, 140 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 249 total).
+- **Test Baseline:** **250 active tests** passing (109 core library unit tests in `src/lib.rs`, 141 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 253 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
@@ -99,6 +99,11 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Replaced `order.iter().filter_map(|id| self.library.get(id))` in `Yomu::render_all_manga_view` with direct contiguous iteration over `self.library.books()` in ungrouped mode.
      - For open series groups, directly borrowed `group.books` from `directory_groups()` without intermediate ID vector allocation or repeated linear scans.
      - Added UI integration regression test in `src/tests.rs` (246 active tests passing: 106 lib, 140 bin).
+   - **Phase 3.3A (Completed):** Eliminated synchronous filesystem checks and path re-allocation from render-time cover paths:
+     - Precomputed base cover directories in `DataDirs`, replacing multi-join `root.join("covers").join(size.dir_name()).join(format!("{id}.jpg"))` with a single join on pre-resolved base paths.
+     - Removed synchronous `.exists()` disk `stat` syscalls from `DataDirs::cover_for_size()`.
+     - Preserved legacy unsized cover compatibility via automatic startup migration in `DataDirs::at()` and in-memory fallback ID tracking (`legacy_fallback_ids`).
+     - Added unit and UI tests for sized, legacy, missing, and fallback cover handling (250 active tests passing: 109 lib, 141 bin).
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.
 4. **Phase 4: Dual-Page Spread Reading Mode:**

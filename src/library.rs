@@ -26,6 +26,11 @@ const MAX_SCAN_DEPTH: usize = 6;
 #[derive(Debug, Clone)]
 pub struct DataDirs {
     root: PathBuf,
+    covers_dir: PathBuf,
+    small_dir: PathBuf,
+    medium_dir: PathBuf,
+    large_dir: PathBuf,
+    legacy_fallback_ids: HashSet<String>,
 }
 
 impl DataDirs {
@@ -40,9 +45,30 @@ impl DataDirs {
     }
 
     pub fn at(root: PathBuf) -> Result<Self> {
-        fs::create_dir_all(root.join("covers"))
-            .with_context(|| format!("creating {}", root.display()))?;
-        Ok(Self { root })
+        let covers_dir = root.join("covers");
+        let small_dir = covers_dir.join(ThumbnailSize::Small.dir_name());
+        let medium_dir = covers_dir.join(ThumbnailSize::Medium.dir_name());
+        let large_dir = covers_dir.join(ThumbnailSize::Large.dir_name());
+
+        fs::create_dir_all(&covers_dir)
+            .with_context(|| format!("creating {}", covers_dir.display()))?;
+        fs::create_dir_all(&small_dir)
+            .with_context(|| format!("creating {}", small_dir.display()))?;
+        fs::create_dir_all(&medium_dir)
+            .with_context(|| format!("creating {}", medium_dir.display()))?;
+        fs::create_dir_all(&large_dir)
+            .with_context(|| format!("creating {}", large_dir.display()))?;
+
+        let mut dirs = Self {
+            root,
+            covers_dir,
+            small_dir,
+            medium_dir,
+            large_dir,
+            legacy_fallback_ids: HashSet::new(),
+        };
+        dirs.migrate_legacy_covers();
+        Ok(dirs)
     }
 
     pub fn root(&self) -> &Path {
@@ -53,42 +79,91 @@ impl DataDirs {
         self.root.join("library.json")
     }
 
+    #[inline]
+    pub fn covers_dir(&self) -> &Path {
+        &self.covers_dir
+    }
+
+    #[inline]
+    pub fn cover_dir(&self, size: ThumbnailSize) -> &Path {
+        match size {
+            ThumbnailSize::Small => &self.small_dir,
+            ThumbnailSize::Medium => &self.medium_dir,
+            ThumbnailSize::Large => &self.large_dir,
+        }
+    }
+
+    #[inline]
+    pub fn cover_dir_for_size(&self, size: ThumbnailSize) -> PathBuf {
+        self.cover_dir(size).to_path_buf()
+    }
+
     pub fn cover(&self, id: &str) -> PathBuf {
         self.cover_for_size(id, ThumbnailSize::Medium)
     }
 
     pub fn cover_for_size(&self, id: &str, size: ThumbnailSize) -> PathBuf {
-        let size_path = self
-            .root
-            .join("covers")
-            .join(size.dir_name())
-            .join(format!("{id}.jpg"));
-        if size_path.exists() {
-            return size_path;
+        if !self.legacy_fallback_ids.is_empty() && self.legacy_fallback_ids.contains(id) {
+            return self.covers_dir.join(format!("{id}.jpg"));
         }
-        let legacy_path = self.root.join("covers").join(format!("{id}.jpg"));
-        if legacy_path.exists() {
-            return legacy_path;
-        }
-        size_path
+        self.cover_dir(size).join(format!("{id}.jpg"))
     }
 
-    pub fn cover_dir_for_size(&self, size: ThumbnailSize) -> PathBuf {
-        self.root.join("covers").join(size.dir_name())
+    /// Migrate legacy unsized covers in `covers/<id>.jpg` to sized directories (`covers/medium/`, etc.).
+    /// Returns the number of newly migrated cover files.
+    pub fn migrate_legacy_covers(&mut self) -> usize {
+        let Ok(entries) = fs::read_dir(&self.covers_dir) else {
+            return 0;
+        };
+        let mut migrated = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("jpg") {
+                continue;
+            }
+            let Some(file_name) = path.file_name() else {
+                continue;
+            };
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+
+            let mut all_sized_exist = true;
+            for size in ThumbnailSize::ALL {
+                let target = self.cover_dir(size).join(file_name);
+                if !target.exists() {
+                    if fs::hard_link(&path, &target).is_ok() || fs::copy(&path, &target).is_ok() {
+                        migrated += 1;
+                    } else {
+                        all_sized_exist = false;
+                    }
+                }
+            }
+
+            if !all_sized_exist {
+                self.legacy_fallback_ids.insert(stem.to_string());
+            }
+        }
+        migrated
     }
 
     pub fn clear_covers(&self) -> Result<()> {
-        let covers_dir = self.root.join("covers");
+        let covers_dir = &self.covers_dir;
         if covers_dir.exists() {
-            fs::remove_dir_all(&covers_dir).context("removing covers directory")?;
+            fs::remove_dir_all(covers_dir).context("removing covers directory")?;
         }
-        fs::create_dir_all(&covers_dir).context("recreating covers directory")?;
+        fs::create_dir_all(covers_dir).context("recreating covers directory")?;
+        fs::create_dir_all(&self.small_dir).context("recreating small covers directory")?;
+        fs::create_dir_all(&self.medium_dir).context("recreating medium covers directory")?;
+        fs::create_dir_all(&self.large_dir).context("recreating large covers directory")?;
         Ok(())
     }
 
     pub fn cache_size_bytes(&self) -> u64 {
-        let covers_dir = self.root.join("covers");
-        dir_size_recursive(&covers_dir)
+        dir_size_recursive(&self.covers_dir)
     }
 }
 
@@ -684,14 +759,9 @@ impl Library {
     pub fn remove(&mut self, id: &str, dirs: &DataDirs) {
         self.books.retain(|b| b.id != id);
         for size in ThumbnailSize::ALL {
-            let _ = fs::remove_file(
-                dirs.root
-                    .join("covers")
-                    .join(size.dir_name())
-                    .join(format!("{id}.jpg")),
-            );
+            let _ = fs::remove_file(dirs.cover_dir(size).join(format!("{id}.jpg")));
         }
-        let _ = fs::remove_file(dirs.root.join("covers").join(format!("{id}.jpg")));
+        let _ = fs::remove_file(dirs.covers_dir().join(format!("{id}.jpg")));
     }
 
     pub fn is_favorite(&self, id: &str) -> bool {
@@ -763,8 +833,8 @@ impl Library {
 
     /// Rebuild/ensure cover thumbnails exist for the requested size. Returns count of newly generated covers.
     pub fn ensure_covers_for_size(&self, dirs: &DataDirs, size: ThumbnailSize) -> usize {
-        let target_dir = dirs.cover_dir_for_size(size);
-        let _ = fs::create_dir_all(&target_dir);
+        let target_dir = dirs.cover_dir(size);
+        let _ = fs::create_dir_all(target_dir);
         let (max_w, max_h) = size.pixel_dimensions();
         let mut built = 0;
 
@@ -1053,13 +1123,24 @@ fn build_book(
             if is_cancelled(cancel) {
                 bail!("import cancelled");
             }
-            let _ = fs::write(dirs.root.join("covers").join(format!("{id}.jpg")), &jpeg);
-            let _ = fs::create_dir_all(dirs.cover_dir_for_size(ThumbnailSize::Medium));
-            let _ = fs::write(
-                dirs.cover_dir_for_size(ThumbnailSize::Medium)
-                    .join(format!("{id}.jpg")),
-                &jpeg,
-            );
+            let legacy_path = dirs.covers_dir().join(format!("{id}.jpg"));
+            let _ = fs::write(&legacy_path, &jpeg);
+            let medium_path = dirs
+                .cover_dir(ThumbnailSize::Medium)
+                .join(format!("{id}.jpg"));
+            let _ = fs::write(&medium_path, &jpeg);
+            let small_path = dirs
+                .cover_dir(ThumbnailSize::Small)
+                .join(format!("{id}.jpg"));
+            if fs::hard_link(&medium_path, &small_path).is_err() {
+                let _ = fs::write(&small_path, &jpeg);
+            }
+            let large_path = dirs
+                .cover_dir(ThumbnailSize::Large)
+                .join(format!("{id}.jpg"));
+            if fs::hard_link(&medium_path, &large_path).is_err() {
+                let _ = fs::write(&large_path, &jpeg);
+            }
             cover_written = true;
             break;
         }
@@ -1556,5 +1637,99 @@ mod tests {
 
         assert!(report.added.is_empty());
         assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn cover_for_size_returns_sized_path_and_resolves_without_fs_stat() {
+        let tmp = temp_dir("cover-paths");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+
+        assert_eq!(
+            dirs.cover_dir(ThumbnailSize::Small),
+            dirs.root().join("covers").join("small")
+        );
+        assert_eq!(
+            dirs.cover_dir(ThumbnailSize::Medium),
+            dirs.root().join("covers").join("medium")
+        );
+        assert_eq!(
+            dirs.cover_dir(ThumbnailSize::Large),
+            dirs.root().join("covers").join("large")
+        );
+
+        let small_path = dirs.cover_for_size("book123", ThumbnailSize::Small);
+        assert_eq!(
+            small_path,
+            dirs.root().join("covers").join("small").join("book123.jpg")
+        );
+
+        let med_path = dirs.cover_for_size("book123", ThumbnailSize::Medium);
+        assert_eq!(
+            med_path,
+            dirs.root()
+                .join("covers")
+                .join("medium")
+                .join("book123.jpg")
+        );
+
+        let legacy_convenience = dirs.cover("book123");
+        assert_eq!(legacy_convenience, med_path);
+
+        // Missing cover returns sized path which does not exist
+        assert!(
+            !dirs
+                .cover_for_size("missing", ThumbnailSize::Medium)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn legacy_covers_are_migrated_to_sized_directories() {
+        let tmp = temp_dir("legacy-migration");
+        let data_dir = tmp.join("data");
+        let legacy_covers = data_dir.join("covers");
+        fs::create_dir_all(&legacy_covers).unwrap();
+
+        // Write unsized legacy covers
+        fs::write(legacy_covers.join("manga_a.jpg"), b"fake jpeg data a").unwrap();
+        fs::write(legacy_covers.join("manga_b.jpg"), b"fake jpeg data b").unwrap();
+
+        // Initializing DataDirs must migrate legacy covers
+        let dirs = DataDirs::at(data_dir).unwrap();
+
+        // Sized covers should now exist for all size tiers
+        for size in ThumbnailSize::ALL {
+            assert!(
+                dirs.cover_for_size("manga_a", size).exists(),
+                "manga_a must exist for size {:?}",
+                size
+            );
+            assert!(
+                dirs.cover_for_size("manga_b", size).exists(),
+                "manga_b must exist for size {:?}",
+                size
+            );
+        }
+
+        // Contents must match original legacy file
+        let read_a = fs::read(dirs.cover_for_size("manga_a", ThumbnailSize::Medium)).unwrap();
+        assert_eq!(read_a, b"fake jpeg data a");
+    }
+
+    #[test]
+    fn legacy_fallback_when_unmigrated_id_recorded() {
+        let tmp = temp_dir("legacy-fallback");
+        let mut dirs = DataDirs::at(tmp.join("data")).unwrap();
+
+        // Write a legacy cover directly
+        let legacy_file = dirs.covers_dir().join("legacy_only.jpg");
+        fs::write(&legacy_file, b"legacy data").unwrap();
+
+        // Manually record in fallback ids (simulating a read-only migration failure)
+        dirs.legacy_fallback_ids.insert("legacy_only".to_string());
+
+        let resolved = dirs.cover_for_size("legacy_only", ThumbnailSize::Large);
+        assert_eq!(resolved, legacy_file);
+        assert!(resolved.exists());
     }
 }

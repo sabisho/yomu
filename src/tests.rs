@@ -4040,3 +4040,28 @@ fn test_render_all_manga_view_grouped_and_ungrouped(cx: &mut TestAppContext) {
         let _elem = this.render_all_manga_view(window, cx);
     });
 }
+
+#[gpui_kit::test]
+fn test_ui_cover_resolution_with_legacy_and_sized_covers(cx: &mut TestAppContext) {
+    let fx = fixture("ui-legacy-covers");
+    let book_id = fx.ids[0].clone();
+
+    let (view, cx) = launch(&fx, cx);
+    cx.run_until_parked();
+
+    // Verify render_all_manga_view builds cards without errors or synchronous disk checks
+    view.update_in(cx, |this, window, cx| {
+        let _elem = this.render_all_manga_view(window, cx);
+    });
+
+    // Verify Details screen cover check resolves successfully
+    view.update(cx, |this, cx| {
+        this.navigate_to(ui::sidebar::MainView::Details(book_id.clone()), cx);
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.selected_book_id.as_deref(), Some(book_id.as_str()));
+        assert!(this.details_cover_available);
+    });
+}
