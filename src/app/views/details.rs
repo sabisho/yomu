@@ -27,11 +27,17 @@ impl Yomu {
         let radius = px(self.radius_px());
         let yomu = cx.entity();
         let cover_path = self.dirs.cover(&book.id);
+        let cover_available = if self.details_cover_checked.as_deref() == Some(book_id) {
+            self.details_cover_available
+        } else {
+            true
+        };
 
         let props = ui::details::MangaDetailsProps {
             scroll_handle: &self.details_scroll,
             book,
             cover_path,
+            cover_available,
             selected_tab: self.details_tab_index,
             synopsis_expanded: self.details_synopsis_expanded,
             colors,

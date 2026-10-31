@@ -30,12 +30,7 @@ impl Yomu {
             .count();
         let all_manga_count = self.library.books().len();
         let collections_count = self.library.collections.len() + 4;
-        let downloads_count = self
-            .library
-            .books()
-            .iter()
-            .filter(|b| b.path.exists())
-            .count();
+        let downloads_count = self.downloads_count;
 
         let sidebar_props = ui::sidebar::SidebarProps {
             scroll_handle: &self.sidebar_scroll,

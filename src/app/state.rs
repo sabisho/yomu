@@ -152,6 +152,11 @@ pub struct Yomu {
     pub(crate) selected_collection_id: Option<String>,
     pub(crate) sidebar_collapsed: bool,
     pub vim_cli_override: bool,
+    pub(crate) downloads_count: usize,
+    pub(crate) downloads_seq: u64,
+    pub(crate) details_cover_checked: Option<String>,
+    pub(crate) details_cover_available: bool,
+    pub(crate) details_cover_seq: u64,
 }
 
 impl Yomu {
@@ -234,7 +239,7 @@ impl Yomu {
         )
         .detach();
 
-        let state = Self {
+        let mut state = Self {
             focus_handle: cx.focus_handle(),
             dirs,
             library,
@@ -300,7 +305,14 @@ impl Yomu {
             selected_collection_id: None,
             sidebar_collapsed: false,
             vim_cli_override: false,
+            downloads_count: 0,
+            downloads_seq: 0,
+            details_cover_checked: None,
+            details_cover_available: true,
+            details_cover_seq: 0,
         };
+
+        state.refresh_downloads_count(cx);
 
         #[cfg(not(test))]
         state.watch_custom_theme_file(cx);
@@ -342,6 +354,87 @@ impl Yomu {
             return true;
         }
         self.library.settings().vim_mode
+    }
+
+    /// Refresh the count of downloaded (locally present on disk) books off the UI thread.
+    ///
+    /// Monotonically tracks `downloads_seq` so stale asynchronous tasks cannot overwrite
+    /// newer library state.
+    pub fn refresh_downloads_count(&mut self, cx: &mut Context<Self>) {
+        if self.is_quitting {
+            return;
+        }
+        self.downloads_seq += 1;
+        let seq = self.downloads_seq;
+        let paths: Vec<PathBuf> = self
+            .library
+            .books()
+            .iter()
+            .map(|b| b.path.clone())
+            .collect();
+        if paths.is_empty() {
+            if self.downloads_count != 0 {
+                self.downloads_count = 0;
+                cx.notify();
+            }
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let count = cx
+                .background_executor()
+                .spawn(async move { paths.into_iter().filter(|p| p.exists()).count() })
+                .await;
+            let _ = this
+                .update(cx, |this, cx| {
+                    if this.downloads_seq == seq
+                        && !this.is_quitting
+                        && this.downloads_count != count
+                    {
+                        this.downloads_count = count;
+                        cx.notify();
+                    }
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Check cover availability on disk for the manga details inspector off the UI thread.
+    ///
+    /// Monotonically tracks `details_cover_seq` and validates that `selected_book_id` still
+    /// matches before updating cached state.
+    pub(crate) fn check_details_cover(&mut self, book_id: &str, cx: &mut Context<Self>) {
+        if self.is_quitting {
+            return;
+        }
+        if self.details_cover_checked.as_deref() == Some(book_id) {
+            return;
+        }
+        self.details_cover_checked = Some(book_id.to_string());
+        self.details_cover_available = true;
+        self.details_cover_seq += 1;
+        let seq = self.details_cover_seq;
+        let book_id = book_id.to_string();
+        let cover_path = self.dirs.cover(&book_id);
+        cx.spawn(async move |this, cx| {
+            let exists = cx
+                .background_executor()
+                .spawn(async move { cover_path.exists() })
+                .await;
+            let _ = this
+                .update(cx, |this, cx| {
+                    if this.details_cover_seq == seq
+                        && this.selected_book_id.as_deref() == Some(&book_id)
+                        && !this.is_quitting
+                        && this.details_cover_available != exists
+                    {
+                        this.details_cover_available = exists;
+                        cx.notify();
+                    }
+                })
+                .ok();
+        })
+        .detach();
     }
 
     pub fn activate_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -413,7 +506,10 @@ impl Yomu {
                     ui::sidebar::SidebarSection::AllManga => ui::sidebar::MainView::AllManga,
                     ui::sidebar::SidebarSection::Collections => ui::sidebar::MainView::Collections,
                     ui::sidebar::SidebarSection::History => ui::sidebar::MainView::History,
-                    ui::sidebar::SidebarSection::Downloads => ui::sidebar::MainView::Downloads,
+                    ui::sidebar::SidebarSection::Downloads => {
+                        self.refresh_downloads_count(cx);
+                        ui::sidebar::MainView::Downloads
+                    }
                 };
             }
             NavDestination::Group { key, .. } => {
@@ -424,6 +520,7 @@ impl Yomu {
             NavDestination::Details(id) => {
                 self.selected_book_id = Some(id.clone());
                 self.active_view = ui::sidebar::MainView::Details(id.clone());
+                self.check_details_cover(id, cx);
             }
         }
         self.library_scroll_controller.reset();

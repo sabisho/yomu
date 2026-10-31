@@ -62,17 +62,25 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ## ⚡ Phase 3: Performance & Scalability
 
-### 6. Constant-Time Library Item Lookups
+### 6. Elimination of Synchronous Filesystem Checks from UI Rendering (Phase 3.1 — Completed)
+- **Goal:** Remove per-book filesystem `stat` calls from hot UI render paths.
+- **Status:** Completed.
+  - Eliminated per-book `b.path.exists()` full-library scan from `render_two_pane_shell`, replacing it with cached `self.downloads_count` backed by asynchronous background calculation (`refresh_downloads_count`) and monotonic sequence tracking (`downloads_seq`).
+  - Integrated cache invalidation across imports, single/bulk removals, clear all data, startup initialization, and Downloads view navigation.
+  - Eliminated synchronous `props.cover_path.exists()` check from `ui::details::render_manga_details`, adding `cover_available: bool` to `MangaDetailsProps` driven by asynchronous background check (`check_details_cover`) with stale-result protection on book change (`details_cover_seq` and `selected_book_id` match).
+  - Added 4 regression UI integration tests covering downloads count correctness, cache invalidation on mutations, stale async result protection, missing cover fallback behavior, and rapid book selection changes (245 active tests passing: 106 lib, 139 bin).
+
+### 7. Constant-Time Library Item Lookups
 - **Goal:** Eliminate $O(N^2)$ linear comparisons during library rendering.
 - **Remediation:**
   - Index `Library` items using standard library `HashMap<String, usize>` or ordered index without introducing unnecessary crates.
 
-### 7. Background Persistence Zero-Copy Snapshots
+### 8. Background Persistence Zero-Copy Snapshots
 - **Goal:** Eliminate deep-cloning entire `Library` vectors during debounced autosave.
 - **Remediation:**
   - Pass lightweight serialization diffs or immutable snapshots to background write threads.
 
-### 8. Dependency & Vendor Hygiene
+### 9. Dependency & Vendor Hygiene
 - **Goal:** Reduce repository footprint and simplify upstream maintenance.
 - **Remediation:**
   - Remove dead dependency `memmap2` from `Cargo.toml`.

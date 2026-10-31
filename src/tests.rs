@@ -3820,3 +3820,174 @@ fn prefetch_cancellation_race_condition_does_not_clobber_new_task(cx: &mut TestA
         assert!(!r.failed.contains_key(&3));
     });
 }
+
+#[gpui_kit::test]
+fn test_downloads_count_cached_and_invalidated_on_mutations(cx: &mut TestAppContext) {
+    let fx = fixture("downloads-count");
+    let (view, cx) = launch(&fx, cx);
+    cx.run_until_parked();
+
+    // 1. Initial cached downloads count equals 3 (all 3 fixture files exist on disk)
+    let initial = view.read_with(cx, |this, _| this.downloads_count);
+    assert_eq!(initial, 3, "initially all 3 books exist on disk");
+
+    // 2. Delete one file from disk externally and trigger a refresh (e.g. entering Downloads section)
+    let _ = std::fs::remove_file(&fx.files[2]);
+    view.update(cx, |this, cx| {
+        this.refresh_downloads_count(cx);
+    });
+    cx.run_until_parked();
+
+    let after_disk_delete = view.read_with(cx, |this, _| this.downloads_count);
+    assert_eq!(
+        after_disk_delete, 2,
+        "count must reflect deleted file after refresh"
+    );
+
+    // 3. Remove a book from the library via UI action
+    let id_to_remove = fx.ids[0].clone();
+    view.update(cx, |this, cx| {
+        this.remove_book(&id_to_remove, cx);
+    });
+    cx.run_until_parked();
+
+    let after_ui_remove = view.read_with(cx, |this, _| this.downloads_count);
+    assert_eq!(
+        after_ui_remove, 1,
+        "count must decrement after book removal"
+    );
+
+    // 4. Clear all data
+    view.update(cx, |this, cx| {
+        this.clear_all_data(cx);
+    });
+    cx.run_until_parked();
+
+    let after_clear = view.read_with(cx, |this, _| this.downloads_count);
+    assert_eq!(
+        after_clear, 0,
+        "count must be 0 after clearing library data"
+    );
+}
+
+#[gpui_kit::test]
+fn test_downloads_count_stale_async_protection(cx: &mut TestAppContext) {
+    let fx = fixture("downloads-stale");
+    let (view, cx) = launch(&fx, cx);
+    cx.run_until_parked();
+
+    assert_eq!(view.read_with(cx, |this, _| this.downloads_count), 3);
+
+    // Simulate a background refresh task that was superseded by a newer sequence
+    view.update(cx, |this, cx| {
+        this.refresh_downloads_count(cx);
+        // Artificially advance the sequence before the background task completes
+        this.downloads_seq += 5;
+        this.downloads_count = 42;
+    });
+    cx.run_until_parked();
+
+    // The stale in-flight task (which computed 3) must NOT clobber the newer state (42)
+    let final_count = view.read_with(cx, |this, _| this.downloads_count);
+    assert_eq!(
+        final_count, 42,
+        "stale async result must not overwrite newer sequence"
+    );
+}
+
+#[gpui_kit::test]
+fn test_details_cover_availability_and_fallback(cx: &mut TestAppContext) {
+    let fx = fixture("details-cover");
+    let (view, cx) = launch(&fx, cx);
+    cx.run_until_parked();
+
+    let book_with_cover = fx.ids[0].clone();
+    let book_without_cover = fx.ids[1].clone();
+
+    // Ensure cover exists for book 0
+    assert!(fx.dirs.cover(&book_with_cover).exists());
+
+    // Delete cover files for book 1 to test missing cover fallback
+    let cover_1 = fx.dirs.cover(&book_without_cover);
+    let _ = std::fs::remove_file(&cover_1);
+    let legacy_1 = fx
+        .dirs
+        .root()
+        .join("covers")
+        .join(format!("{book_without_cover}.jpg"));
+    let _ = std::fs::remove_file(&legacy_1);
+    assert!(!fx.dirs.cover(&book_without_cover).exists());
+
+    // Navigate to Details for book with cover
+    view.update(cx, |this, cx| {
+        this.navigate_to(ui::sidebar::MainView::Details(book_with_cover.clone()), cx);
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.selected_book_id.as_deref(),
+            Some(book_with_cover.as_str())
+        );
+        assert!(
+            this.details_cover_available,
+            "cover must be reported as available"
+        );
+    });
+
+    // Navigate to Details for book without cover
+    view.update(cx, |this, cx| {
+        this.navigate_to(
+            ui::sidebar::MainView::Details(book_without_cover.clone()),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.selected_book_id.as_deref(),
+            Some(book_without_cover.as_str())
+        );
+        assert!(
+            !this.details_cover_available,
+            "missing cover must report available = false for fallback presentation"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn test_details_cover_stale_result_protection_on_book_change(cx: &mut TestAppContext) {
+    let fx = fixture("details-stale");
+    let (view, cx) = launch(&fx, cx);
+    cx.run_until_parked();
+
+    let book_a = fx.ids[0].clone();
+    let book_b = fx.ids[1].clone();
+
+    // Delete cover for book A so its background check will yield false
+    let cover_a = fx.dirs.cover(&book_a);
+    let _ = std::fs::remove_file(&cover_a);
+    let legacy_a = fx.dirs.root().join("covers").join(format!("{book_a}.jpg"));
+    let _ = std::fs::remove_file(&legacy_a);
+    assert!(!fx.dirs.cover(&book_a).exists());
+
+    // Book B retains its cover (exists = true)
+    assert!(fx.dirs.cover(&book_b).exists());
+
+    view.update(cx, |this, cx| {
+        // First navigate to book A (kicking off check for A)
+        this.navigate_to(ui::sidebar::MainView::Details(book_a.clone()), cx);
+        // Immediately switch to book B before background tasks complete
+        this.navigate_to(ui::sidebar::MainView::Details(book_b.clone()), cx);
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.selected_book_id.as_deref(), Some(book_b.as_str()));
+        assert!(
+            this.details_cover_available,
+            "book A's missing cover must not overwrite book B's valid cover"
+        );
+    });
+}

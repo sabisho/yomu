@@ -314,6 +314,10 @@ impl Yomu {
         let size = self.library.settings().thumbnail_size;
         let library = self.library.clone();
         let dirs = Arc::clone(&self.dirs);
+        self.details_cover_checked = None;
+        if let Some(id) = self.selected_book_id.clone() {
+            self.check_details_cover(&id, cx);
+        }
         cx.background_executor()
             .spawn(async move {
                 let _ = dirs.clear_covers();
@@ -344,6 +348,11 @@ impl Yomu {
         self.open_group = None;
         self.group_scroll.set_offset(Point::default());
         self.library.clear_all_data();
+        self.downloads_count = 0;
+        self.downloads_seq += 1;
+        self.details_cover_checked = None;
+        self.details_cover_available = false;
+        self.details_cover_seq += 1;
         let dirs = Arc::clone(&self.dirs);
         cx.background_executor()
             .spawn(async move {
@@ -671,6 +680,7 @@ impl Yomu {
                                 if this.library.add(book) {
                                     this.save_library(cx);
                                     this.imported_count += 1;
+                                    this.downloads_count += 1;
                                 }
                                 this.importing_title = Some(title);
                                 cx.notify();
@@ -695,6 +705,7 @@ impl Yomu {
                                     this.importing_title = None;
                                 }
                                 if !this.is_quitting && !cancel_ui.load(Ordering::Relaxed) {
+                                    this.refresh_downloads_count(cx);
                                     this.show_toast(report.summary(), cx);
                                 }
                             })

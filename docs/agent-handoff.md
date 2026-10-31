@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **239 active tests** passing (106 core library unit tests in `src/lib.rs`, 133 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 242 total).
+- **Test Baseline:** **245 active tests** passing (106 core library unit tests in `src/lib.rs`, 139 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 248 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
@@ -90,8 +90,11 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Maintained `render_reader` in `src/main.rs` as the direct top-level reader branch adapter for `Render for Yomu`.
      - Reduced `src/main.rs` to ~1,250 lines, focused on application startup, root `Render` implementation (frame timing, texture GC, shutdown barrier), and root event listeners.
      - Full test suite passing (241 total active tests: 106 lib, 135 bin).
-   - **Phase 2E (Next):** Remaining Phase 2E structural cleanup and window lifecycle orchestration.
 3. **Phase 3: Scalability & Performance:**
+   - **Phase 3.1 (Completed):** Eliminated synchronous filesystem operations from UI render paths:
+     - Replaced per-book `b.path.exists()` in `render_two_pane_shell` with cached `self.downloads_count` computed on the background executor (`refresh_downloads_count`) with monotonic `downloads_seq` sequence tracking and explicit invalidation upon imports, removals, clear all data, and navigation.
+     - Replaced synchronous `props.cover_path.exists()` in `ui::details::render_manga_details` with cached `cover_available: bool` in `MangaDetailsProps` driven by background executor checks (`check_details_cover`) with stale-result protection on book change (`details_cover_seq` and `selected_book_id` match).
+     - Added 4 UI integration regression tests in `src/tests.rs` (245 active tests passing: 106 lib, 139 bin).
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.
 4. **Phase 4: Dual-Page Spread Reading Mode:**

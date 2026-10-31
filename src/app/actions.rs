@@ -444,6 +444,7 @@ impl Yomu {
         self.library.remove(id, &self.dirs);
         self.prune_selection();
         self.prune_open_group();
+        self.refresh_downloads_count(cx);
         self.save_library(cx);
         self.show_toast(format!("Removed “{title}” from the library"), cx);
     }
@@ -481,6 +482,7 @@ impl Yomu {
             self.selection.remove(id);
         }
         self.prune_open_group();
+        self.refresh_downloads_count(cx);
         self.save_library(cx);
         let message = if ids.len() == 1 {
             "Removed 1 book from the library".to_string()

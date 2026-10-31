@@ -22,6 +22,7 @@ pub struct MangaDetailsProps<'a> {
     pub scroll_handle: &'a ScrollHandle,
     pub book: &'a Book,
     pub cover_path: PathBuf,
+    pub cover_available: bool,
     pub selected_tab: usize,
     pub synopsis_expanded: bool,
     pub colors: UiColors,
@@ -118,7 +119,7 @@ pub fn render_manga_details(
                         .border_1()
                         .border_color(with_alpha(colors.border, 0.6))
                         .bg(with_alpha(colors.surface, 0.4))
-                        .child(if props.cover_path.exists() {
+                        .child(if props.cover_available {
                             img(props.cover_path.clone()).size_full().into_any_element()
                         } else {
                             div()
