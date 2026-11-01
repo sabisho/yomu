@@ -60,6 +60,18 @@ impl UiColors {
             })
             .unwrap_or_else(|| Self::from_tokens(ColorTokens::dark()))
     }
+
+    /// Whether the active theme background is in light mode (luminance >= 0.5).
+    #[inline]
+    pub fn is_light(&self) -> bool {
+        self.background.l >= 0.5
+    }
+
+    /// Whether the active theme background is in dark mode (luminance < 0.5).
+    #[inline]
+    pub fn is_dark(&self) -> bool {
+        self.background.l < 0.5
+    }
 }
 
 #[derive(Debug, Deserialize)]

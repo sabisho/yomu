@@ -7,7 +7,7 @@ use gpui_kit::component::button::{Button, ButtonGroup, ButtonRounded, ButtonVari
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Icon, Selectable, Sizable, Size};
+use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::gpui::Anchor;
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -15,7 +15,10 @@ use gpui_kit::{
     Window, div, px,
 };
 
-use super::components::{open_shortcut_str, with_alpha};
+use super::components::{
+    CONTROL_HEIGHT_TOOLBAR, ICON_SIZE_COMPACT, SPACE_2XS, TOOLBAR_HEIGHT, button_radius,
+    inner_radius, open_shortcut_str, segmented_button, toolbar_icon_button, with_alpha,
+};
 use super::theme::UiColors;
 use yomu::library::{SortBy, SortDirection};
 
@@ -60,10 +63,10 @@ pub fn render_main_toolbar(
     let on_import_files = std::rc::Rc::new(on_import_files);
     let on_import_folder = std::rc::Rc::new(on_import_folder);
     let colors = props.colors;
-    let button_radius = px(f32::from(props.radius).min(7.0));
+    let button_radius = button_radius(props.radius, CONTROL_HEIGHT_TOOLBAR);
 
     div()
-        .h(px(52.))
+        .h(TOOLBAR_HEIGHT)
         .flex_shrink_0()
         .w_full()
         .px_4()
@@ -85,27 +88,23 @@ pub fn render_main_toolbar(
                 .flex()
                 .items_center()
                 .gap_1p5()
-                .child(
-                    Button::new("toolbar-sidebar-toggle")
-                        .ghost()
-                        .with_size(Size::Size(px(28.)))
-                        .rounded(ButtonRounded::Size(button_radius))
-                        .tooltip("Toggle sidebar")
-                        .icon(IconName::PanelLeft)
-                        .on_click(on_toggle_sidebar),
-                )
+                .child(toolbar_icon_button(
+                    "toolbar-sidebar-toggle",
+                    IconName::PanelLeft,
+                    "Toggle sidebar",
+                    props.radius,
+                    on_toggle_sidebar,
+                ))
                 .when(props.can_go_back, |this| {
-                    this.child(
-                        div().debug_selector(|| "group-back".into()).child(
-                            Button::new("group-back")
-                                .ghost()
-                                .with_size(Size::Size(px(28.)))
-                                .rounded(ButtonRounded::Size(button_radius))
-                                .tooltip("Back to library")
-                                .icon(IconName::ChevronLeft)
-                                .on_click(on_back),
+                    this.child(div().debug_selector(|| "group-back".into()).child(
+                        toolbar_icon_button(
+                            "group-back",
+                            IconName::ChevronLeft,
+                            "Back to library",
+                            props.radius,
+                            on_back,
                         ),
-                    )
+                    ))
                 }),
         )
         // Center: Search input (adaptive, flexible, centered in available space)
@@ -135,7 +134,7 @@ pub fn render_main_toolbar(
                                         .cleanable(true)
                                         .bordered(false)
                                         .focus_bordered(false)
-                                        .prefix(Icon::new(IconName::Search).size(px(14.)))
+                                        .prefix(Icon::new(IconName::Search).size(ICON_SIZE_COMPACT))
                                         .suffix(Kbd::new(
                                             Keystroke::parse(if cfg!(target_os = "macos") {
                                                 "cmd-k"
@@ -213,87 +212,76 @@ pub fn render_main_toolbar(
                     this
                         // 1. Folder Grouping switch: Folders vs Individual Volumes
                         .when(props.show_grouping, |this| {
-                            let inner_radius = px((f32::from(props.radius) - 2.0).max(2.0));
+                            let inner_r = inner_radius(props.radius, SPACE_2XS);
                             this.child(
                                 ButtonGroup::new("toolbar-grouping-segmented")
-                                    .h(px(28.))
+                                    .h(CONTROL_HEIGHT_TOOLBAR)
                                     .items_center()
                                     .bg(with_alpha(colors.surface, 0.6))
                                     .border_1()
                                     .border_color(colors.border)
                                     .rounded(props.radius)
-                                    .p(px(2.))
-                                    .child(
-                                        Button::new("toolbar-group-folders-toggle")
-                                            .ghost()
-                                            .with_size(Size::Size(px(24.)))
-                                            .rounded(ButtonRounded::Size(inner_radius))
-                                            .tooltip("Group by series folders")
-                                            .selected(props.is_group_series)
-                                            .icon(IconName::Folder)
-                                            .on_click({
-                                                let on_toggle = on_toggle_group_series.clone();
-                                                move |_, window, cx| on_toggle(true, window, cx)
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("toolbar-group-volumes-toggle")
-                                            .ghost()
-                                            .with_size(Size::Size(px(24.)))
-                                            .rounded(ButtonRounded::Size(inner_radius))
-                                            .tooltip("Show individual volumes")
-                                            .selected(!props.is_group_series)
-                                            .icon(IconName::BookOpen)
-                                            .on_click({
-                                                let on_toggle = on_toggle_group_series.clone();
-                                                move |_, window, cx| on_toggle(false, window, cx)
-                                            }),
-                                    ),
+                                    .p(SPACE_2XS)
+                                    .child(segmented_button(
+                                        "toolbar-group-folders-toggle",
+                                        IconName::Folder,
+                                        "Group by series folders",
+                                        props.is_group_series,
+                                        inner_r,
+                                        {
+                                            let on_toggle = on_toggle_group_series.clone();
+                                            move |_, window, cx| on_toggle(true, window, cx)
+                                        },
+                                    ))
+                                    .child(segmented_button(
+                                        "toolbar-group-volumes-toggle",
+                                        IconName::BookOpen,
+                                        "Show individual volumes",
+                                        !props.is_group_series,
+                                        inner_r,
+                                        {
+                                            let on_toggle = on_toggle_group_series.clone();
+                                            move |_, window, cx| on_toggle(false, window, cx)
+                                        },
+                                    )),
                             )
                         })
                         // 2. View Mode switch: Grid vs List
                         .when(props.show_view_switches, |this| {
-                            let inner_radius = px((f32::from(props.radius) - 2.0).max(2.0));
+                            let inner_r = inner_radius(props.radius, SPACE_2XS);
                             this.child(
                                 ButtonGroup::new("toolbar-viewmode-segmented")
-                                    .h(px(28.))
+                                    .h(CONTROL_HEIGHT_TOOLBAR)
                                     .items_center()
                                     .bg(with_alpha(colors.surface, 0.6))
                                     .border_1()
                                     .border_color(colors.border)
                                     .rounded(props.radius)
-                                    .p(px(2.))
-                                    .child(
-                                        Button::new("view-mode-grid-toggle")
-                                            .ghost()
-                                            .with_size(Size::Size(px(24.)))
-                                            .rounded(ButtonRounded::Size(inner_radius))
-                                            .tooltip("Grid view")
-                                            .selected(props.is_grid_mode)
-                                            .icon(IconName::LayoutGrid)
-                                            .on_click({
-                                                let on_toggle_grid = on_toggle_grid.clone();
-                                                move |_, window, cx| {
-                                                    on_toggle_grid(true, window, cx)
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("view-mode-list-toggle")
-                                            .ghost()
-                                            .with_size(Size::Size(px(24.)))
-                                            .rounded(ButtonRounded::Size(inner_radius))
-                                            .tooltip("List view")
-                                            .selected(!props.is_grid_mode)
-                                            .icon(IconName::List)
-                                            .on_click({
-                                                let on_toggle_grid_false =
-                                                    on_toggle_grid_false.clone();
-                                                move |_, window, cx| {
-                                                    on_toggle_grid_false(false, window, cx)
-                                                }
-                                            }),
-                                    ),
+                                    .p(SPACE_2XS)
+                                    .child(segmented_button(
+                                        "view-mode-grid-toggle",
+                                        IconName::LayoutGrid,
+                                        "Grid view",
+                                        props.is_grid_mode,
+                                        inner_r,
+                                        {
+                                            let on_toggle_grid = on_toggle_grid.clone();
+                                            move |_, window, cx| on_toggle_grid(true, window, cx)
+                                        },
+                                    ))
+                                    .child(segmented_button(
+                                        "view-mode-list-toggle",
+                                        IconName::List,
+                                        "List view",
+                                        !props.is_grid_mode,
+                                        inner_r,
+                                        {
+                                            let on_toggle_grid_false = on_toggle_grid_false.clone();
+                                            move |_, window, cx| {
+                                                on_toggle_grid_false(false, window, cx)
+                                            }
+                                        },
+                                    )),
                             )
                         })
                         // 3. Sort Dropdown
@@ -301,7 +289,6 @@ pub fn render_main_toolbar(
                             let on_change_sort = on_change_sort.clone();
                             let current_by = props.sort_by;
                             let current_dir = props.sort_direction;
-                            let button_radius = px(f32::from(props.radius).min(7.0));
                             let is_custom_sorted = current_by != SortBy::Default
                                 || current_dir != SortDirection::Ascending;
                             this.child(
@@ -309,7 +296,7 @@ pub fn render_main_toolbar(
                                     Button::new("toolbar-sort")
                                         .icon(IconName::ArrowUpDown)
                                         .ghost()
-                                        .with_size(Size::Size(px(28.)))
+                                        .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                         .rounded(ButtonRounded::Size(button_radius))
                                         .border_1()
                                         .border_color(if is_custom_sorted {
@@ -383,15 +370,12 @@ pub fn render_main_toolbar(
                         .when(props.show_import, |this| {
                             let on_import_files = on_import_files.clone();
                             let on_import_folder = on_import_folder.clone();
-                            // Clamping radius to 7.0px (25% of 28px) preserves the rounded-square
-                            // geometry and prevents degenerating into a circular disc under large/pill radii.
-                            let button_radius = px(f32::from(props.radius).min(7.0));
                             this.child(
                                 div().debug_selector(|| "add-files".into()).child(
                                     Button::new("add-files")
                                         .icon(IconName::Plus)
                                         .ghost()
-                                        .with_size(Size::Size(px(28.)))
+                                        .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                         .rounded(ButtonRounded::Size(button_radius))
                                         .border_1()
                                         .border_color(colors.border)

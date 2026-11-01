@@ -10,7 +10,10 @@ use gpui_kit::{
     Styled, Window, div, px,
 };
 
-use super::components::{macos_sidebar_bg, settings_shortcut_str, stat_badge, with_alpha};
+use super::components::{
+    CONTROL_HEIGHT_TOOLBAR, TOOLBAR_HEIGHT, button_radius, macos_sidebar_bg, settings_shortcut_str,
+    stat_badge, with_alpha,
+};
 use super::theme::UiColors;
 
 #[allow(dead_code)]
@@ -130,7 +133,7 @@ pub fn render_sidebar(
         // Top Header: App Brand "Yomu" (offset on macOS for native traffic lights)
         .child(
             div()
-                .h(px(52.))
+                .h(TOOLBAR_HEIGHT)
                 .w_full()
                 .when(cfg!(target_os = "macos"), |s| s.pl(px(80.)))
                 .when(!cfg!(target_os = "macos"), |s| s.px_4())
@@ -208,8 +211,11 @@ pub fn render_sidebar(
             div().p_3().flex().items_center().justify_end().child(
                 Button::new("sidebar-settings-btn")
                     .ghost()
-                    .with_size(Size::Size(px(28.)))
-                    .rounded(ButtonRounded::Size(props.radius))
+                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                    .rounded(ButtonRounded::Size(button_radius(
+                        props.radius,
+                        CONTROL_HEIGHT_TOOLBAR,
+                    )))
                     .tooltip(format!("Settings ({})", settings_shortcut_str()))
                     .icon(IconName::Settings)
                     .on_click(on_settings),

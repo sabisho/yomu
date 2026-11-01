@@ -33,7 +33,7 @@ use yomu::{
     vim::Vim,
 };
 
-use super::components::{centered, pill, with_alpha};
+use super::components::{TOOLBAR_HEIGHT, centered, pill, with_alpha};
 use super::theme::UiColors;
 
 pub fn viewport_of(window: &Window) -> Viewport {
@@ -217,7 +217,7 @@ pub fn reader_header(
                 .group_hover("reader-top", |s| s.opacity(1.0))
                 .opacity(0.0)
                 .w_full()
-                .h(px(52.))
+                .h(TOOLBAR_HEIGHT)
                 .px_4()
                 .bg(with_alpha(colors.background, 0.92))
                 .border_b_1()
