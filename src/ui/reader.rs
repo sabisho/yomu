@@ -247,6 +247,8 @@ pub fn reader_header(
                                 .text_sm()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(colors.foreground)
+                                .truncate()
+                                .max_w(px(320.))
                                 .child(book_title),
                         ),
                 )
@@ -629,12 +631,20 @@ pub fn render_reader(
                 } else if reader.outgoing.is_none() {
                     let failed_left = reader.failed.get(&left_idx);
                     let failed_right = reader.failed.get(&right_idx);
-                    if let Some(err) = failed_left.or(failed_right) {
+                    if let Some(err) = failed_left {
                         content.push(centered(
-                            format!("Couldn't decode page: {err}"),
+                            format!("Couldn't decode page {}: {err}", left_idx + 1),
                             props.colors,
                         ));
-                    } else if reader.pages.is_none() {
+                    } else if let Some(err) = failed_right {
+                        content.push(centered(
+                            format!("Couldn't decode page {}: {err}", right_idx + 1),
+                            props.colors,
+                        ));
+                    } else if reader.pages.is_none()
+                        || (!reader.images.contains_key(&left_idx)
+                            || !reader.images.contains_key(&right_idx))
+                    {
                         content.push(centered("Opening…", props.colors));
                     }
                 }
@@ -651,7 +661,7 @@ pub fn render_reader(
                             format!("Couldn't decode page {}: {error}", single_idx + 1),
                             props.colors,
                         ));
-                    } else if reader.pages.is_none() {
+                    } else if reader.pages.is_none() || !reader.images.contains_key(&single_idx) {
                         content.push(centered("Opening…", props.colors));
                     }
                 }
@@ -660,19 +670,25 @@ pub fn render_reader(
             let display = layout::display_size(reader.fit, reader.zoom, Reader::orig_of(page), &vp);
             let (left, top) = layout::origin(reader.off, display, &vp);
             content.push(page_layer(&page.image, left + shift_in, top, display));
+        } else if reader.total == 0 && reader.pages.is_some() {
+            content.push(centered("No pages found in archive", props.colors));
         } else if reader.outgoing.is_none() {
             if let Some(error) = reader.failed.get(&reader.page) {
                 content.push(centered(
                     format!("Couldn't decode page {}: {error}", reader.page + 1),
                     props.colors,
                 ));
-            } else if reader.pages.is_none() {
+            } else if reader.pages.is_none() || !reader.images.contains_key(&reader.page) {
                 content.push(centered("Opening…", props.colors));
             }
         }
     }
 
-    let fraction = (reader.page + 1) as f32 / reader.total.max(1) as f32;
+    let fraction = if reader.total == 0 {
+        0.0
+    } else {
+        (reader.page + 1) as f32 / reader.total as f32
+    };
     let progress_line = reader_progress_bar(fraction, props.colors.accent);
 
     let info = reader.show_info.then(|| {
@@ -790,8 +806,9 @@ pub fn render_reader(
         .children(hud)
         .children(vim_status)
         .child(top_bar)
-        .child(left_chevron)
-        .child(right_chevron)
+        .when(!reader.continuous, |this| {
+            this.child(left_chevron).child(right_chevron)
+        })
         .children(reader.show_help.then(|| {
             super::overlays::help_overlay(props.colors, props.border_px, props.radius_xl_px)
         }))
@@ -942,6 +959,9 @@ impl Reader {
 
     /// Formatted page counter string (e.g. "2 / 10" in single-page/fallback or "2–3 / 10" in double-page spread).
     pub fn current_page_str(&self) -> SharedString {
+        if self.total == 0 {
+            return SharedString::from("0 / 0");
+        }
         if self.is_double_page_active() {
             let spread = self.active_spread();
             match spread.secondary {
@@ -1625,5 +1645,35 @@ mod tests {
             bar.style().background,
             Some(gpui_kit::Fill::Color(accent.into()))
         );
+    }
+
+    #[test]
+    fn test_empty_archive_page_counter_and_fraction() {
+        let book = Book {
+            id: "empty".into(),
+            title: "Empty Book".into(),
+            series: None,
+            path: PathBuf::from("/nonexistent/empty.cbz"),
+            kind: SourceKind::Archive,
+            page_count: 0,
+            current_page: 0,
+            opened: true,
+            added_at: 1,
+            last_read: None,
+            marks: BTreeMap::new(),
+            spread_overrides: BTreeMap::new(),
+            page_dimensions: BTreeMap::new(),
+        };
+        let settings = Settings::default();
+        let reader = Reader::new(&book, &settings);
+        assert_eq!(reader.total, 0);
+        assert_eq!(reader.current_page_str().as_ref(), "0 / 0");
+
+        let fraction = if reader.total == 0 {
+            0.0
+        } else {
+            (reader.page as f32) / ((reader.total - 1).max(1) as f32)
+        };
+        assert_eq!(fraction, 0.0);
     }
 }

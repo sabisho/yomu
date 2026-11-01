@@ -536,6 +536,38 @@ impl Yomu {
             Action::SetContinuous(value) => self.set_continuous(value, cx),
             Action::SetWebcomics(value) => self.set_webcomics(value, cx),
             Action::SetRememberZoom(value) => self.set_remember_zoom(value, cx),
+            Action::SetDoublePage(value) => {
+                let next = match value {
+                    Some(true) => yomu::layout::PageLayout::Double,
+                    Some(false) => yomu::layout::PageLayout::Single,
+                    None => {
+                        let cur = self
+                            .reader
+                            .as_ref()
+                            .map(|r| r.page_layout)
+                            .unwrap_or_else(|| self.library.settings().page_layout);
+                        cur.toggle()
+                    }
+                };
+                self.set_page_layout(next, cx);
+            }
+            Action::CycleSpreadOverride => {
+                if let Some(reader) = self.reader.as_ref() {
+                    let cur = reader.current_spread_override();
+                    let next = match cur {
+                        yomu::library::PageSpreadOverride::Auto => {
+                            yomu::library::PageSpreadOverride::ForceSpread
+                        }
+                        yomu::library::PageSpreadOverride::ForceSpread => {
+                            yomu::library::PageSpreadOverride::ForceSingle
+                        }
+                        yomu::library::PageSpreadOverride::ForceSingle => {
+                            yomu::library::PageSpreadOverride::Auto
+                        }
+                    };
+                    self.set_page_spread_override(next, cx);
+                }
+            }
             Action::ToggleInfo => {
                 if let Some(reader) = self.reader.as_mut() {
                     reader.show_info = !reader.show_info;

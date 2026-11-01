@@ -964,6 +964,8 @@ fn render_tab_shortcuts(colors: UiColors, vim_mode: bool) -> Div {
     }
     shortcuts.push(("Toggle Continuous Vertical", "v".to_string()));
     shortcuts.push(("Toggle Webcomics Mode", "w".to_string()));
+    shortcuts.push(("Toggle Double Page", "d".to_string()));
+    shortcuts.push(("Cycle Spread Override", "s".to_string()));
     if vim_mode {
         shortcuts.push(("Zoom In / Out", format!("{zoom_sc} or zi / zo")));
         shortcuts.push(("Reset Zoom", "0 or z0".to_string()));

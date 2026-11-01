@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **289 active tests** passing (131 core library unit tests in `src/lib.rs`, 158 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 292 total).
+- **Test Baseline:** **294 active tests** passing (131 core library unit tests in `src/lib.rs`, 163 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 297 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---

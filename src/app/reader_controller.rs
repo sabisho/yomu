@@ -467,6 +467,47 @@ impl Yomu {
                 reader.off = reader.scroll_target;
                 reader.cancel_transition();
                 format!("continuous · {}%", (zoom * 100.0).round() as i32)
+            } else if reader.is_double_page_active() {
+                let vis = reader.active_visual_spread();
+                let zoom = layout::clamp_zoom(zoom);
+                let (new_display, new_spread_size) =
+                    if let (Some(left_idx), Some(right_idx)) = (vis.left_page, vis.right_page) {
+                        if let (Some(left_page), Some(right_page)) =
+                            (reader.images.get(&left_idx), reader.images.get(&right_idx))
+                        {
+                            let (ld, rd) = layout::spread_display_sizes(
+                                reader.fit,
+                                zoom,
+                                Reader::orig_of(left_page),
+                                Reader::orig_of(right_page),
+                                layout::SPREAD_GAP,
+                                &vp,
+                            );
+                            let spread_sz = (ld.0 + layout::SPREAD_GAP + rd.0, ld.1.max(rd.1));
+                            (spread_sz, spread_sz)
+                        } else {
+                            return;
+                        }
+                    } else {
+                        let single_idx = vis.left_page.or(vis.right_page).unwrap_or(reader.page);
+                        if let Some(page) = reader.images.get(&single_idx) {
+                            let orig = Reader::orig_of(page);
+                            let disp = layout::display_size(reader.fit, zoom, orig, &vp);
+                            (disp, disp)
+                        } else {
+                            return;
+                        }
+                    };
+                let old_origin = layout::origin(reader.off, old_display, &vp);
+                let off = layout::zoom_anchor_offset(old_origin, old_display, new_display, anchor);
+                reader.cancel_transition();
+                reader.zoom = zoom;
+                reader.set_scroll(layout::clamp_offset(off, new_spread_size, &vp));
+                format!(
+                    "{} · {}%",
+                    reader.fit.label(),
+                    (zoom * 100.0).round() as i32
+                )
             } else {
                 let Some(orig) = reader.current().map(Reader::orig_of) else {
                     return;
@@ -1263,6 +1304,7 @@ impl Yomu {
             reader.rebuild_spread_plan();
             reader.cancel_transition();
             reader.arrive = Some(Arrive::Start);
+            self.show_hud(layout.label(), cx);
         }
         self.save_library_debounced(cx);
         self.wake();
@@ -1278,6 +1320,7 @@ impl Yomu {
             reader.reading_direction = dir;
             reader.cancel_transition();
             reader.arrive = Some(Arrive::Start);
+            self.show_hud(dir.label(), cx);
         }
         self.save_library_debounced(cx);
         self.wake();
@@ -1294,6 +1337,14 @@ impl Yomu {
             reader.rebuild_spread_plan();
             reader.cancel_transition();
             reader.arrive = Some(Arrive::Start);
+            self.show_hud(
+                if first_page_is_cover {
+                    "First Page as Cover: On"
+                } else {
+                    "First Page as Cover: Off"
+                },
+                cx,
+            );
         }
         self.save_library_debounced(cx);
         self.wake();
@@ -1337,6 +1388,12 @@ impl Yomu {
                 book.spread_overrides.insert(name.clone(), override_mode);
             }
         }
+        let msg = match override_mode {
+            yomu::library::PageSpreadOverride::Auto => "Spread: Auto Detection",
+            yomu::library::PageSpreadOverride::ForceSpread => "Spread: Force Spread",
+            yomu::library::PageSpreadOverride::ForceSingle => "Spread: Force Single",
+        };
+        self.show_hud(msg, cx);
         self.save_library_debounced(cx);
         self.wake();
         cx.notify();

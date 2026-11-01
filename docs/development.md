@@ -56,10 +56,10 @@ cargo clippy --all-targets -- -D warnings
 # 4. Run core library unit tests (131 tests)
 cargo test --lib
 
-# 5. Run binary-target UI tests (158 tests)
+# 5. Run binary-target UI tests (163 tests)
 cargo test --bin yomu
 
-# 6. Run all active tests across targets (289 tests)
+# 6. Run all active tests across targets (294 tests)
 cargo test
 
 # 7. Run opt-in performance benchmarks

@@ -53,6 +53,10 @@ pub enum Action {
     SetWebcomics(Option<bool>),
     /// `None` toggles whether custom zoom is retained across books and sessions.
     SetRememberZoom(Option<bool>),
+    /// `None` toggles double-page spread mode.
+    SetDoublePage(Option<bool>),
+    /// Cycles spread override for current page.
+    CycleSpreadOverride,
     ToggleInfo,
     ToggleHelp,
     ToggleFullscreen,
@@ -229,6 +233,7 @@ impl Vim {
             }
             "v" => vec![Action::SetContinuous(None)],
             "w" => vec![Action::SetWebcomics(None)],
+            "d" => vec![Action::SetDoublePage(None)],
             "i" => vec![Action::ToggleInfo],
             "?" => vec![Action::ToggleHelp],
             "f" => vec![Action::ToggleFullscreen],
@@ -247,12 +252,14 @@ impl Vim {
             (Prefix::Z, "o") => vec![Action::ZoomOut(count.unwrap_or(1))],
             (Prefix::Z, "0") => vec![Action::ZoomReset],
             (Prefix::Z, "p" | "a") => vec![Action::Fit(FitMode::Page)],
-            (Prefix::Z, "w" | "s") => vec![Action::Fit(FitMode::Width)],
+            (Prefix::Z, "w") => vec![Action::Fit(FitMode::Width)],
             (Prefix::Z, "h") => vec![Action::Fit(FitMode::Height)],
             (Prefix::Z, "1") => vec![Action::Fit(FitMode::Original)],
             (Prefix::Z, "t") => vec![Action::ScrollTop],
             (Prefix::Z, "b") => vec![Action::ScrollBottom],
             (Prefix::Z, "z") => vec![Action::ScrollCenter],
+            (Prefix::Z, "d") => vec![Action::SetDoublePage(None)],
+            (Prefix::Z, "s") => vec![Action::CycleSpreadOverride],
             (Prefix::Mark, key) => match single_char(key) {
                 Some(c) if c.is_alphabetic() => vec![Action::SetMark(c)],
                 _ => vec![],
@@ -381,6 +388,11 @@ pub fn parse_command(line: &str) -> Vec<Action> {
         ("webcomics" | "webcomic", Some("off" | "false" | "0" | "no")) => {
             vec![Action::SetWebcomics(Some(false))]
         }
+        ("double" | "doublepage" | "spread", None) => vec![Action::SetDoublePage(Some(true))],
+        ("single" | "singlepage", None) => vec![Action::SetDoublePage(Some(false))],
+        ("layout", None) => vec![Action::SetDoublePage(None)],
+        ("layout", Some("double" | "spread" | "2")) => vec![Action::SetDoublePage(Some(true))],
+        ("layout", Some("single" | "1")) => vec![Action::SetDoublePage(Some(false))],
         ("remember-zoom" | "rememberzoom" | "retain-zoom", None) => {
             vec![Action::SetRememberZoom(None)]
         }
@@ -519,6 +531,18 @@ mod tests {
         );
         assert_eq!(feed_all(&mut vim, &["+"]), vec![Action::ZoomIn(1)]);
         assert_eq!(feed_all(&mut vim, &["-"]), vec![Action::ZoomOut(1)]);
+        assert_eq!(
+            feed_all(&mut vim, &["d"]),
+            vec![Action::SetDoublePage(None)]
+        );
+        assert_eq!(
+            feed_all(&mut vim, &["z", "d"]),
+            vec![Action::SetDoublePage(None)]
+        );
+        assert_eq!(
+            feed_all(&mut vim, &["z", "s"]),
+            vec![Action::CycleSpreadOverride]
+        );
     }
 
     #[test]
@@ -609,6 +633,15 @@ mod tests {
             parse_command("animations on"),
             vec![Action::SetAnimations(Some(true))]
         );
+        assert_eq!(
+            parse_command("double"),
+            vec![Action::SetDoublePage(Some(true))]
+        );
+        assert_eq!(
+            parse_command("single"),
+            vec![Action::SetDoublePage(Some(false))]
+        );
+        assert_eq!(parse_command("layout"), vec![Action::SetDoublePage(None)]);
         assert!(matches!(
             parse_command("animate maybe").as_slice(),
             [Action::Message(_)]

@@ -829,6 +829,9 @@ pub fn command_suggestions(
         ("animate", "Toggle page animations"),
         ("continuous", "Toggle continuous scrolling"),
         ("webcomics", "Toggle gapless webcomics mode"),
+        ("double", "Switch to dual-page spread mode"),
+        ("single", "Switch to single-page mode"),
+        ("layout", "Toggle single / double page layout"),
         ("remember-zoom", "Toggle retaining zoom across books"),
         ("theme", "Change color theme"),
         ("goto", "Jump to a page number"),
@@ -1123,9 +1126,10 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
             ),
             ("zt / zz / zb", "Align view to top, center, or bottom."),
             (
-                "v / w / i / f",
-                "Toggle continuous, webcomics, info, or fullscreen.",
+                "d / s / v / w",
+                "Toggle double page, spread override, continuous, webcomics.",
             ),
+            ("i / f", "Toggle info overlay or fullscreen."),
         ],
     ),
     (
@@ -1136,6 +1140,10 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
                 "Set fit mode (page, width, height, original).",
             ),
             (":zoom [pct]", "Set zoom percentage, or reset to fit."),
+            (
+                ":double / :single",
+                "Switch to dual-page spread or single-page mode.",
+            ),
             (":q / :qa", "Close current comic, or quit application."),
             (
                 ":settings / Ctrl+,",

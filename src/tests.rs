@@ -5,7 +5,7 @@ use super::*;
 use gpui_kit::{Entity, Modifiers, TestAppContext, VisualTestContext, point};
 use image::Frame;
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     io::{Cursor, Write},
 };
@@ -5227,5 +5227,252 @@ fn test_narrow_viewport_single_image_spread_not_duplicated(cx: &mut TestAppConte
         let reader = this.reader.as_ref().unwrap();
         assert_eq!(reader.page, 2);
         assert_eq!(reader.current_page_str().as_ref(), "3 / 4");
+    });
+}
+
+#[gpui_kit::test]
+fn test_double_page_spread_zoom_panning_offset(cx: &mut TestAppContext) {
+    let dims = [(600, 900), (600, 900), (600, 900), (600, 900)];
+    let fx = fixture_mixed("spread_zoom", &dims);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Set wide viewport and enable double page with first_page_is_cover = false
+    // so pages 0 and 1 are rendered together as a spread
+    view.update_in(cx, |this, window, cx| {
+        window.resize(gpui_kit::size(gpui_kit::px(1200.0), gpui_kit::px(800.0)));
+        window.bounds_changed(cx);
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_first_page_is_cover(false, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(reader.is_double_page_active());
+        assert_eq!(reader.current_spread_index(), 0);
+        let vis = reader.active_visual_spread();
+        assert_eq!(vis.left_page, Some(0));
+        assert_eq!(vis.right_page, Some(1));
+    });
+
+    // Zoom in 2.5x
+    view.update_in(cx, |this, window, cx| {
+        let vp = viewport_of(window);
+        this.zoom_to(2.5, (vp.width / 2.0, vp.height / 2.0), vp, cx);
+    });
+    cx.run_until_parked();
+    settle_animations(&view, cx);
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.zoom, 2.5);
+    });
+
+    // Scroll right to pan along the spread
+    view.update_in(cx, |this, window, cx| {
+        let vp = viewport_of(window);
+        this.scroll(Dir::Right, Amount::Page, 5, vp, cx);
+    });
+    cx.run_until_parked();
+    settle_animations(&view, cx);
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        // Clamping against the full spread allows panning horizontally
+        assert!(reader.off.0 > 0.0);
+    });
+}
+
+#[gpui_kit::test]
+fn test_vim_reader_layout_and_spread_commands(cx: &mut TestAppContext) {
+    let fx = fixture("vim_reader_layout");
+    let (view, cx) = launch(&fx, cx);
+
+    // Enable Vim mode
+    view.update_in(cx, |this, _, _| {
+        this.library.settings_mut().vim_mode = true;
+    });
+
+    open_book_by_index(&fx, &view, cx, 0);
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page_layout, PageLayout::Single);
+    });
+
+    // Press 'd' to toggle double page
+    cx.simulate_keystrokes("d");
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page_layout, PageLayout::Double);
+    });
+
+    // Press 'z d' to toggle back
+    cx.simulate_keystrokes("z d");
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page_layout, PageLayout::Single);
+    });
+
+    // Test ':double' command
+    cx.simulate_keystrokes(":");
+    view.update_in(cx, |this, _, _| {
+        this.replace_cmdline("double".to_string());
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page_layout, PageLayout::Double);
+    });
+
+    // Test ':single' command
+    cx.simulate_keystrokes(":");
+    view.update_in(cx, |this, _, _| {
+        this.replace_cmdline("single".to_string());
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page_layout, PageLayout::Single);
+    });
+
+    // Test ':layout' toggle command
+    cx.simulate_keystrokes(":");
+    view.update_in(cx, |this, _, _| {
+        this.replace_cmdline("layout".to_string());
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page_layout, PageLayout::Double);
+    });
+
+    // Test 'z s' to cycle spread override
+    cx.simulate_keystrokes("z s");
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(
+            reader.current_spread_override(),
+            PageSpreadOverride::ForceSpread
+        );
+    });
+
+    cx.simulate_keystrokes("z s");
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(
+            reader.current_spread_override(),
+            PageSpreadOverride::ForceSingle
+        );
+    });
+
+    cx.simulate_keystrokes("z s");
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_override(), PageSpreadOverride::Auto);
+    });
+}
+
+#[gpui_kit::test]
+fn test_archive_with_jfif_image(cx: &mut TestAppContext) {
+    static FIXTURE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = FIXTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("yomu-ui-jfif-{}-{seq}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let dirs = DataDirs::at(root.join("data")).unwrap();
+
+    let path = root.join("jfif_manga.cbz");
+    let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+
+    let img = image::RgbImage::from_pixel(100, 150, image::Rgb([180, 50, 80]));
+    let mut out = Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Jpeg).unwrap();
+    let bytes = out.into_inner();
+
+    zip.start_file("page_001.jfif", options).unwrap();
+    zip.write_all(&bytes).unwrap();
+    zip.finish().unwrap();
+
+    let files = vec![path];
+    let report = library::import_paths(&files, &dirs, &HashSet::new());
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(report.added.len(), 1);
+
+    let mut library = Library::default();
+    for book in report.added {
+        library.add(book);
+    }
+    library.save(&dirs).unwrap();
+
+    let fx = Fixture {
+        ids: library.books().iter().map(|b| b.id.clone()).collect(),
+        files,
+        dirs,
+    };
+
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.total, 1);
+        assert_eq!(reader.current_page_str().as_ref(), "1 / 1");
+    });
+}
+
+#[gpui_kit::test]
+fn test_empty_archive_handling(cx: &mut TestAppContext) {
+    let fx = fixture("empty_test");
+    let (view, cx) = launch(&fx, cx);
+
+    let empty_path = fx.files[0].parent().unwrap().join("empty.cbz");
+    let zip = zip::ZipWriter::new(fs::File::create(&empty_path).unwrap());
+    zip.finish().unwrap();
+
+    let empty_book = Book {
+        id: "empty-archive".into(),
+        title: "Empty Volume".into(),
+        series: None,
+        path: empty_path,
+        kind: SourceKind::Archive,
+        page_count: 0,
+        current_page: 0,
+        opened: false,
+        added_at: 1,
+        last_read: None,
+        marks: BTreeMap::new(),
+        spread_overrides: BTreeMap::new(),
+        page_dimensions: BTreeMap::new(),
+    };
+
+    view.update_in(cx, |this, window, cx| {
+        this.library.add(empty_book);
+        this.open_book("empty-archive", window, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.total, 0);
+        assert_eq!(reader.current_page_str().as_ref(), "0 / 0");
     });
 }

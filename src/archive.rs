@@ -24,7 +24,7 @@ pub enum SourceKind {
 }
 
 pub fn is_image_name(name: &str) -> bool {
-    const EXTENSIONS: [&str; 5] = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
+    const EXTENSIONS: [&str; 6] = [".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif"];
     EXTENSIONS.iter().any(|ext| {
         if name.len() < ext.len() {
             return false;
@@ -426,6 +426,7 @@ mod tests {
     fn extension_checks() {
         assert!(is_image_name("page.jpg"));
         assert!(is_image_name("PAGE.JPEG"));
+        assert!(is_image_name("scan.JFIF"));
         assert!(is_image_name("test.PNG"));
         assert!(is_image_name("manga.webp"));
         assert!(is_image_name("anim.gif"));

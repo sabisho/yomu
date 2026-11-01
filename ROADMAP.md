@@ -158,7 +158,19 @@ This document outlines prioritized future work, planned features, and tracked te
   - Toolbar dropdown menu with checkmarks and section separators.
   - Settings persistence with lenient fallback and full preservation of underlying library order.
 
-### 16. CB7 / 7z Archive Support
+### 16. Real-World Reader QA & UX Polish (Phase 4.3 — Completed)
+- **Goal:** Harden the reader against real-world archive quirks, edge cases, and layout interactions following dual-page spread expansion.
+- **Status:** Completed.
+  - Fixed double-page spread zoom panning offset calculation to clamp across the full two-page spread dimensions (`new_spread_size`) instead of a single page.
+  - Implemented proper empty archive state handling (`total == 0` renders "No pages found in archive", page counter displays `0 / 0`, progress fraction is `0.0`).
+  - Achieved full Vim mode feature parity with `d`, `zd` (toggle double page), `zs` (cycle spread override), and `:double`, `:single`, `:layout` commands.
+  - Added responsive HUD feedback toasts for reader layout, reading direction, cover isolation, and spread override cycling.
+  - Added title truncation with max width to reader header to prevent control overflow on narrow windows.
+  - Hidden lateral page-turn chevrons in continuous vertical reading mode to eliminate hover clutter.
+  - Added `.jfif` image format support to archive entry filtering and decoding.
+  - Added regression unit and integration tests covering empty archives, spread zoom panning, `.jfif` image support, and Vim layout commands (294 active tests passing: 131 lib, 163 bin).
+
+### 17. CB7 / 7z Archive Support
 - **Goal:** Support `.cb7` and `.7z` comic archives alongside CBZ, CBR, ZIP, and RAR.
 
 ---
