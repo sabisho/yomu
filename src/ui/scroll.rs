@@ -116,12 +116,7 @@ impl PlatformScrollController {
     /// Ingests a `ScrollEvent` for a given `ScrollHandle`.
     ///
     /// Returns `true` if an animation frame should be requested to service the kinetic glide.
-    pub fn handle_wheel(
-        &mut self,
-        event: &ScrollEvent,
-        _scroll_handle: &ScrollHandle,
-        animations_enabled: bool,
-    ) -> bool {
+    pub fn handle_wheel(&mut self, event: &ScrollEvent, _scroll_handle: &ScrollHandle) -> bool {
         // On macOS, native momentum is provided by AppKit/GPUI. Do not layer software inertia.
         if Self::has_native_momentum() {
             return false;
@@ -151,7 +146,7 @@ impl PlatformScrollController {
 
         // Check if an explicit Ended phase arrived to launch momentum.
         if event.touch_phase == TouchPhase::Ended {
-            if animations_enabled && self.kinetic.end_touch(true) {
+            if self.kinetic.end_touch(true) {
                 self.is_animating = true;
                 self.last_frame_time = Some(now);
                 return true;
@@ -162,17 +157,17 @@ impl PlatformScrollController {
         }
 
         // On Linux / Windows, TouchPhase::Ended is not sent by window compositors.
-        // Returning animations_enabled wakes the host frame clock and triggers render so
+        // Returning true wakes the host frame clock and triggers render so
         // check_stillness_timeout can detect fingers lifted from the touchpad and trigger inertia.
-        animations_enabled
+        true
     }
 
     /// Checks if a stillness timeout elapsed after touch movement on platforms where
     /// `TouchPhase::Ended` is not dispatched (such as Wayland or X11).
     ///
     /// Returns `true` if inertia was launched from the detected stillness.
-    pub fn check_stillness_timeout(&mut self, now: Instant, animations_enabled: bool) -> bool {
-        if Self::has_native_momentum() || !animations_enabled {
+    pub fn check_stillness_timeout(&mut self, now: Instant) -> bool {
+        if Self::has_native_momentum() {
             return false;
         }
 
@@ -265,7 +260,7 @@ mod tests {
         // Stillness timeout should trigger inertia on Linux/Windows
         let trigger_time = now + Duration::from_millis(60);
         if !PlatformScrollController::has_native_momentum() {
-            assert!(controller.check_stillness_timeout(trigger_time, true));
+            assert!(controller.check_stillness_timeout(trigger_time));
             assert!(controller.is_animating());
 
             controller.cancel_inertia();

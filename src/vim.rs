@@ -45,8 +45,6 @@ pub enum Action {
     SetMark(char),
     JumpMark(char),
     JumpBack,
-    /// `None` toggles.
-    SetAnimations(Option<bool>),
     /// `None` toggles continuous reading mode.
     SetContinuous(Option<bool>),
     /// `None` toggles gapless webcomics mode.

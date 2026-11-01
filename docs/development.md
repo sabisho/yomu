@@ -39,35 +39,39 @@ xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ]; # Or GNOME/KDE portal
 
 ---
 
-## 2. Standard Development Commands
+## 2. Standard Development & Validation Commands
 
-Always verify changes with the project's quality verification suite:
+All coding tasks must execute the complete project validation matrix inside the development shell:
 
 ```sh
 # 1. Format check
-cargo fmt --all -- --check
+devenv shell cargo fmt --all -- --check
 
-# 2. Fast type check
-cargo check
+# 2. Fast type check across all targets
+devenv shell cargo check --all-targets
 
-# 3. Strict Clippy lint check
-cargo clippy --all-targets -- -D warnings
+# 3. Strict Clippy lint check with warnings as errors
+devenv shell cargo clippy --all-targets --all-features -- -D warnings
 
-# 4. Run core library unit tests (131 tests)
-cargo test --lib
+# 4. Run all active tests across all targets (308 tests)
+devenv shell cargo test --all-targets
+```
 
-# 5. Run binary-target UI tests (163 tests)
-cargo test --bin yomu
+Target-specific test execution:
 
-# 6. Run all active tests across targets (294 tests)
-cargo test
+```sh
+# Run core domain unit tests (130 tests)
+devenv shell cargo test --lib
 
-# 7. Run opt-in performance benchmarks
-cargo test perf_ -- --ignored --nocapture
+# Run binary-target UI tests (178 tests)
+devenv shell cargo test --bin yomu
+
+# Run opt-in performance benchmarks (3 benchmarks)
+devenv shell cargo test perf_ -- --ignored --nocapture
 ```
 
 > [!NOTE]
-> Binary-target UI tests execute under GPUI's simulated headless platform (`gpui_kit::TestAppContext`) within the binary target runner (`cargo test --bin yomu`). They do not require an active display or compositor. They validate layout, interactions, animations, and state transitions, but do not validate visual appearance on a physical Wayland compositor.
+> Binary-target UI tests execute under GPUI's simulated headless platform (`gpui_kit::TestAppContext`) within the binary target runner (`cargo test --bin yomu`). They do not require an active display or compositor. They validate layout, interactions, animations, and state transitions, but do not validate visual appearance on a physical Wayland compositor. Visual appearance on Wayland compositors must be reported as UNVERIFIED unless manually inspected.
 
 ---
 

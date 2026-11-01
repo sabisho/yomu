@@ -1,6 +1,8 @@
 //! Overlay definitions and rendering: menus, dialogs, settings tabs, and modal states.
 
 use gpui_kit::component::input::InputState;
+use gpui_kit::component::label::Label;
+use gpui_kit::component::tag::Tag;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Entity, FontWeight, Hsla, IntoElement, ParentElement, SharedString, Styled, div, px,
@@ -118,7 +120,6 @@ pub struct OverlayStyle {
     pub rounding_lg: f32,
     pub rounding_xl: f32,
     pub surface_bg: Hsla,
-    pub animations_enabled: bool,
 }
 
 pub const HELP: &[(&str, &[(&str, &str)])] = &[
@@ -182,11 +183,10 @@ pub fn help_overlay(colors: UiColors, border_px: f32, rounding_xl: f32) -> AnyEl
                 .flex_col()
                 .gap_1()
                 .child(
-                    div()
+                    Label::new(*title)
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.muted)
-                        .child(*title),
+                        .text_color(colors.muted),
                 )
                 .children(rows.iter().map(|(keys, what)| {
                     div()
@@ -195,17 +195,23 @@ pub fn help_overlay(colors: UiColors, border_px: f32, rounding_xl: f32) -> AnyEl
                         .justify_between()
                         .items_center()
                         .gap_4()
-                        .child(div().text_color(colors.foreground).child(*what))
-                        .child(div().flex_none().text_color(colors.accent).child(*keys))
+                        .child(Label::new(*what).text_sm().text_color(colors.foreground))
+                        .child(Tag::secondary().child(*keys))
                 })),
         );
     }
     panel = panel.child(
-        div()
+        Label::new("Press ? or Esc to close")
             .text_xs()
-            .text_color(colors.muted)
-            .child("Press ? or Esc to close"),
+            .text_color(colors.muted),
     );
+
+    let duration = std::time::Duration::from_millis(120);
+    let animated_panel = gpui_kit::base::animation::EffectTransition::new(duration)
+        .ease(gpui_kit::base::animation::ease_out_cubic)
+        .fade(0.0, 1.0)
+        .slide_y(px(-6.), px(0.))
+        .apply(panel, "help-overlay-panel");
 
     div()
         .absolute()
@@ -219,6 +225,6 @@ pub fn help_overlay(colors: UiColors, border_px: f32, rounding_xl: f32) -> AnyEl
             overlay_shade(colors),
             (0.5 + colors.widget_opacity * 0.15).min(0.65),
         ))
-        .child(panel)
+        .child(animated_panel)
         .into_any_element()
 }

@@ -683,12 +683,8 @@ pub struct Settings {
     pub remember_zoom: bool,
     /// Stored zoom magnification multiplier on top of the fit mode.
     pub zoom: f32,
-    /// Slide between pages and glide when scrolling. Reduced-motion preferences of the desktop
-    /// switch this off regardless of the stored value.
+    /// Slide between pages and glide when scrolling (animations are permanently enabled).
     pub animate: bool,
-    /// Disable nonessential animations across the application.
-    #[serde(default)]
-    pub disable_animations: bool,
     /// Stack pages vertically and scroll through the whole book instead of turning pages.
     pub continuous: bool,
     /// Force a connected, gapless vertical strip of pages, regardless of the normal reading mode.
@@ -746,7 +742,6 @@ impl Default for Settings {
             remember_zoom: true,
             zoom: 1.0,
             animate: true,
-            disable_animations: false,
             continuous: false,
             webcomics: false,
             group_series: false,
@@ -806,17 +801,7 @@ impl Settings {
                 }
             }
         }
-        let disabled = match (
-            object.get("disable_animations").and_then(|v| v.as_bool()),
-            object.get("animate").and_then(|v| v.as_bool()),
-        ) {
-            (Some(true), _) | (_, Some(false)) => true,
-            (Some(false), _) => false,
-            (None, Some(true)) => false,
-            (None, None) => false,
-        };
-        settings.disable_animations = disabled;
-        settings.animate = !disabled;
+        settings.animate = true;
         if let Some(continuous) = object.get("continuous").and_then(|v| v.as_bool()) {
             settings.continuous = continuous;
         }
@@ -1577,7 +1562,6 @@ mod tests {
         book.marks.insert("a".into(), 3);
         assert!(lib.add(book.clone()));
         assert!(!lib.add(book));
-        lib.settings_mut().animate = false;
         lib.settings_mut().fit = FitMode::Width;
         lib.save(&dirs).unwrap();
 
@@ -1585,8 +1569,23 @@ mod tests {
         assert_eq!(loaded.books().len(), 1);
         assert_eq!(loaded.get("abc").unwrap().current_page, 9);
         assert_eq!(loaded.get("abc").unwrap().marks.get("a"), Some(&3));
-        assert!(!loaded.settings().animate);
+        assert!(loaded.settings().animate);
         assert_eq!(loaded.settings().fit, FitMode::Width);
+    }
+
+    #[test]
+    fn old_library_files_with_disable_animations_load_safely() {
+        let tmp = temp_dir("compat_disable_anim");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let json =
+            r#"{"books":[],"settings":{"disable_animations":true,"animate":false,"fit":"Height"}}"#;
+        fs::write(dirs.library_file(), json).unwrap();
+        let loaded = Library::load(&dirs).unwrap();
+        assert!(
+            loaded.settings().animate,
+            "animations must remain permanently enabled"
+        );
+        assert_eq!(loaded.settings().fit, FitMode::Height);
     }
 
     #[test]

@@ -271,6 +271,7 @@ impl Yomu {
             dialog
                 .title("Preferences")
                 .close_button(true)
+                .centered()
                 .w(px(860.))
                 .max_w(px(960.))
                 .on_close(move |_, _window, cx| {
@@ -1117,9 +1118,7 @@ impl Render for Yomu {
         let reader_animating = self.sync_reader(window, cx, dt);
         let scroll_animating = if self.reader.is_none() {
             let scroll_handle = self.current_scroll_handle();
-            let animations_enabled = self.animations_enabled();
-            self.library_scroll_controller
-                .check_stillness_timeout(now, animations_enabled);
+            self.library_scroll_controller.check_stillness_timeout(now);
             let stepped = self.library_scroll_controller.step(now, &scroll_handle);
             let awaiting = self.library_scroll_controller.is_awaiting_release();
             stepped || awaiting
@@ -1246,6 +1245,7 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
+            cx.set_reduce_motion(false);
             KitTheme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling, cx);
             let mut bindings = vec![
                 KeyBinding::new("ctrl-o", ImportFiles, Some("Library")),

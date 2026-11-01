@@ -4,6 +4,10 @@ use std::path::PathBuf;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::empty::{
+    Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -53,36 +57,33 @@ pub fn render_continue_reading_view(
     let inner_radius = (props.radius - px(props.border_px)).max(px(0.));
 
     if props.hero.is_none() && props.recent_cards.is_empty() {
-        return div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_4()
-            .child(
-                Icon::new(IconName::BookOpen)
-                    .size(px(48.))
-                    .text_color(colors.muted),
+        return Empty::new()
+            .header(
+                EmptyHeader::new()
+                    .media(
+                        EmptyMedia::new()
+                            .with_variant(EmptyMediaVariant::Icon)
+                            .child(
+                                Icon::new(IconName::BookOpen)
+                                    .size(px(48.))
+                                    .text_color(colors.muted),
+                            ),
+                    )
+                    .title(EmptyTitle::new().child("Your Library is Empty"))
+                    .description(EmptyDescription::new().child(
+                        "Import comic archives (.cbz, .cbr, .zip) or manga folders to start reading.",
+                    )),
             )
-            .child(
-                div()
-                    .text_lg()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(colors.foreground)
-                    .child("Your Library is Empty"),
-            )
-            .child(div().text_sm().text_color(colors.muted).child(
-                "Import comic archives (.cbz, .cbr, .zip) or manga folders to start reading.",
-            ))
-            .child(
-                Button::new("empty-import-button")
-                    .primary()
-                    .label("+ Import Manga")
-                    .rounded(ButtonRounded::Medium)
-                    .bg(colors.accent)
-                    .text_color(colors.accent_foreground)
-                    .on_click(on_import),
+            .content(
+                EmptyContent::new().child(
+                    Button::new("empty-import-button")
+                        .primary()
+                        .label("+ Import Manga")
+                        .rounded(ButtonRounded::Medium)
+                        .bg(colors.accent)
+                        .text_color(colors.accent_foreground)
+                        .on_click(on_import),
+                ),
             )
             .into_any_element();
     }
@@ -279,71 +280,68 @@ pub fn render_continue_reading_view(
                                     } else {
                                         px(0.)
                                     };
-                                    div()
-                                        .id(ElementId::from(SharedString::from(format!(
-                                            "queue-item-{}",
-                                            item.book.id
-                                        ))))
-                                        .h(px(68.))
-                                        .p_2()
-                                        .rounded(props.radius)
-                                        .bg(with_alpha(colors.surface, 0.6))
-                                        .when(props.border_px > 0.0, |s| {
-                                            s.border(px(props.border_px))
-                                                .border_color(colors.border)
-                                        })
-                                        .cursor_pointer()
-                                        .hover(|style| {
-                                            style.bg(with_alpha(colors.foreground, 0.06))
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            on_open_details(&book_id, window, cx)
-                                        })
-                                        .flex()
-                                        .flex_row()
-                                        .gap_3()
-                                        .child(
-                                            div()
-                                                .w(px(46.))
-                                                .h_full()
-                                                .rounded(queue_radius)
-                                                .overflow_hidden()
-                                                .bg(with_alpha(colors.foreground, 0.05))
-                                                .child(
-                                                    img(item.cover_path.clone())
-                                                        .size_full()
-                                                        .rounded(queue_radius)
-                                                        .object_fit(gpui_kit::ObjectFit::Cover),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .flex()
-                                                .flex_col()
-                                                .justify_center()
-                                                .gap_0p5()
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_color(colors.foreground)
-                                                        .truncate()
-                                                        .child(item.display_title.to_string()),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(colors.muted)
-                                                        .truncate()
-                                                        .child(format!(
-                                                            "{} · {:.0}%",
-                                                            item.chapter_label,
-                                                            item.progress * 100.0
-                                                        )),
-                                                ),
-                                        )
+                                    ListItem::new(ElementId::from(SharedString::from(format!(
+                                        "queue-item-{}",
+                                        item.book.id
+                                    ))))
+                                    .h(px(68.))
+                                    .p_2()
+                                    .rounded(props.radius)
+                                    .when(props.border_px > 0.0, |s| {
+                                        s.border(px(props.border_px)).border_color(colors.border)
+                                    })
+                                    .on_click(move |_, window, cx| {
+                                        on_open_details(&book_id, window, cx)
+                                    })
+                                    .child(
+                                        div()
+                                            .size_full()
+                                            .flex()
+                                            .flex_row()
+                                            .gap_3()
+                                            .child(
+                                                div()
+                                                    .w(px(46.))
+                                                    .h_full()
+                                                    .rounded(queue_radius)
+                                                    .overflow_hidden()
+                                                    .bg(with_alpha(colors.foreground, 0.05))
+                                                    .child(
+                                                        img(item.cover_path.clone())
+                                                            .size_full()
+                                                            .rounded(queue_radius)
+                                                            .object_fit(gpui_kit::ObjectFit::Cover),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .justify_center()
+                                                    .gap_0p5()
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .text_color(colors.foreground)
+                                                            .truncate()
+                                                            .child(item.display_title.to_string()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(colors.muted)
+                                                            .truncate()
+                                                            .child(format!(
+                                                                "{} · {:.0}%",
+                                                                item.chapter_label,
+                                                                item.progress * 100.0
+                                                            )),
+                                                    ),
+                                            ),
+                                    )
                                 })),
                         ),
                 ),

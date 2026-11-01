@@ -353,12 +353,12 @@ The code is split cleanly between the core library crate and modular UI componen
 
 - `src/lib.rs` exports GPUI-independent domain logic (archives, image decode/SIMD resize, geometry, vim parsing, selection, caching, and persistence)
 - `src/ui/` contains modular view components (sidebar, toolbar, library cards, continue reading, details, collections, history, settings, overlays, reader)
-- `src/main.rs` manages window state, event routing, and background executor scheduling
+- `src/app/` manages application orchestration (state, reader controller, keybindings, persistence coordination, context actions)
+- `src/main.rs` manages window lifecycle, texture GC, and root rendering coordination
 - `nix/package.nix` is the Nix package; `devenv.nix` / `devenv.yaml` and `flake.nix` are the dev environments
 
 ## Not done yet
 
-- Dual-page / spread reading mode
-- Library sorting options (title, last read, recently added, page count)
 - CB7 archive support (needs a 7z archive reader)
 - Upstream GPUI momentum scrolling migration (once GPUI publishes upstream Linux/Windows momentum events)
+- Background persistence zero-copy snapshots on autosave

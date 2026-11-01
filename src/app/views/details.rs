@@ -1,7 +1,12 @@
 //! Manga details inspector view presentation adapter.
 
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
+use gpui_kit::component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Window, div, px};
+use gpui_kit::{AnyElement, Context, Window, px};
 
 use crate::app::state::Yomu;
 use crate::ui;
@@ -14,12 +19,20 @@ impl Yomu {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(book) = self.library.get(book_id) else {
-            return div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child("Manga not found")
+            return Empty::new()
+                .header(
+                    EmptyHeader::new()
+                        .media(
+                            EmptyMedia::new()
+                                .with_variant(EmptyMediaVariant::Icon)
+                                .child(Icon::new(IconName::BookOpen).size(px(48.))),
+                        )
+                        .title(EmptyTitle::new().child("Manga Not Found"))
+                        .description(
+                            EmptyDescription::new()
+                                .child("The requested book could not be found in your library."),
+                        ),
+                )
                 .into_any_element();
         };
 

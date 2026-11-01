@@ -21,8 +21,6 @@ use gpui_kit::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, Point, RenderImage, ScrollHandle,
     SharedString, Window, px,
 };
-#[cfg(not(test))]
-use yomu::motion;
 use yomu::{
     library::{Book, CornerRounding, DataDirs, Library, SortBy, SortDirection, sort_book_indices},
     selection::Selection,
@@ -106,8 +104,6 @@ pub struct Yomu {
     pub(crate) imported_count: usize,
     pub(crate) import_cancel: Option<Arc<AtomicBool>>,
     pub(crate) system_dark: bool,
-    /// The desktop asks for reduced motion (see `motion::detect_reduced_motion`).
-    pub(crate) reduce_motion: bool,
     /// When the previous animated frame was drawn; `None` while nothing is animating.
     pub(crate) last_frame: Option<Instant>,
     /// Smoothed frame interval for display vsync scheduling jitter mitigation.
@@ -266,7 +262,6 @@ impl Yomu {
             imported_count: 0,
             import_cancel: None,
             system_dark,
-            reduce_motion: false,
             last_frame: None,
             dt_smoothed: None,
             #[cfg(test)]
@@ -321,26 +316,11 @@ impl Yomu {
         };
 
         state.refresh_downloads_count(cx);
+        // Permanently ensure native animations are enabled in the GPUI runtime.
+        cx.set_reduce_motion(false);
 
         #[cfg(not(test))]
         state.watch_custom_theme_file(cx);
-
-        // Asking the desktop about reduced motion can take a moment (it may spawn `gsettings`),
-        // so do it off the UI thread. Tests skip it to stay independent of the machine.
-        #[cfg(not(test))]
-        cx.spawn(async move |this, cx| {
-            let reduce = cx
-                .background_executor()
-                .spawn(async { motion::detect_reduced_motion() })
-                .await;
-            let _ = this
-                .update(cx, |this, cx| {
-                    this.reduce_motion = reduce;
-                    cx.notify();
-                })
-                .ok();
-        })
-        .detach();
 
         state
     }
@@ -350,11 +330,6 @@ impl Yomu {
             theme.radius = px(rounding.radius_pixels());
             theme.radius_lg = px(rounding.radius_lg_pixels());
         });
-    }
-
-    /// Whether page turns and scrolling should animate right now.
-    pub fn animations_enabled(&self) -> bool {
-        !self.reduce_motion && !self.library.settings().disable_animations
     }
 
     pub fn is_vim_enabled(&self) -> bool {

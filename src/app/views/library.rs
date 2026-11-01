@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
+use gpui_kit::component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
@@ -273,20 +276,36 @@ impl Yomu {
         };
 
         if books.is_empty() {
-            return div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .text_color(colors.muted)
-                .child(Icon::new(IconName::BookOpen).size(px(48.)))
-                .child(div().text_base().child(if query.is_empty() {
-                    "Your library is empty"
-                } else {
-                    "No matching manga found"
-                }))
+            let (title, desc) = if query.is_empty() {
+                (
+                    "Your library is empty",
+                    "Import comic archives or manga folders to get started.",
+                )
+            } else {
+                (
+                    "No matching manga found",
+                    "Try adjusting your search query.",
+                )
+            };
+            return Empty::new()
+                .header(
+                    EmptyHeader::new()
+                        .media(
+                            EmptyMedia::new()
+                                .with_variant(EmptyMediaVariant::Icon)
+                                .child(
+                                    Icon::new(if query.is_empty() {
+                                        IconName::BookOpen
+                                    } else {
+                                        IconName::Search
+                                    })
+                                    .size(px(48.))
+                                    .text_color(colors.muted),
+                                ),
+                        )
+                        .title(EmptyTitle::new().child(title))
+                        .description(EmptyDescription::new().child(desc)),
+                )
                 .into_any_element();
         }
 

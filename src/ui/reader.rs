@@ -11,16 +11,18 @@ use std::{
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::label::Label;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::{ScrollableElement, ScrollbarHandle};
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{Icon, Side as MenuSide, Sizable, Size as ComponentSize};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Anchor, AnyElement, App, Bounds, ClickEvent, Div, FontWeight, Hsla, InteractiveElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, PinchEvent, Pixels,
-    Point, RenderImage, ScrollEvent, SharedString, Size, Stateful, Styled, TouchPhase, Window, div,
-    img, point, px, relative, size,
+    Anchor, AnyElement, App, Bounds, ClickEvent, Div, FontWeight, InteractiveElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, PinchEvent, Pixels, Point,
+    RenderImage, ScrollEvent, SharedString, Size, Stateful, Styled, TouchPhase, Window, div, img,
+    point, px, relative, size,
 };
 use yomu::{
     archive::SourceKind,
@@ -34,10 +36,11 @@ use yomu::{
 };
 
 use super::components::{
-    CONTROL_HEIGHT_TOOLBAR, SPACE_MD, SPACE_SM, TOOLBAR_HEIGHT, button_radius, centered, pill,
-    toolbar_icon_button, with_alpha,
+    CONTROL_HEIGHT_TOOLBAR, SPACE_MD, SPACE_SM, TOOLBAR_HEIGHT, button_radius, pill, with_alpha,
 };
 use super::theme::UiColors;
+
+type ReaderClickCallback = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 pub fn viewport_of(window: &Window) -> Viewport {
     let size = window.viewport_size();
@@ -169,15 +172,39 @@ pub fn page_layer(
         .into_any_element()
 }
 
-/// Horizontal reading progress bar along the bottom of the viewport.
-pub fn reader_progress_bar(fraction: f32, accent: Hsla) -> Div {
+fn reader_loading(colors: UiColors) -> AnyElement {
     div()
-        .absolute()
-        .bottom_0()
-        .left_0()
-        .h(px(2.))
-        .w(relative(fraction))
-        .bg(accent)
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .child(
+            Spinner::new()
+                .with_size(ComponentSize::Medium)
+                .color(colors.accent),
+        )
+        .child(Label::new("Opening…").text_sm().text_color(colors.muted))
+        .into_any_element()
+}
+
+fn reader_error(message: impl Into<SharedString>, colors: UiColors) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .p_4()
+        .child(
+            Icon::new(IconName::TriangleAlert)
+                .size(px(28.))
+                .text_color(colors.danger),
+        )
+        .child(Label::new(message).text_sm().text_color(colors.muted))
+        .into_any_element()
 }
 
 /// Autohiding top navigation and header overlay for the reader canvas.
@@ -198,6 +225,8 @@ pub fn reader_header(
     on_set_direction: impl Fn(ReadingDirection, &mut Window, &mut App) + 'static,
     on_toggle_cover: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_set_spread_override: impl Fn(PageSpreadOverride, &mut Window, &mut App) + 'static,
+    on_turn_prev: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_turn_next: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     let btn_radius = button_radius(radius, CONTROL_HEIGHT_TOOLBAR);
     let on_set_fit = Rc::new(on_set_fit);
@@ -239,30 +268,60 @@ pub fn reader_header(
                         .child(
                             Button::new("reader-back-btn")
                                 .ghost()
+                                .icon(IconName::ArrowLeft)
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
-                                .label("← Library")
+                                .label("Library")
                                 .tooltip("Back to library (Esc)")
                                 .on_click(move |event, window, cx| {
                                     on_back(event, window, cx);
                                 }),
                         )
                         .child(
-                            div()
+                            Label::new(book_title)
                                 .text_sm()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(colors.foreground)
                                 .truncate()
-                                .max_w(px(320.))
-                                .child(book_title),
+                                .max_w(px(280.)),
                         ),
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(colors.muted)
-                        .child(current_page_str),
+                        .flex()
+                        .items_center()
+                        .gap(SPACE_SM)
+                        .child(
+                            Button::new("reader-header-prev-btn")
+                                .ghost()
+                                .icon(IconName::ChevronLeft)
+                                .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(btn_radius))
+                                .tooltip(if reading_direction.is_rtl() {
+                                    "Next page (Left or J)"
+                                } else {
+                                    "Previous page (Left or K)"
+                                })
+                                .on_click(move |event, window, cx| {
+                                    on_turn_prev(event, window, cx);
+                                }),
+                        )
+                        .child(Tag::secondary().rounded(btn_radius).child(current_page_str))
+                        .child(
+                            Button::new("reader-header-next-btn")
+                                .ghost()
+                                .icon(IconName::ChevronRight)
+                                .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(btn_radius))
+                                .tooltip(if reading_direction.is_rtl() {
+                                    "Previous page (Right or K)"
+                                } else {
+                                    "Next page (Right or J)"
+                                })
+                                .on_click(move |event, window, cx| {
+                                    on_turn_next(event, window, cx);
+                                }),
+                        ),
                 )
                 .child(
                     div()
@@ -349,7 +408,7 @@ pub fn reader_header(
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .dropdown_caret(true)
-                                .tooltip("Display fit mode")
+                                .tooltip("Display fit mode (Tab)")
                                 .label(fit_mode.label())
                                 .dropdown_menu_with_anchor(Anchor::TopRight, {
                                     let on_set_fit = on_set_fit.clone();
@@ -375,20 +434,22 @@ pub fn reader_header(
                                     }
                                 }),
                         )
-                        .child(toolbar_icon_button(
-                            "reader-fullscreen-toggle",
-                            IconName::Maximize,
-                            "Toggle fullscreen (F11)",
-                            radius,
-                            move |_, window, _| window.toggle_fullscreen(),
-                        )),
+                        .child(
+                            Button::new("reader-fullscreen-toggle")
+                                .ghost()
+                                .icon(IconName::Maximize)
+                                .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(btn_radius))
+                                .tooltip("Toggle fullscreen (F11)")
+                                .on_click(move |_, window, _| window.toggle_fullscreen()),
+                        ),
                 ),
         )
 }
 
 /// Floating lateral chevrons for navigating previous and next pages.
 pub fn lateral_turners(
-    colors: UiColors,
+    _colors: UiColors,
     radius: Pixels,
     is_rtl: bool,
     on_left: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -404,6 +465,28 @@ pub fn lateral_turners(
     } else {
         "Next page (Right or J)"
     };
+
+    let left_btn = Button::new("reader-prev-chevron")
+        .icon(IconName::ChevronLeft)
+        .with_size(ComponentSize::Size(px(40.)))
+        .rounded(ButtonRounded::Size(radius))
+        .secondary()
+        .outline()
+        .tooltip(left_tooltip)
+        .on_click(move |event, window, cx| {
+            on_left(event, window, cx);
+        });
+
+    let right_btn = Button::new("reader-next-chevron")
+        .icon(IconName::ChevronRight)
+        .with_size(ComponentSize::Size(px(40.)))
+        .rounded(ButtonRounded::Size(radius))
+        .secondary()
+        .outline()
+        .tooltip(right_tooltip)
+        .on_click(move |event, window, cx| {
+            on_right(event, window, cx);
+        });
 
     let left_chevron = div()
         .id("reader-prev-hover-area")
@@ -421,29 +504,9 @@ pub fn lateral_turners(
         .pl_4()
         .child(
             div()
-                .id("reader-prev-chevron")
                 .group_hover("reader-prev", |s| s.opacity(1.0))
                 .opacity(0.0)
-                .size(px(40.))
-                .rounded(radius)
-                .bg(with_alpha(colors.background, 0.85))
-                .border_1()
-                .border_color(with_alpha(colors.border, 0.5))
-                .shadow_md()
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .hover(|s| s.bg(with_alpha(colors.accent, 0.2)))
-                .tooltip(move |window, cx| Tooltip::new(left_tooltip).build(window, cx))
-                .on_click(move |event, window, cx| {
-                    on_left(event, window, cx);
-                })
-                .child(
-                    Icon::new(IconName::ChevronLeft)
-                        .size(px(20.))
-                        .text_color(colors.foreground),
-                ),
+                .child(left_btn),
         );
 
     let right_chevron = div()
@@ -463,29 +526,9 @@ pub fn lateral_turners(
         .pr_4()
         .child(
             div()
-                .id("reader-next-chevron")
                 .group_hover("reader-next", |s| s.opacity(1.0))
                 .opacity(0.0)
-                .size(px(40.))
-                .rounded(radius)
-                .bg(with_alpha(colors.background, 0.85))
-                .border_1()
-                .border_color(with_alpha(colors.border, 0.5))
-                .shadow_md()
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .hover(|s| s.bg(with_alpha(colors.accent, 0.2)))
-                .tooltip(move |window, cx| Tooltip::new(right_tooltip).build(window, cx))
-                .on_click(move |event, window, cx| {
-                    on_right(event, window, cx);
-                })
-                .child(
-                    Icon::new(IconName::ChevronRight)
-                        .size(px(20.))
-                        .text_color(colors.foreground),
-                ),
+                .child(right_btn),
         );
 
     (left_chevron, right_chevron)
@@ -530,7 +573,7 @@ pub fn render_reader(
     // turn the outgoing and incoming pages are both drawn, shifted along the same strip.
     let mut content: Vec<AnyElement> = Vec::new();
     if let Some(error) = &reader.error {
-        content.push(centered(
+        content.push(reader_error(
             format!("Couldn't open this book: {error}"),
             props.colors,
         ));
@@ -566,7 +609,7 @@ pub fn render_reader(
                         (width, height + overlap),
                     ));
                 } else if let Some(error) = reader.failed.get(&ix) {
-                    content.push(centered(
+                    content.push(reader_error(
                         format!("Couldn't decode page {}: {error}", ix + 1),
                         props.colors,
                     ));
@@ -635,12 +678,12 @@ pub fn render_reader(
                     let failed_left = reader.failed.get(&left_idx);
                     let failed_right = reader.failed.get(&right_idx);
                     if let Some(err) = failed_left {
-                        content.push(centered(
+                        content.push(reader_error(
                             format!("Couldn't decode page {}: {err}", left_idx + 1),
                             props.colors,
                         ));
                     } else if let Some(err) = failed_right {
-                        content.push(centered(
+                        content.push(reader_error(
                             format!("Couldn't decode page {}: {err}", right_idx + 1),
                             props.colors,
                         ));
@@ -648,7 +691,7 @@ pub fn render_reader(
                         || (!reader.images.contains_key(&left_idx)
                             || !reader.images.contains_key(&right_idx))
                     {
-                        content.push(centered("Opening…", props.colors));
+                        content.push(reader_loading(props.colors));
                     }
                 }
             } else {
@@ -660,12 +703,12 @@ pub fn render_reader(
                     content.push(page_layer(&page.image, left + shift_in, top, display));
                 } else if reader.outgoing.is_none() {
                     if let Some(error) = reader.failed.get(&single_idx) {
-                        content.push(centered(
+                        content.push(reader_error(
                             format!("Couldn't decode page {}: {error}", single_idx + 1),
                             props.colors,
                         ));
                     } else if reader.pages.is_none() || !reader.images.contains_key(&single_idx) {
-                        content.push(centered("Opening…", props.colors));
+                        content.push(reader_loading(props.colors));
                     }
                 }
             }
@@ -674,25 +717,18 @@ pub fn render_reader(
             let (left, top) = layout::origin(reader.off, display, &vp);
             content.push(page_layer(&page.image, left + shift_in, top, display));
         } else if reader.total == 0 && reader.pages.is_some() {
-            content.push(centered("No pages found in archive", props.colors));
+            content.push(reader_error("No pages found in archive", props.colors));
         } else if reader.outgoing.is_none() {
             if let Some(error) = reader.failed.get(&reader.page) {
-                content.push(centered(
+                content.push(reader_error(
                     format!("Couldn't decode page {}: {error}", reader.page + 1),
                     props.colors,
                 ));
             } else if reader.pages.is_none() || !reader.images.contains_key(&reader.page) {
-                content.push(centered("Opening…", props.colors));
+                content.push(reader_loading(props.colors));
             }
         }
     }
-
-    let fraction = if reader.total == 0 {
-        0.0
-    } else {
-        (reader.page + 1) as f32 / reader.total as f32
-    };
-    let progress_line = reader_progress_bar(fraction, props.colors.accent);
 
     let info = reader.show_info.then(|| {
         pill(
@@ -736,6 +772,15 @@ pub fn render_reader(
         .into_any_element()
     });
 
+    let is_rtl = reader.reading_direction.is_rtl();
+    let on_turn_prev: ReaderClickCallback = Rc::new(on_turn_prev);
+    let on_turn_next: ReaderClickCallback = Rc::new(on_turn_next);
+    let (left_cb, right_cb) = if is_rtl {
+        (on_turn_next.clone(), on_turn_prev.clone())
+    } else {
+        (on_turn_prev.clone(), on_turn_next.clone())
+    };
+
     let current_page_str = reader.current_page_str();
     let top_bar = reader_header(
         props.book_title,
@@ -753,32 +798,27 @@ pub fn render_reader(
         on_set_direction,
         on_toggle_cover,
         on_set_spread_override,
+        {
+            let l = left_cb.clone();
+            move |e, w, cx| l(e, w, cx)
+        },
+        {
+            let r = right_cb.clone();
+            move |e, w, cx| r(e, w, cx)
+        },
     );
 
-    let is_rtl = reader.reading_direction.is_rtl();
-    let on_turn_prev = Rc::new(on_turn_prev);
-    let on_turn_next = Rc::new(on_turn_next);
-    let (left_cb, right_cb) = if is_rtl {
-        let l = on_turn_next.clone();
-        let r = on_turn_prev.clone();
-        (
-            Box::new(move |e: &ClickEvent, w: &mut Window, cx: &mut App| l(e, w, cx))
-                as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
-            Box::new(move |e: &ClickEvent, w: &mut Window, cx: &mut App| r(e, w, cx))
-                as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
-        )
-    } else {
-        let l = on_turn_prev.clone();
-        let r = on_turn_next.clone();
-        (
-            Box::new(move |e: &ClickEvent, w: &mut Window, cx: &mut App| l(e, w, cx))
-                as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
-            Box::new(move |e: &ClickEvent, w: &mut Window, cx: &mut App| r(e, w, cx))
-                as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
+    let (left_chevron, right_chevron) = {
+        let l = left_cb.clone();
+        let r = right_cb.clone();
+        lateral_turners(
+            props.colors,
+            props.radius,
+            is_rtl,
+            move |e, w, cx| l(e, w, cx),
+            move |e, w, cx| r(e, w, cx),
         )
     };
-    let (left_chevron, right_chevron) =
-        lateral_turners(props.colors, props.radius, is_rtl, left_cb, right_cb);
 
     div()
         .size_full()
@@ -801,7 +841,6 @@ pub fn render_reader(
             on_pinch(event, window, cx);
         })
         .children(content)
-        .child(progress_line)
         .children(info)
         .children(hud)
         .children(vim_status)
@@ -1638,17 +1677,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reader_progress_bar_constructs() {
-        let accent = gpui_kit::hsla(0.6, 0.8, 0.5, 1.0);
-        let mut bar = reader_progress_bar(0.75, accent);
-        assert_eq!(
-            bar.style().background,
-            Some(gpui_kit::Fill::Color(accent.into()))
-        );
-    }
-
-    #[test]
-    fn test_empty_archive_page_counter_and_fraction() {
+    fn test_empty_archive_page_counter() {
         let book = Book {
             id: "empty".into(),
             title: "Empty Book".into(),
@@ -1668,12 +1697,5 @@ mod tests {
         let reader = Reader::new(&book, &settings);
         assert_eq!(reader.total, 0);
         assert_eq!(reader.current_page_str().as_ref(), "0 / 0");
-
-        let fraction = if reader.total == 0 {
-            0.0
-        } else {
-            (reader.page as f32) / ((reader.total - 1).max(1) as f32)
-        };
-        assert_eq!(fraction, 0.0);
     }
 }

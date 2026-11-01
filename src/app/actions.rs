@@ -228,6 +228,7 @@ impl Yomu {
             dialog
                 .title(title)
                 .close_button(true)
+                .centered()
                 .w(px(460.))
                 .on_close(move |_, _window, cx| {
                     yomu_close.update(cx, |this, cx| {
@@ -380,6 +381,7 @@ impl Yomu {
             dialog
                 .title(dialog_title)
                 .close_button(true)
+                .centered()
                 .w(px(400.))
                 .on_close(move |_, _window, cx| {
                     yomu_close.update(cx, |this, cx| {
@@ -621,6 +623,7 @@ impl Yomu {
             dialog
                 .title(title.clone())
                 .close_button(true)
+                .centered()
                 .w(px(520.))
                 .on_close(move |_, _window, cx| {
                     yomu_close.update(cx, |this, cx| {
@@ -679,6 +682,7 @@ impl Yomu {
             let action_cancel = action.clone();
             alert
                 .confirm()
+                .centered()
                 .title(title.clone())
                 .description(message.clone())
                 .ok_text(confirm_label)

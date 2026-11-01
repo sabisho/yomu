@@ -203,6 +203,24 @@ impl Yomu {
             ui::sidebar::MainView::Settings => self.render_settings_content(window, cx),
         };
 
+        let view_key = match &self.active_view {
+            ui::sidebar::MainView::ContinueReading => "continue-reading",
+            ui::sidebar::MainView::AllManga => "all-manga",
+            ui::sidebar::MainView::Collections => "collections",
+            ui::sidebar::MainView::History => "history",
+            ui::sidebar::MainView::Downloads => "downloads",
+            ui::sidebar::MainView::Details(_) => "details",
+            ui::sidebar::MainView::Settings => "settings",
+        };
+        let view_duration = std::time::Duration::from_millis(140);
+        let animated_content = gpui_kit::base::animation::EffectTransition::new(view_duration)
+            .ease(gpui_kit::base::animation::ease_out_cubic)
+            .fade(0.9, 1.0)
+            .apply(
+                div().size_full().child(content),
+                format!("main-view-fade-{}", view_key),
+            );
+
         div()
             .size_full()
             .flex()
@@ -227,12 +245,10 @@ impl Yomu {
                             .overflow_hidden()
                             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
                                 let scroll_handle = this.current_scroll_handle();
-                                let animations_enabled = this.animations_enabled();
-                                if this.library_scroll_controller.handle_wheel(
-                                    event,
-                                    &scroll_handle,
-                                    animations_enabled,
-                                ) {
+                                if this
+                                    .library_scroll_controller
+                                    .handle_wheel(event, &scroll_handle)
+                                {
                                     this.wake();
                                     cx.notify();
                                 }
@@ -243,7 +259,7 @@ impl Yomu {
                                     this.library_scroll_controller.cancel_inertia();
                                 }),
                             )
-                            .child(content),
+                            .child(animated_content),
                     ),
             )
             .into_any_element()

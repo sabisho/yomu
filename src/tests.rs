@@ -1976,49 +1976,21 @@ fn switching_comics_starts_clean(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn reduced_motion_and_the_animate_command_turn_animation_off(cx: &mut TestAppContext) {
+fn animations_remain_permanently_enabled_and_page_turns_slide(cx: &mut TestAppContext) {
     let fx = fixture("reduced");
     let (view, cx) = launch(&fx, cx);
     open_book_by_index(&fx, &view, cx, 0);
 
-    // the desktop asks for reduced motion
-    view.update(cx, |this, _| this.reduce_motion = true);
+    // Verify animations remain active during page turns
     view.update(cx, |this, cx| {
         this.goto_page(1, Arrive::Start, cx);
         assert!(
-            this.reader.as_ref().unwrap().transition.is_none(),
-            "no slide"
+            this.reader.as_ref().unwrap().transition.is_some(),
+            "page turn slide animation must be active"
         );
-    });
-    cx.run_until_parked();
-    assert_eq!(page(&view, cx), 1, "navigation itself is unaffected");
-    view.update(cx, |this, _| this.reduce_motion = false);
-
-    // `:animate off` is a saved preference
-    view.update_in(cx, |this, window, cx| {
-        this.apply(
-            Action::SetAnimations(Some(false)),
-            viewport_of(window),
-            window,
-            cx,
-        );
-        this.goto_page(2, Arrive::Start, cx);
-        assert!(this.reader.as_ref().unwrap().transition.is_none());
-    });
-    cx.run_until_parked();
-    assert!(!saved_settings(&fx).animate);
-
-    // the toggle form flips it back
-    view.update_in(cx, |this, window, cx| {
-        this.apply(Action::SetAnimations(None), viewport_of(window), window, cx);
-    });
-    cx.run_until_parked();
-    assert!(saved_settings(&fx).animate);
-    view.update(cx, |this, cx| {
-        this.goto_page(3, Arrive::Start, cx);
-        assert!(this.reader.as_ref().unwrap().transition.is_some());
     });
     settle_animations(&view, cx);
+    assert_eq!(page(&view, cx), 1, "navigation arrives at expected page");
 }
 
 // ---- smooth scrolling through the app ----
@@ -2563,14 +2535,13 @@ fn kinetic_scroll_stale_timeout_never_triggers_inertia() {
 }
 
 #[gpui_kit::test]
-fn scrolling_with_reduced_motion_is_immediate(cx: &mut TestAppContext) {
-    let fx = fixture("glide-off");
+fn scrolling_zoomed_view_steps_line_position(cx: &mut TestAppContext) {
+    let fx = fixture("glide-step");
     let (view, cx) = launch(&fx, cx);
     open_book_by_index(&fx, &view, cx, 0);
     view.update_in(cx, |this, window, cx| {
         let vp = viewport_of(window);
         this.zoom_to(2.0, (vp.width / 2.0, vp.height / 2.0), vp, cx);
-        this.reduce_motion = true;
     });
     settle_animations(&view, cx);
     let base = with_reader(&view, cx, |r| r.off.1);
@@ -3299,43 +3270,52 @@ fn test_vim_mode_cli_flag_override(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn test_disable_animations_setting_and_reduced_motion_override(cx: &mut TestAppContext) {
-    let fx = fixture("disable_anim");
+fn test_permanent_animation_policy(cx: &mut TestAppContext) {
+    let fx = fixture("perm_anim");
     let (view, cx) = launch(&fx, cx);
 
-    // Default: animations enabled (disable_animations is false)
-    view.update_in(cx, |this, _, _| {
-        assert!(!this.library.settings().disable_animations);
-        assert!(this.animations_enabled());
-    });
-
-    // 1. User toggles disable_animations ON
-    view.update_in(cx, |this, _, cx| {
-        this.toggle_disable_animations(true, cx);
-        assert!(this.library.settings().disable_animations);
-        assert!(!this.animations_enabled());
-    });
-    cx.run_until_parked();
-
-    // Verify it persists on disk
-    let on_disk = Library::load(&fx.dirs).unwrap();
-    assert!(on_disk.settings().disable_animations);
-
-    // 2. User toggles disable_animations OFF
-    view.update_in(cx, |this, _, cx| {
-        this.toggle_disable_animations(false, cx);
-        assert!(!this.library.settings().disable_animations);
-        assert!(this.animations_enabled());
-    });
-
-    // 3. System asks for reduced motion: animations must stay off regardless of user setting
-    view.update_in(cx, |this, _, _| {
-        this.reduce_motion = true;
+    // 1. Application startup keeps native animations enabled in the GPUI runtime
+    cx.update(|_, cx| {
         assert!(
-            !this.animations_enabled(),
-            "system reduced motion must override user setting"
+            !cx.reduce_motion(),
+            "GPUI reduce_motion must be permanently false on startup"
         );
     });
+
+    // 2. Settings configuration has animations permanently active
+    view.update_in(cx, |this, _, _| {
+        assert!(
+            this.library.settings().animate,
+            "library settings must indicate animations are permanently active"
+        );
+    });
+
+    // 3. Settings UI renders cleanly without an animation disable switch
+    view.update_in(cx, |this, window, cx| {
+        this.navigate_to(crate::ui::sidebar::MainView::Settings, cx);
+        let _settings_element = this.render_settings_content(window, cx);
+    });
+
+    // 4. Old configuration files containing `disable_animations` load safely with animations enabled
+    let json = r#"{"books":[],"settings":{"disable_animations":true,"animate":false}}"#;
+    std::fs::write(fx.dirs.library_file(), json).unwrap();
+    let loaded = Library::load(&fx.dirs).unwrap();
+    assert!(
+        loaded.settings().animate,
+        "old config with disable_animations=true must load safely and keep animations active"
+    );
+
+    // 5. Existing page transitions still function smoothly
+    open_book_by_index(&fx, &view, cx, 0);
+    view.update(cx, |this, cx| {
+        this.goto_page(1, Arrive::Start, cx);
+        assert!(
+            this.reader.as_ref().unwrap().transition.is_some(),
+            "slide animation transition must be active during navigation"
+        );
+    });
+    settle_animations(&view, cx);
+    assert_eq!(page(&view, cx), 1);
 }
 
 #[gpui_kit::test]
@@ -5862,4 +5842,358 @@ fn regression_phase5_settings_native_sidebar_navigation_and_tabs(cx: &mut TestAp
     view.read_with(cx, |this, _| {
         assert!(this.overlay.is_none());
     });
+}
+
+#[gpui_kit::test]
+fn regression_phase6_cards_lists_and_empty_states(cx: &mut TestAppContext) {
+    let fx = fixture("phase6-standardization");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Test empty search in library produces empty state element
+    view.update_in(cx, |this, window, cx| {
+        this.search_query = "nonexistent_query_string_xyz".to_string();
+        let empty_view = this.render_all_manga_view(window, cx);
+        drop(empty_view);
+    });
+
+    // 2. Test empty history view renders without panic
+    view.update_in(cx, |this, _, _| {
+        let scroll = gpui_kit::ScrollHandle::new();
+        let props = ui::history_view::HistoryProps {
+            scroll_handle: &scroll,
+            history_books: &[],
+            dirs: &this.dirs,
+            colors: this.colors,
+            radius: gpui_kit::px(4.0),
+            border_px: 1.0,
+            radius_px: 4.0,
+            viewport_w: 1200.0,
+            sidebar_visible: true,
+            is_grid: true,
+            thumb_size: yomu::library::ThumbnailSize::Medium,
+        };
+        let empty_history = ui::history_view::render_history_view(props, |_, _, _| {});
+        drop(empty_history);
+    });
+
+    // 3. Test empty collections view renders without panic
+    view.update_in(cx, |this, _, _| {
+        let scroll = gpui_kit::ScrollHandle::new();
+        let props = ui::collections_view::CollectionsProps {
+            scroll_handle: &scroll,
+            favorites_count: 0,
+            reading_count: 0,
+            want_to_read_count: 0,
+            completed_count: 0,
+            custom_collections: &[],
+            colors: this.colors,
+            radius: gpui_kit::px(4.0),
+        };
+        let empty_collections = ui::collections_view::render_collections_view(
+            props,
+            |_, _, _| {},
+            |_, _, _| {},
+            |_, _, _| {},
+            |_, _, _, _| {},
+        );
+        drop(empty_collections);
+    });
+
+    // 4. Test missing manga details renders Empty element without panic
+    view.update_in(cx, |this, window, cx| {
+        let empty_details = this.render_details_screen("nonexistent-book-id", window, cx);
+        drop(empty_details);
+    });
+
+    // 5. Test empty continue reading view renders Empty element without panic
+    view.update_in(cx, |this, _, _| {
+        let scroll = gpui_kit::ScrollHandle::new();
+        let props = ui::continue_reading::ContinueReadingProps {
+            scroll_handle: &scroll,
+            hero: None,
+            queue: Vec::new(),
+            recent_cards: Vec::new(),
+            recent_gap: gpui_kit::px(16.0),
+            pad_x: gpui_kit::px(24.0),
+            colors: this.colors,
+            radius: gpui_kit::px(6.0),
+            border_px: 1.0,
+        };
+        let empty_continue = ui::continue_reading::render_continue_reading_view(
+            props,
+            |_, _, _| {},
+            |_, _, _| {},
+            |_, _, _| {},
+            |_, menu, _, _| menu,
+            |_, _, _| {},
+        );
+        drop(empty_continue);
+    });
+
+    // 6. Test list view mode renders books and series groups via ListItem
+    view.update_in(cx, |this, window, cx| {
+        this.search_query.clear();
+        this.view_mode_grid = false;
+        let list_view = this.render_all_manga_view(window, cx);
+        drop(list_view);
+
+        // Toggle back to grid
+        this.view_mode_grid = true;
+        let grid_view = this.render_all_manga_view(window, cx);
+        drop(grid_view);
+    });
+
+    // 7. Test history view in list mode with books renders ListItem and Progress
+    view.update_in(cx, |this, _, _| {
+        let books = this.get_sorted_books();
+        let scroll = gpui_kit::ScrollHandle::new();
+        let props = ui::history_view::HistoryProps {
+            scroll_handle: &scroll,
+            history_books: &books,
+            dirs: &this.dirs,
+            colors: this.colors,
+            radius: gpui_kit::px(4.0),
+            border_px: 1.0,
+            radius_px: 4.0,
+            viewport_w: 1200.0,
+            sidebar_visible: true,
+            is_grid: false,
+            thumb_size: yomu::library::ThumbnailSize::Medium,
+        };
+        let hist_list = ui::history_view::render_history_view(props, |_, _, _| {});
+        drop(hist_list);
+    });
+}
+
+#[gpui_kit::test]
+fn test_dialog_centering_audit_and_verification(cx: &mut TestAppContext) {
+    let fx = fixture("dialog-centering-test");
+    let (view, cx) = launch(&fx, cx);
+
+    let viewport = view.update_in(cx, |_, window, _| window.viewport_size());
+    let expected_center_y = viewport.height / 2.0;
+    let expected_center_x = viewport.width / 2.0;
+
+    // 1. Open Settings dialog via shortcut
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+    cx.background_executor
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let bounds = cx
+        .debug_bounds("dialog-0")
+        .expect("Settings dialog-0 surface should be painted");
+    let center_y = bounds.center().y;
+    assert!(
+        (center_y - expected_center_y).abs() <= gpui_kit::px(1.0),
+        "Expected Settings dialog to be centered vertically around {expected_center_y:?}, got {center_y:?} (bounds: {bounds:?})"
+    );
+    let center_x = bounds.center().x;
+    assert!(
+        (center_x - expected_center_x).abs() <= gpui_kit::px(1.0),
+        "Expected Settings dialog to be centered horizontally around {expected_center_x:?}, got {center_x:?} (bounds: {bounds:?})"
+    );
+
+    // 1b. Test dynamic window resize re-centers the dialog automatically
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(900.)));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let resized_bounds = cx
+        .debug_bounds("dialog-0")
+        .expect("Settings dialog-0 surface should remain painted after resize");
+    let resized_viewport = view.update_in(cx, |_, window, _| window.viewport_size());
+    let resized_expected_center_y = resized_viewport.height / 2.0;
+    let resized_expected_center_x = resized_viewport.width / 2.0;
+    assert!(
+        (resized_bounds.center().y - resized_expected_center_y).abs() <= gpui_kit::px(1.0),
+        "Expected Settings dialog to re-center vertically after window resize to {resized_expected_center_y:?}, got {:?}",
+        resized_bounds.center().y
+    );
+    assert!(
+        (resized_bounds.center().x - resized_expected_center_x).abs() <= gpui_kit::px(1.0),
+        "Expected Settings dialog to re-center horizontally after window resize to {resized_expected_center_x:?}, got {:?}",
+        resized_bounds.center().x
+    );
+
+    // Restore original size
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1920.), gpui_kit::px(1080.)));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    // Close settings
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+    cx.run_until_parked();
+
+    // 2. Open Properties dialog on a book
+    let id = fx.ids[0].clone();
+    act(&view, cx, &id, BookAction::Properties);
+    assert_eq!(overlay_kind(&view, cx), "properties");
+    cx.run_until_parked();
+
+    let bounds = cx
+        .debug_bounds("dialog-0")
+        .expect("Properties dialog-0 surface should be painted");
+    let center_y = bounds.center().y;
+    assert!(
+        (center_y - expected_center_y).abs() <= gpui_kit::px(1.0),
+        "Expected Properties dialog to be centered vertically around {expected_center_y:?}, got {center_y:?} (bounds: {bounds:?})"
+    );
+    let center_x = bounds.center().x;
+    assert!(
+        (center_x - expected_center_x).abs() <= gpui_kit::px(1.0),
+        "Expected Properties dialog to be centered horizontally around {expected_center_x:?}, got {center_x:?} (bounds: {bounds:?})"
+    );
+
+    // Close properties
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+    cx.run_until_parked();
+
+    // 3. Open Confirmation alert dialog (standalone library action)
+    view.update_in(cx, |this, window, cx| {
+        this.open_confirm_alert(
+            ConfirmDialog {
+                title: "Test Alert".into(),
+                message: "Alert message".into(),
+                confirm_label: "Confirm",
+                action: ConfirmAction::RemoveSelected,
+            },
+            window,
+            cx,
+        );
+    });
+    assert_eq!(overlay_kind(&view, cx), "confirm");
+    cx.background_executor
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let bounds = cx
+        .debug_bounds("dialog-0")
+        .expect("Alert dialog-0 surface should be painted");
+    let center_y = bounds.center().y;
+    assert!(
+        (center_y - expected_center_y).abs() <= gpui_kit::px(1.0),
+        "Expected Alert dialog to be centered vertically around {expected_center_y:?}, got {center_y:?} (bounds: {bounds:?})"
+    );
+    let center_x = bounds.center().x;
+    assert!(
+        (center_x - expected_center_x).abs() <= gpui_kit::px(1.0),
+        "Expected Alert dialog to be centered horizontally around {expected_center_x:?}, got {center_x:?} (bounds: {bounds:?})"
+    );
+
+    // Dismiss alert
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+    cx.run_until_parked();
+
+    // 4. Open Series dialog
+    let id_list = vec![fx.ids[0].clone()];
+    view.update_in(cx, |this, window, cx| {
+        this.open_series_dialog(id_list, window, cx);
+    });
+    assert_eq!(overlay_kind(&view, cx), "series");
+    cx.background_executor
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let bounds = cx
+        .debug_bounds("dialog-0")
+        .expect("Series dialog-0 surface should be painted");
+    let center_y = bounds.center().y;
+    assert!(
+        (center_y - expected_center_y).abs() <= gpui_kit::px(1.0),
+        "Expected Series dialog to be centered vertically around {expected_center_y:?}, got {center_y:?} (bounds: {bounds:?})"
+    );
+
+    // Dismiss series
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+    cx.run_until_parked();
+
+    // 5. Open Collection dialog
+    view.update_in(cx, |this, window, cx| {
+        this.open_collection_dialog(true, None, window, cx);
+    });
+    assert_eq!(overlay_kind(&view, cx), "collection");
+    cx.background_executor
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let bounds = cx
+        .debug_bounds("dialog-0")
+        .expect("Collection dialog-0 surface should be painted");
+    let center_y = bounds.center().y;
+    assert!(
+        (center_y - expected_center_y).abs() <= gpui_kit::px(1.0),
+        "Expected Collection dialog to be centered vertically around {expected_center_y:?}, got {center_y:?} (bounds: {bounds:?})"
+    );
+
+    // Dismiss collection
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+    cx.run_until_parked();
+
+    // 6. Test nested dialogs: Open confirmation dialog on top of Settings dialog
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+    cx.background_executor
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("dialog-0").is_some());
+
+    // Trigger confirmation alert while settings is open
+    view.update_in(cx, |this, window, cx| {
+        this.open_confirm_alert(
+            ConfirmDialog {
+                title: "Reset Settings?".into(),
+                message: "Are you sure you want to reset all settings?".into(),
+                confirm_label: "Reset",
+                action: ConfirmAction::ResetSettings,
+            },
+            window,
+            cx,
+        );
+    });
+    assert_eq!(overlay_kind(&view, cx), "confirm");
+    cx.background_executor
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    // Verify both dialog-0 (Settings) and dialog-1 (Confirmation) exist
+    let settings_bounds = cx
+        .debug_bounds("dialog-0")
+        .expect("Settings dialog-0 should still be mounted under alert");
+    let alert_bounds = cx
+        .debug_bounds("dialog-1")
+        .expect("Confirmation alert dialog-1 should be mounted on top of settings");
+
+    // dialog-0 remains centered
+    assert!(
+        (settings_bounds.center().y - expected_center_y).abs() <= gpui_kit::px(1.0),
+        "Underlying Settings dialog should remain centered"
+    );
+    // dialog-1 is centered with standard 16px layer cascade offset
+    let expected_cascade_y = expected_center_y + gpui_kit::px(16.0);
+    assert!(
+        (alert_bounds.center().y - expected_cascade_y).abs() <= gpui_kit::px(1.0),
+        "Nested alert dialog-1 should be centered with 16px cascade offset ({expected_cascade_y:?}), got {:?}",
+        alert_bounds.center().y
+    );
+
+    // Dismiss nested alert: returns focus to settings
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // Dismiss settings: closes everything cleanly
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
 }

@@ -6,7 +6,7 @@ Yomu is structured into three clean architectural tiers:
 
 1. **Core Domain Layer (`src/lib.rs` / `yomu` crate):** GUI-independent Rust (`#![forbid(unsafe_code)]`), decoupled from GPUI, windowing, and presentation frameworks. Combines pure algorithms (geometry calculations, cache eviction planning, Vim grammar parsing, search filtering, selection state machines) with filesystem and persistence operations (archive enumeration, SIMD image decoding and scaling, atomic JSON persistence). Fully testable without a window or graphics compositor.
 2. **UI Presentation Layer (`src/ui/`):** Built on GPUI Kit 0.8.1 (`gpui-pre = 0.3.10` runtime). Encapsulates views, components, dialogs, theme loading, and platform-adaptive momentum scrolling adapters (`ui::scroll`).
-3. **Application Orchestration (`src/main.rs` / planned `src/app/`):** Manages the application window lifecycle, top-level state routing, input dispatch, background decode task scheduling, GPU texture garbage collection, and debounced persistence.
+3. **Application Orchestration (`src/app/` & `src/main.rs`):** Manages the application window lifecycle, top-level state routing, input dispatch, background decode task scheduling, GPU texture garbage collection, and debounced persistence.
 
 ```text
 GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
@@ -70,7 +70,7 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `history_view.rs` | Reading history screen | Chronological reading log of in-progress and completed books with progress bars and quick navigation. |
 | `settings_view.rs` | Split-pane macOS preferences | 6 dedicated categories (General, Appearance, Reader, Library, Shortcuts, Advanced) with native GPUI Kit switches, dropdowns, and tables. |
 | `overlays.rs` | Modal dialogs, menus, help | Consolidated modal layer. Uses native GPUI Kit components; shortcuts modal. |
-| `reader.rs` | Reader viewport state, continuous strip, and visual presentation | Edge-to-edge canvas with decoded page layers (`page_layer`); autohiding header with fit mode and window controls (`reader_header`); floating progress bar (`reader_progress_bar`); lateral turn chevrons (`lateral_turners`); and continuous vertical scrollbar integration (`ReaderScrollHandle`). |
+| `reader.rs` | Reader viewport state, continuous strip, and visual presentation | Edge-to-edge canvas with decoded page layers (`page_layer`); autohiding header with fit mode and window controls (`reader_header`); lateral turn chevrons (`lateral_turners`); and continuous vertical scrollbar integration (`ReaderScrollHandle`). |
 | `components.rs` | Shared atomic visual primitives | Window controls, responsive grid math, status badges, and genre tags. |
 | `theme.rs` | Theme management and TOML loader | Bridges GPUI Kit themes and custom `themes.toml` files with automatic SHA-256 fingerprint reloading. |
 
@@ -152,3 +152,50 @@ Corner radii follow user preferences (`CornerRounding::None`, `Small`, `Medium`,
   5. **No Synchronous I/O on UI Thread:** Never read files, procfs, or metadata inside the render loop or animation frames.
   6. **Asynchronous Cancellation Safety:** Cancellation is not an error; aborted prefetch tasks must not mark pages as permanently failed.
   7. **Mixed-Source Spread Support:** In dual-page mode, extra-wide single-image double-page spreads are detected automatically via aspect ratio threshold and comic context, or forced via stable archive entry overrides (`Book.spread_overrides`). Single-image spreads occupy an entire spread alone and are never paired with adjacent pages; normal pages pair into two-image spreads; and isolated normal pages remain alone. Zero pages are skipped, duplicated, or re-ordered. Logical progress strictly tracks archive entry indices.
+
+---
+
+## Motion & Animation Architecture
+
+Yomu adheres to a restrained, desktop-native motion language built exclusively on official **GPUI Kit 0.8.1** animation APIs. Motion is applied purposefully for spatial continuity and tactile feedback, never as decorative distraction or performance overhead.
+
+### 1. Toolkit Animation Mechanisms
+Animation in Yomu leverages the native capabilities provided by the `gpui-kit` / `gpui-base` / `gpui-component` 0.8.1 ecosystem:
+- **`EffectTransition` (`gpui_kit::base::animation::EffectTransition`):** Declarative, composable transition combinator for GPUI elements. Supports `.fade(from, to)`, `.slide_y(from, to)`, `.slide_x(from, to)`, `.width(from, to)`, `.height(from, to)`, and easing curves (`ease_out_cubic`). Applied directly to elements via `.apply(element, element_id)`.
+- **Value Motion & Springs (`gpui_kit::base::motion::*`):** Pure functional interpolation primitives (`transition`, `spring`, `Presence`, `animate_keyframes`) available for scalar property changes.
+- **`with_animation` Execution Loop:** Native GPUI frame hook that automatically bypasses frames and settles instantaneously when `cx.reduce_motion()` is active or duration is zero.
+- **Native Component Transitions:**
+  - `Sidebar`: Built-in offcanvas sliding transition (`SidebarCollapsible::Offcanvas`, 200ms cubic ease).
+  - `Dialog` & `AlertDialog`: Built-in native open/dismiss cubic bezier scale and fade transitions.
+  - `Spinner`: Built-in continuous rotational animation driven by `with_animation`.
+
+### 2. Implemented Motion Patterns
+| Transition Area | Location | Mechanism & Curve | Visual Behavior | Trigger |
+|---|---|---|---|---|
+| **Settings Tab Switch** | `src/ui/settings_view.rs` | `EffectTransition` (`ease_out_cubic`, 140ms) | Subtle opacity drift ($0.85 \to 1.0$) on tab container | Category selection change in Settings sidebar |
+| **Main View Switch** | `src/app/views/shell.rs` | `EffectTransition` (`ease_out_cubic`, 140ms) | Subtle opacity drift ($0.90 \to 1.0$) on view canvas | Navigation between All Manga, History, Details, etc. |
+| **Reader Help Modal** | `src/ui/overlays.rs` | `EffectTransition` (`ease_out_cubic`, 120ms) | Micro vertical slide ($-6\text{px} \to 0\text{px}$) & fade ($0.80 \to 1.0$) | Keyboard shortcut overlay toggle (`?`) in Reader |
+| **Sidebar Collapse** | GPUI Kit `Sidebar` | Built-in `EffectTransition` (200ms) | Native horizontal off-canvas slide | Sidebar toggle (`⌘B` / `Ctrl+B`) |
+| **Modal & Alert Dialogs** | GPUI Kit `Dialog` | Built-in dialog transition | Native cubic bezier entrance and fade | Delete confirmations, edit series, info popups |
+| **Loading Indicators** | GPUI Kit `Spinner` | Built-in continuous animation | Smooth 360-degree rotation | Async cover decodes and library imports |
+
+### 3. Removed Custom Implementations
+All legacy, ad-hoc, and custom animation workarounds have been eradicated:
+- Removed obsolete custom `reader_progress_bar` and custom progress animations.
+- Removed custom frame-driven interpolation timers and manual tick accumulators.
+- No redundant custom wrappers or styling that override native GPUI Kit motion behavior.
+
+### 4. High-Frequency Surfaces Intentionally Kept Static
+To maximize rendering performance, battery life, and visual stability, high-frequency surfaces are intentionally static:
+- **Library Grid & List Items:** Cards and rows update instantly without staggered cascading entrances or layout reflow animations.
+- **Search Filtering:** Results render immediately as query tokens are parsed, avoiding visual jitter during rapid typing.
+- **Decoded Comic Page Delivery:** Decoded BGRA buffers upload directly to GPU textures without crossfade or zoom animations to preserve comic line art clarity.
+- **Bulk Selection & Toggles:** Checkboxes and selection rings snap immediately with zero bounce.
+
+### 5. Permanent Animation Policy
+Yomu enforces a strict policy where all animations remain permanently enabled across all platforms and environments:
+1. **No Application Animation Disable Setting:** There is no toggle or configuration option in Settings or persistence structures to disable or reduce animations.
+2. **Independent of Operating System Reduced-Motion Preferences:** Yomu does not follow OS-level reduced-motion settings (such as GNOME/KDE XDG portals, macOS Accessibility, or Windows Visual Effects).
+3. **GPUI Runtime Enforcement:** Application startup and window initialization explicitly set `cx.set_reduce_motion(false)`, ensuring the GPUI runtime executes all frame-driven animations, transitions, and component motion at full fidelity.
+4. **Backward Compatibility:** Older configuration files containing `disable_animations` load safely without error, with animations staying active.
+

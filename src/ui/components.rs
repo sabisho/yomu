@@ -5,10 +5,7 @@ use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{Selectable, Sizable, Size};
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, ElementId, Pixels, Rgba, SharedString, Styled, Window, div,
-    px,
-};
+use gpui_kit::{App, ClickEvent, Div, ElementId, Pixels, Rgba, SharedString, Styled, Window, px};
 
 use super::theme::UiColors;
 use crate::library::ThumbnailSize;
@@ -295,31 +292,10 @@ pub fn overlay_shade(colors: UiColors) -> gpui_kit::Hsla {
     }
 }
 
-pub fn centered(text: impl Into<SharedString>, colors: UiColors) -> AnyElement {
-    div()
-        .size_full()
-        .flex()
-        .items_center()
+pub fn pill(row: Div, text: impl Into<SharedString>, _colors: UiColors, radius: Pixels) -> Div {
+    row.flex()
         .justify_center()
-        .text_color(colors.muted)
-        .child(text.into())
-        .into_any_element()
-}
-
-pub fn pill(row: Div, text: impl Into<SharedString>, colors: UiColors, radius: Pixels) -> Div {
-    row.flex().justify_center().child(
-        div()
-            .px_3()
-            .py_1()
-            .rounded(radius)
-            .bg(colors.surface)
-            .border_1()
-            .border_color(colors.border)
-            .shadow_md()
-            .text_sm()
-            .text_color(colors.foreground)
-            .child(text.into()),
-    )
+        .child(Tag::secondary().rounded(radius).child(text.into()))
 }
 
 /// Subtle count badge used in the sidebar and navigation items.
@@ -414,6 +390,7 @@ mod tests {
 
     #[test]
     fn test_button_builders_construct() {
+        use gpui_kit::AnyElement;
         let btn = toolbar_icon_button(
             "test-toolbar-btn",
             IconName::PanelLeft,

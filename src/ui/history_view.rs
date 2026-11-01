@@ -1,12 +1,18 @@
 //! Reading history view showing in-progress and completed books.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
+use gpui_kit::component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
+use gpui_kit::component::list::ListItem;
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{Icon, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle, SharedString,
-    Styled, Window, div, img, px, relative,
+    Styled, Window, div, img, px,
 };
 use yomu::library::{Book, DataDirs, ThumbnailSize};
 
@@ -37,16 +43,19 @@ pub fn render_history_view(
     let is_grid = props.is_grid;
 
     if props.history_books.is_empty() {
-        return div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .text_color(colors.muted)
-            .child(Icon::new(IconName::Clock).size(px(48.)))
-            .child(div().text_base().child("No reading history yet"))
+        return Empty::new()
+            .header(
+                EmptyHeader::new()
+                    .media(
+                        EmptyMedia::new()
+                            .with_variant(EmptyMediaVariant::Icon)
+                            .child(Icon::new(IconName::Clock).size(px(48.))),
+                    )
+                    .title(EmptyTitle::new().child("No reading history yet"))
+                    .description(EmptyDescription::new().child(
+                        "Books you open will appear here so you can pick up where you left off.",
+                    )),
+            )
             .into_any_element();
     }
 
@@ -125,127 +134,139 @@ pub fn render_history_view(
                             )
                             .child(div().text_xs().text_color(colors.muted).truncate().child(
                                 format!("Ch. {current} of {total} · {:.0}%", progress * 100.0),
-                            )),
+                            ))
+                            .child(
+                                div().w_full().pt_1().child(
+                                    Progress::new(ElementId::from(SharedString::from(format!(
+                                        "hist-prog-{}",
+                                        book.id
+                                    ))))
+                                    .value(progress * 100.0)
+                                    .h(px(3.))
+                                    .rounded(radius),
+                                ),
+                            ),
                     )
                     .into_any_element()
             } else {
                 let on_select = on_select.clone();
                 let book_id_click = book_id.clone();
-                div()
-                    .id(ElementId::from(SharedString::from(format!(
-                        "hist-item-{}",
-                        book.id
-                    ))))
-                    .w_full()
-                    .h(px(64.))
-                    .px_3p5()
-                    .rounded(radius)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .bg(with_alpha(colors.surface, 0.5))
-                    .when(border_px > 0.0, |s| {
-                        s.border(px(border_px)).border_color(colors.border)
-                    })
-                    .cursor_pointer()
-                    .hover(|s| {
-                        s.bg(with_alpha(colors.surface, 0.8))
-                            .border_color(colors.accent)
-                    })
-                    .on_click(move |_, window, cx| on_select(book_id_click.clone(), window, cx))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .min_w_0()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .id(ElementId::from(SharedString::from(format!(
-                                        "hist-cover-{}",
-                                        book.id
-                                    ))))
-                                    .w(px(36.))
-                                    .h(px(50.))
-                                    .flex_none()
-                                    .rounded(px(props.radius_px.min(4.)))
-                                    .bg(with_alpha(colors.foreground, 0.04))
-                                    .overflow_hidden()
-                                    .child(
-                                        img(cover_path)
-                                            .size_full()
-                                            .rounded(px(props.radius_px.min(4.)))
-                                            .object_fit(gpui_kit::ObjectFit::Cover),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(colors.foreground)
-                                            .truncate()
-                                            .child(display_title),
-                                    )
-                                    .child(
-                                        div().text_xs().text_color(colors.muted).truncate().child(
-                                            format!(
-                                                "Ch. {current} of {total} · {:.0}%",
-                                                progress * 100.0
-                                            ),
+                ListItem::new(ElementId::from(SharedString::from(format!(
+                    "hist-item-{}",
+                    book.id
+                ))))
+                .h(px(64.))
+                .px_3p5()
+                .rounded(radius)
+                .when(border_px > 0.0, |s| {
+                    s.border(px(border_px)).border_color(colors.border)
+                })
+                .on_click(move |_, window, cx| on_select(book_id_click.clone(), window, cx))
+                .child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .min_w_0()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .id(ElementId::from(SharedString::from(format!(
+                                            "hist-cover-{}",
+                                            book.id
+                                        ))))
+                                        .w(px(36.))
+                                        .h(px(50.))
+                                        .flex_none()
+                                        .rounded(px(props.radius_px.min(4.)))
+                                        .bg(with_alpha(colors.foreground, 0.04))
+                                        .overflow_hidden()
+                                        .child(
+                                            img(cover_path)
+                                                .size_full()
+                                                .rounded(px(props.radius_px.min(4.)))
+                                                .object_fit(gpui_kit::ObjectFit::Cover),
                                         ),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .flex_none()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .w(px(90.))
-                                            .h(px(4.))
-                                            .rounded_full()
-                                            .bg(with_alpha(colors.foreground, 0.08))
-                                            .child(
-                                                div()
-                                                    .h_full()
-                                                    .w(relative(progress))
-                                                    .rounded_full()
-                                                    .bg(colors.accent),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(34.))
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(colors.muted)
-                                            .child(format!("{:.0}%", progress * 100.0)),
-                                    ),
-                            )
-                            .child(
-                                Icon::new(IconName::ChevronRight)
-                                    .size(px(16.))
-                                    .text_color(colors.muted),
-                            ),
-                    )
-                    .into_any_element()
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(colors.foreground)
+                                                .truncate()
+                                                .child(display_title),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .text_xs()
+                                                .text_color(colors.muted)
+                                                .children(book.series.as_deref().map(|s| {
+                                                    Tag::secondary().small().child(s.to_string())
+                                                }))
+                                                .child(div().truncate().child(format!(
+                                                    "Ch. {current} of {total} · {:.0}%",
+                                                    progress * 100.0
+                                                ))),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .flex_none()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            Progress::new(ElementId::from(SharedString::from(
+                                                format!("hist-prog-list-{}", book.id),
+                                            )))
+                                            .value(progress * 100.0)
+                                            .w(px(90.)),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(34.))
+                                                .text_xs()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(colors.muted)
+                                                .child(format!("{:.0}%", progress * 100.0)),
+                                        ),
+                                )
+                                .child(if progress >= 1.0 {
+                                    Tag::success().small().child("Completed")
+                                } else {
+                                    Tag::primary().small().child("Reading")
+                                })
+                                .child(
+                                    Icon::new(IconName::ChevronRight)
+                                        .size(px(16.))
+                                        .text_color(colors.muted),
+                                ),
+                        ),
+                )
+                .into_any_element()
             }
         })
         .collect();

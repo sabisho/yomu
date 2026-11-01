@@ -2,6 +2,9 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::empty::{
+    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
+};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::*;
@@ -186,30 +189,22 @@ pub fn render_collections_view(
                         .child("My Collections"),
                 )
                 .child(if props.custom_collections.is_empty() {
-                    div()
-                        .w_full()
-                        .p_8()
-                        .rounded(props.radius)
-                        .border_1()
-                        .border_color(colors.border)
-                        .bg(with_alpha(colors.surface, 0.4))
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(colors.foreground)
-                                .child("No Custom Collections Yet"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(colors.muted)
-                                .child("Click '+ New Collection' above to create categories like Seinen, Shonen, etc."),
+                    Empty::new()
+                        .header(
+                            EmptyHeader::new()
+                                .media(
+                                    EmptyMedia::new()
+                                        .with_variant(EmptyMediaVariant::Icon)
+                                        .child(
+                                            Icon::new(IconName::Folder)
+                                                .size(px(36.))
+                                                .text_color(colors.muted),
+                                        ),
+                                )
+                                .title(EmptyTitle::new().child("No Custom Collections Yet"))
+                                .description(EmptyDescription::new().child(
+                                    "Click '+ New Collection' above to create categories like Seinen, Shonen, etc.",
+                                )),
                         )
                         .into_any_element()
                 } else {

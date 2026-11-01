@@ -22,7 +22,6 @@ impl Yomu {
             settings: self.library.settings(),
             available_schemes: ui::theme::available_color_schemes(&self.custom_themes),
             cache_size_str: format_size(cache_bytes),
-            system_reduced_motion: self.reduce_motion,
             vim_mode: self.is_vim_enabled(),
             colors: self.colors,
             radius: px(self.radius_xl_px()),
@@ -92,14 +91,6 @@ impl Yomu {
                 move |checked, _, cx| {
                     yomu.update(cx, |this, cx| {
                         this.toggle_group_series(checked, cx);
-                    });
-                }
-            },
-            {
-                let yomu = yomu.clone();
-                move |checked, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.toggle_disable_animations(checked, cx);
                     });
                 }
             },

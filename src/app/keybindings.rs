@@ -347,7 +347,6 @@ impl Yomu {
                     None => self.show_hud("No previous position", cx),
                 }
             }
-            Action::SetAnimations(value) => self.set_animations(value, cx),
             Action::SetContinuous(value) => self.set_continuous(value, cx),
             Action::SetWebcomics(value) => self.set_webcomics(value, cx),
             Action::SetRememberZoom(value) => self.set_remember_zoom(value, cx),

@@ -121,22 +121,19 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ---
 
-## 🎨 Phase 4: UI/UX Refinement & Restrained Animations
+## 🎨 Phase 4: UI/UX Refinement, Layouts & Restrained Motion (Completed)
 
-### 13. Restrained UI Motion Transitions
-- **Goal:** Introduce subtle, interruptible desktop motion that strictly adheres to `disable_animations`.
-- **Candidates (Starting Guidelines):**
-  - Sidebar collapse/expand: ~160–180 ms cubic ease-out width transition.
-  - Settings navigation: ~120–140 ms subtle opacity cross-fade.
-  - Modal overlay exit: ~120–140 ms fade and scale-down before unmounting.
+### 13. Library Sorting Options (Phase 4.1 — Completed)
+- **Goal:** Allow users to sort library cards and list rows beyond the default import order.
+- **Status:** Completed.
+  - Modes: Title (A–Z / Z–A natural sort), Date Added (Newest / Oldest with backward-compatible mtime backfill), Last Read (Recently Read / Least Recently Read), Reading Progress (Highest / Lowest), and Default import order.
+  - Direction: Ascending / Descending toggle with contextual labels.
+  - Toolbar dropdown menu with checkmarks and section separators.
+  - Settings persistence with lenient fallback and full preservation of underlying library order.
 
----
-
-## 📖 Phase 5: Feature Expansion
-
-### 14. Dual-Page Spread Reading Mode & Mixed-Source Support (Completed)
+### 14. Dual-Page Spread Reading Mode & Mixed-Source Support (Phases 4.2 & 4.2.1 — Completed)
 - **Goal:** Display two portrait pages side-by-side to replicate physical manga and western comic reading, with intelligent support for mixed-source archives containing single-image double-page spreads.
-- **Status:** Completed (Phases 4.2 & 4.2.1).
+- **Status:** Completed.
   - Implemented `PageLayout::Single` and `PageLayout::Double` with responsive portrait fallback (`is_dual_spread_effective`).
   - Implemented `ReadingDirection::RightToLeft` (Manga) and `ReadingDirection::LeftToRight` (Western comics) with directional arrow, click zone, and slide travel inversion.
   - Added `first_page_is_cover` toggle to isolate page 0 before pairs begin.
@@ -149,17 +146,10 @@ This document outlines prioritized future work, planned features, and tracked te
   - Autohiding header layout dropdown toggle and Settings Reader tab controls.
   - Keybinding `d` toggles double-page spread mode; keybinding `s` cycles current page spread override.
 
-### 15. Library Sorting Options (Completed)
-- **Goal:** Allow users to sort library cards and list rows beyond the default import order.
+### 15. Restrained Motion Transitions & Reader Polish (Phase 4.3 — Completed)
+- **Goal:** Introduce subtle, interruptible desktop motion with a permanent animation policy and harden the reader against real-world archive quirks.
 - **Status:** Completed.
-  - Modes: Title (A–Z / Z–A natural sort), Date Added (Newest / Oldest with backward-compatible mtime backfill), Last Read (Recently Read / Least Recently Read), Reading Progress (Highest / Lowest), and Default import order.
-  - Direction: Ascending / Descending toggle with contextual labels.
-  - Toolbar dropdown menu with checkmarks and section separators.
-  - Settings persistence with lenient fallback and full preservation of underlying library order.
-
-### 16. Real-World Reader QA & UX Polish (Phase 4.3 — Completed)
-- **Goal:** Harden the reader against real-world archive quirks, edge cases, and layout interactions following dual-page spread expansion.
-- **Status:** Completed.
+  - Subtle, interruptible desktop motion built on official GPUI Kit `EffectTransition` (120–140 ms ease-out curves) with permanent animation policy (`cx.set_reduce_motion(false)`).
   - Fixed double-page spread zoom panning offset calculation to clamp across the full two-page spread dimensions (`new_spread_size`) instead of a single page.
   - Implemented proper empty archive state handling (`total == 0` renders "No pages found in archive", page counter displays `0 / 0`, progress fraction is `0.0`).
   - Achieved full Vim mode feature parity with `d`, `zd` (toggle double page), `zs` (cycle spread override), and `:double`, `:single`, `:layout` commands.
@@ -167,10 +157,26 @@ This document outlines prioritized future work, planned features, and tracked te
   - Added title truncation with max width to reader header to prevent control overflow on narrow windows.
   - Hidden lateral page-turn chevrons in continuous vertical reading mode to eliminate hover clutter.
   - Added `.jfif` image format support to archive entry filtering and decoding.
-  - Added regression unit and integration tests covering empty archives, spread zoom panning, `.jfif` image support, and Vim layout commands (294 active tests passing: 131 lib, 163 bin).
+  - Full test suite passing (**308 active tests**: 130 lib, 178 bin, plus 3 opt-in performance benchmarks; 311 total).
 
-### 17. CB7 / 7z Archive Support
-- **Goal:** Support `.cb7` and `.7z` comic archives alongside CBZ, CBR, ZIP, and RAR.
+---
+
+## 📖 Phase 5: Future Engineering & Enhancements
+
+### 16. Background Persistence Zero-Copy Snapshots
+- **Goal:** Eliminate deep-cloning entire `Library` vectors during debounced autosave.
+- **Status:** Planned (Follow-up to Phase 3.3).
+  - Pass lightweight serialization diffs or immutable snapshots to background write threads.
+
+### 17. Dependency & Vendor Hygiene
+- **Goal:** Reduce repository footprint and simplify upstream maintenance.
+- **Status:** Planned.
+  - Remove dead dependency `memmap2` from `Cargo.toml`.
+  - Resolve the `Selectable` trait re-export cleanly and assess removing `vendor/gpui-component`.
+
+### 18. CB7 / 7z Archive Support
+- **Goal:** Support `.cb7` and `.7z` comic archives alongside CBZ, CBR, ZIP, and RAR using a pure Rust 7z decoder.
+- **Status:** Planned.
 
 ---
 

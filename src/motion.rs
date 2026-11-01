@@ -403,30 +403,6 @@ impl PageTransition {
     }
 }
 
-/// Parse `gsettings get org.gnome.desktop.interface enable-animations` output.
-/// Returns `true` when the desktop asks for reduced motion (animations disabled).
-pub fn gsettings_disables_animations(output: &str) -> bool {
-    output.trim() == "false"
-}
-
-/// Whether the user (or their desktop) asks for reduced motion.
-///
-/// * `YOMU_REDUCE_MOTION=1` forces it on, `=0` forces it off.
-/// * Otherwise GNOME's "Animations" switch is honoured via `gsettings`, when available.
-///   (Desktops without that setting simply report no preference.)
-pub fn detect_reduced_motion() -> bool {
-    if let Ok(value) = std::env::var("YOMU_REDUCE_MOTION") {
-        return matches!(value.trim(), "1" | "true" | "yes" | "on");
-    }
-    std::process::Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "enable-animations"])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .map(|out| gsettings_disables_animations(&String::from_utf8_lossy(&out.stdout)))
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,12 +4,16 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
+use gpui_kit::component::label::Label;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::separator::Separator;
 use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
-use gpui_kit::component::{Disableable, Icon, Side, Sizable, Size};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{Icon, Side, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Anchor, AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, Pixels,
@@ -32,7 +36,6 @@ pub struct SettingsViewProps<'a> {
     pub settings: &'a Settings,
     pub available_schemes: Vec<String>,
     pub cache_size_str: String,
-    pub system_reduced_motion: bool,
     pub vim_mode: bool,
     pub colors: UiColors,
     pub radius: Pixels,
@@ -48,7 +51,6 @@ pub fn render_settings_view(
     on_toggle_continuous: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_webcomics: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
-    on_toggle_disable_animations: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_remember_zoom: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_vim_mode: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_set_theme_mode: impl Fn(ThemeModePreference, &mut Window, &mut App) + 'static,
@@ -160,71 +162,70 @@ pub fn render_settings_view(
                                 }),
                             ),
                     )
-                    .child(match props.current_tab {
-                        SettingsTab::General => {
-                            render_tab_general(props.settings, colors, on_toggle_continuous)
-                        }
-                        SettingsTab::Appearance => render_tab_appearance(
-                            props.settings,
-                            &props.available_schemes,
-                            colors,
-                            on_set_theme_mode.clone(),
-                            on_set_color_scheme,
-                            on_set_corner_rounding,
-                            on_set_border_size,
-                        ),
-                        SettingsTab::Reader => render_tab_reader(
-                            props.settings,
-                            props.system_reduced_motion,
-                            colors,
-                            on_set_page_layout,
-                            on_set_reading_direction,
-                            on_toggle_first_page_is_cover,
-                            on_set_spread_ratio_threshold,
-                            on_toggle_continuous,
-                            on_toggle_webcomics,
-                            on_toggle_disable_animations,
-                            on_toggle_remember_zoom,
-                            on_toggle_vim_mode,
-                        ),
-                        SettingsTab::Library => render_tab_library(
-                            props.settings,
-                            colors,
-                            on_toggle_group_series,
-                            on_set_thumbnail_size,
-                        ),
-                        SettingsTab::Shortcuts => {
-                            render_tab_shortcuts(colors, props.vim_mode)
-                        }
-                        SettingsTab::Advanced => render_tab_advanced(
-                            &props.cache_size_str,
-                            colors,
-                            on_clear_cache,
-                            on_reset_settings,
-                            on_reset_all_data,
-                        ),
+                    .child({
+                        let tab_content = match props.current_tab {
+                            SettingsTab::General => {
+                                render_tab_general(props.settings, colors, on_toggle_continuous)
+                            }
+                            SettingsTab::Appearance => render_tab_appearance(
+                                props.settings,
+                                &props.available_schemes,
+                                colors,
+                                on_set_theme_mode.clone(),
+                                on_set_color_scheme,
+                                on_set_corner_rounding,
+                                on_set_border_size,
+                            ),
+                            SettingsTab::Reader => render_tab_reader(
+                                props.settings,
+                                colors,
+                                on_set_page_layout,
+                                on_set_reading_direction,
+                                on_toggle_first_page_is_cover,
+                                on_set_spread_ratio_threshold,
+                                on_toggle_continuous,
+                                on_toggle_webcomics,
+                                on_toggle_remember_zoom,
+                                on_toggle_vim_mode,
+                            ),
+                            SettingsTab::Library => render_tab_library(
+                                props.settings,
+                                colors,
+                                on_toggle_group_series,
+                                on_set_thumbnail_size,
+                            ),
+                            SettingsTab::Shortcuts => {
+                                render_tab_shortcuts(colors, props.vim_mode)
+                            }
+                            SettingsTab::Advanced => render_tab_advanced(
+                                &props.cache_size_str,
+                                colors,
+                                on_clear_cache,
+                                on_reset_settings,
+                                on_reset_all_data,
+                            ),
+                        };
+
+                        let duration = std::time::Duration::from_millis(140);
+                        gpui_kit::base::animation::EffectTransition::new(duration)
+                            .ease(gpui_kit::base::animation::ease_out_cubic)
+                            .fade(0.85, 1.0)
+                            .apply(tab_content, ("settings-tab-fade", props.current_tab.to_index()))
                     }),
             )
             .into_any_element()
 }
 
-fn settings_card(colors: UiColors) -> Div {
-    div()
-        .w_full()
+fn settings_card(colors: UiColors) -> GroupBox {
+    GroupBox::new()
+        .outline()
         .rounded(px(10.))
         .bg(with_alpha(colors.surface, 0.65))
-        .border_1()
         .border_color(with_alpha(colors.border, 0.45))
-        .overflow_hidden()
-        .flex()
-        .flex_col()
 }
 
-fn settings_divider(colors: UiColors) -> Div {
-    div()
-        .pl_4()
-        .w_full()
-        .child(div().w_full().h(px(1.)).bg(with_alpha(colors.border, 0.25)))
+fn settings_divider(colors: UiColors) -> Separator {
+    Separator::horizontal().color(with_alpha(colors.border, 0.25))
 }
 
 fn settings_row(
@@ -234,7 +235,7 @@ fn settings_row(
 ) -> Div {
     div()
         .w_full()
-        .min_h(px(44.))
+        .min_h(px(40.))
         .px_4()
         .py_2p5()
         .flex()
@@ -250,18 +251,12 @@ fn settings_row(
                 .flex_col()
                 .gap_0p5()
                 .child(
-                    div()
+                    Label::new(title)
                         .text_sm()
                         .font_weight(FontWeight::NORMAL)
-                        .text_color(colors.foreground)
-                        .child(title),
+                        .text_color(colors.foreground),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(colors.muted)
-                        .child(description.into()),
-                ),
+                .child(Label::new(description).text_xs().text_color(colors.muted)),
         )
 }
 
@@ -314,13 +309,11 @@ fn render_tab_general(
                     colors,
                 )
                 .child(
-                    div().cursor_pointer().child(
-                        Switch::new("gen-continuous-mode-switch")
-                            .accessibility_label("Continuous vertical reading mode")
-                            .small()
-                            .checked(settings.continuous)
-                            .on_click(move |val, window, cx| on_toggle_continuous(*val, window, cx)),
-                    ),
+                    Switch::new("gen-continuous-mode-switch")
+                        .accessibility_label("Continuous vertical reading mode")
+                        .small()
+                        .checked(settings.continuous)
+                        .on_click(move |val, window, cx| on_toggle_continuous(*val, window, cx)),
                 ),
             ),
         )
@@ -336,17 +329,7 @@ fn render_tab_general(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(
-                            div()
-                                .px_2p5()
-                                .py_1()
-                                .rounded(px(6.))
-                                .bg(with_alpha(colors.foreground, 0.08))
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(colors.muted)
-                                .child("v26.10.0"),
-                        )
+                        .child(Tag::secondary().child("v26.10.0"))
                         .child(
                             Button::new("about-github-repo-btn")
                                 .icon(IconName::Github)
@@ -387,7 +370,8 @@ fn render_tab_appearance(
     let standalone_note = if is_custom_standalone {
         Some(
             div()
-                .pt_2()
+                .px_4()
+                .pb_2()
                 .flex()
                 .items_center()
                 .gap_1p5()
@@ -396,10 +380,14 @@ fn render_tab_appearance(
                         .size(px(13.))
                         .text_color(colors.muted),
                 )
-                .child(div().text_xs().text_color(colors.muted).child(format!(
-                    "“{}” uses its own desktop-managed standalone palette.",
-                    settings.color_scheme
-                ))),
+                .child(
+                    Label::new(format!(
+                        "“{}” uses its own desktop-managed standalone palette.",
+                        settings.color_scheme
+                    ))
+                    .text_xs()
+                    .text_color(colors.muted),
+                ),
         )
     } else {
         None
@@ -417,65 +405,37 @@ fn render_tab_appearance(
         .gap_4()
         // Section: Appearance Mode (System / Light / Dark)
         .child(
-            settings_card(colors).child(
-                div()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .items_center()
-                            .justify_between()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(200.))
-                                    .flex()
-                                    .flex_col()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(colors.foreground)
-                                            .child("Appearance"),
-                                    )
-                                    .child(
-                                        div().text_xs().text_color(colors.muted).child(
-                                            "Match desktop system theme or lock Light / Dark.",
-                                        ),
-                                    ),
-                            )
-                            .child(macos_dropdown_button(
-                                "theme-mode-dropdown",
-                                theme_mode_label,
-                                vec![
-                                    (
-                                        "System".to_string(),
-                                        ThemeModePreference::System,
-                                        settings.theme_mode == ThemeModePreference::System,
-                                    ),
-                                    (
-                                        "Light".to_string(),
-                                        ThemeModePreference::Light,
-                                        settings.theme_mode == ThemeModePreference::Light,
-                                    ),
-                                    (
-                                        "Dark".to_string(),
-                                        ThemeModePreference::Dark,
-                                        settings.theme_mode == ThemeModePreference::Dark,
-                                    ),
-                                ],
-                                on_set_theme_mode,
-                            )),
+            settings_card(colors)
+                .child(
+                    settings_row(
+                        "Appearance Mode",
+                        "Match desktop system theme or lock Light / Dark.",
+                        colors,
                     )
-                    .children(standalone_note),
-            ),
+                    .child(macos_dropdown_button(
+                        "theme-mode-dropdown",
+                        theme_mode_label,
+                        vec![
+                            (
+                                "System".to_string(),
+                                ThemeModePreference::System,
+                                settings.theme_mode == ThemeModePreference::System,
+                            ),
+                            (
+                                "Light".to_string(),
+                                ThemeModePreference::Light,
+                                settings.theme_mode == ThemeModePreference::Light,
+                            ),
+                            (
+                                "Dark".to_string(),
+                                ThemeModePreference::Dark,
+                                settings.theme_mode == ThemeModePreference::Dark,
+                            ),
+                        ],
+                        on_set_theme_mode,
+                    )),
+                )
+                .children(standalone_note),
         )
         // Section: Theme & Palette
         .child(
@@ -503,13 +463,7 @@ fn render_tab_appearance(
                         "Theme variant currently resolved and applied to the interface.",
                         colors,
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(colors.muted)
-                            .child(settings.theme_name.clone()),
-                    ),
+                    .child(Tag::secondary().child(settings.theme_name.clone())),
                 ),
         )
         // Section: Display Geometry
@@ -557,7 +511,6 @@ fn render_tab_appearance(
 
 fn render_tab_reader(
     settings: &Settings,
-    system_reduced_motion: bool,
     colors: UiColors,
     on_set_page_layout: std::rc::Rc<dyn Fn(PageLayout, &mut Window, &mut App)>,
     on_set_reading_direction: std::rc::Rc<dyn Fn(ReadingDirection, &mut Window, &mut App)>,
@@ -565,7 +518,6 @@ fn render_tab_reader(
     on_set_spread_ratio_threshold: impl Fn(f32, &mut Window, &mut App) + 'static,
     on_toggle_continuous: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_webcomics: impl Fn(bool, &mut Window, &mut App) + 'static,
-    on_toggle_disable_animations: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_remember_zoom: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_vim_mode: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> Div {
@@ -613,15 +565,13 @@ fn render_tab_reader(
                     colors,
                 )
                 .child(
-                    div().cursor_pointer().child(
-                        Switch::new("first-page-cover-switch")
-                            .accessibility_label("First page as cover")
-                            .small()
-                            .checked(settings.first_page_is_cover)
-                            .on_click(move |val, window, cx| {
-                                on_toggle_first_page_is_cover(*val, window, cx)
-                            }),
-                    ),
+                    Switch::new("first-page-cover-switch")
+                        .accessibility_label("First page as cover")
+                        .small()
+                        .checked(settings.first_page_is_cover)
+                        .on_click(move |val, window, cx| {
+                            on_toggle_first_page_is_cover(*val, window, cx)
+                        }),
                 ),
             )
             .child(settings_divider(colors))
@@ -668,15 +618,13 @@ fn render_tab_reader(
                     colors,
                 )
                 .child(
-                    div().cursor_pointer().child(
-                        Switch::new("continuous-mode-switch")
-                            .accessibility_label("Continuous vertical reading mode")
-                            .small()
-                            .checked(settings.continuous)
-                            .on_click(move |val, window, cx| {
-                                on_toggle_continuous(*val, window, cx)
-                            }),
-                    ),
+                    Switch::new("continuous-mode-switch")
+                        .accessibility_label("Continuous vertical reading mode")
+                        .small()
+                        .checked(settings.continuous)
+                        .on_click(move |val, window, cx| {
+                            on_toggle_continuous(*val, window, cx)
+                        }),
                 ),
             )
             .child(settings_divider(colors))
@@ -687,43 +635,11 @@ fn render_tab_reader(
                     colors,
                 )
                 .child(
-                    div().cursor_pointer().child(
-                        Switch::new("webcomics-mode-switch")
-                            .accessibility_label("Webcomics zero-gap mode")
-                            .small()
-                            .checked(settings.webcomics)
-                            .on_click(move |val, window, cx| on_toggle_webcomics(*val, window, cx)),
-                    ),
-                ),
-            )
-            .child(settings_divider(colors))
-            .child(
-                settings_row(
-                    "Disable Animations",
-                    if system_reduced_motion {
-                        "All nonessential animations are disabled because your operating system's reduced-motion preference is on."
-                    } else {
-                        "Disable nonessential transitions, glides, and decorative motion across the application."
-                    },
-                    colors,
-                )
-                .child(
-                    div()
-                        .when(!system_reduced_motion, |s| s.cursor_pointer())
-                        .child(
-                            Switch::new("disable-animations-switch")
-                                .accessibility_label("Disable animations")
-                                .small()
-                                .checked(if system_reduced_motion {
-                                    true
-                                } else {
-                                    settings.disable_animations
-                                })
-                                .disabled(system_reduced_motion)
-                                .on_click(move |val, window, cx| {
-                                    on_toggle_disable_animations(*val, window, cx)
-                                }),
-                        ),
+                    Switch::new("webcomics-mode-switch")
+                        .accessibility_label("Webcomics zero-gap mode")
+                        .small()
+                        .checked(settings.webcomics)
+                        .on_click(move |val, window, cx| on_toggle_webcomics(*val, window, cx)),
                 ),
             )
             .child(settings_divider(colors))
@@ -734,15 +650,13 @@ fn render_tab_reader(
                     colors,
                 )
                 .child(
-                    div().cursor_pointer().child(
-                        Switch::new("remember-zoom-switch")
-                            .accessibility_label("Remember per-book zoom")
-                            .small()
-                            .checked(settings.remember_zoom)
-                            .on_click(move |val, window, cx| {
-                                on_toggle_remember_zoom(*val, window, cx)
-                            }),
-                    ),
+                    Switch::new("remember-zoom-switch")
+                        .accessibility_label("Remember per-book zoom")
+                        .small()
+                        .checked(settings.remember_zoom)
+                        .on_click(move |val, window, cx| {
+                            on_toggle_remember_zoom(*val, window, cx)
+                        }),
                 ),
             )
             .child(settings_divider(colors))
@@ -753,13 +667,11 @@ fn render_tab_reader(
                     colors,
                 )
                 .child(
-                    div().cursor_pointer().child(
-                        Switch::new("vim-mode-switch")
-                            .accessibility_label("Vim keyboard navigation")
-                            .small()
-                            .checked(settings.vim_mode)
-                            .on_click(move |val, window, cx| on_toggle_vim_mode(*val, window, cx)),
-                    ),
+                    Switch::new("vim-mode-switch")
+                        .accessibility_label("Vim keyboard navigation")
+                        .small()
+                        .checked(settings.vim_mode)
+                        .on_click(move |val, window, cx| on_toggle_vim_mode(*val, window, cx)),
                 ),
             ),
     )
@@ -780,15 +692,11 @@ fn render_tab_library(
                     colors,
                 )
                 .child(
-                    div().cursor_pointer().child(
-                        Switch::new("group-series-switch")
-                            .accessibility_label("Folder grouping")
-                            .small()
-                            .checked(settings.group_series)
-                            .on_click(move |val, window, cx| {
-                                on_toggle_group_series(*val, window, cx)
-                            }),
-                    ),
+                    Switch::new("group-series-switch")
+                        .accessibility_label("Folder grouping")
+                        .small()
+                        .checked(settings.group_series)
+                        .on_click(move |val, window, cx| on_toggle_group_series(*val, window, cx)),
                 ),
             )
             .child(settings_divider(colors))
@@ -876,14 +784,8 @@ fn render_tab_shortcuts(colors: UiColors, vim_mode: bool) -> Div {
         shortcuts.push(("Close / Back to Library", "Esc".to_string()));
     }
 
-    div()
-        .w_full()
-        .rounded(px(10.))
-        .border_1()
-        .border_color(with_alpha(colors.border, 0.45))
-        .bg(with_alpha(colors.surface, 0.65))
-        .p_4()
-        .child(
+    div().w_full().child(
+        settings_card(colors).child(
             Table::new()
                 .child(
                     TableHeader::new().child(
@@ -901,24 +803,11 @@ fn render_tab_shortcuts(colors: UiColors, vim_mode: bool) -> Div {
                                     .text_xs()
                                     .font_weight(FontWeight::NORMAL),
                             )
-                            .child(
-                                TableCell::new().child(
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded(px(4.))
-                                        .bg(with_alpha(colors.foreground, 0.08))
-                                        .border_1()
-                                        .border_color(with_alpha(colors.border, 0.5))
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(colors.accent)
-                                        .child(shortcut),
-                                ),
-                            )
+                            .child(TableCell::new().child(Tag::secondary().child(shortcut)))
                     },
                 ))),
-        )
+        ),
+    )
 }
 
 fn render_tab_advanced(

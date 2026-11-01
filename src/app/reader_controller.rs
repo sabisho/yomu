@@ -214,7 +214,6 @@ impl Yomu {
         if self.is_quitting {
             return;
         }
-        let animate = self.animations_enabled();
         let Some(reader) = self.reader.as_mut() else {
             return;
         };
@@ -229,7 +228,7 @@ impl Yomu {
         let same_spread = reader.is_double_page_active()
             && reader.current_spread_index() == reader.spread_index_for_page(target);
         if !same_spread {
-            reader.begin_transition(target > reader.page, animate && !reader.continuous);
+            reader.begin_transition(target > reader.page, !reader.continuous);
         }
         reader.page = target;
         reader.arrive = Some(arrive);
@@ -611,38 +610,6 @@ impl Yomu {
         cx.notify();
     }
 
-    pub(crate) fn set_animations(&mut self, value: Option<bool>, cx: &mut Context<Self>) {
-        if self.is_quitting {
-            return;
-        }
-        let enabled = value.unwrap_or(!self.library.settings().animate);
-        self.library.settings_mut().animate = enabled;
-        self.library.settings_mut().disable_animations = !enabled;
-        self.save_library(cx);
-        let message = match (enabled, self.reduce_motion) {
-            (true, true) => "animations on (the desktop asks for reduced motion, so they stay off)",
-            (true, false) => "animations on",
-            (false, _) => "animations off",
-        };
-        self.show_hud(message, cx);
-    }
-
-    pub(crate) fn toggle_disable_animations(&mut self, disabled: bool, cx: &mut Context<Self>) {
-        if self.is_quitting {
-            return;
-        }
-        self.library.settings_mut().disable_animations = disabled;
-        self.library.settings_mut().animate = !disabled;
-        self.save_library(cx);
-        let message = match (!disabled, self.reduce_motion) {
-            (true, true) => "animations on (the desktop asks for reduced motion, so they stay off)",
-            (true, false) => "animations on",
-            (false, _) => "animations off",
-        };
-        self.show_hud(message, cx);
-        cx.notify();
-    }
-
     pub(crate) fn set_continuous(&mut self, value: Option<bool>, cx: &mut Context<Self>) {
         if self.is_quitting {
             return;
@@ -722,7 +689,6 @@ impl Yomu {
             vp,
         } = params;
         let (dx, dy) = delta;
-        let animations_enabled = self.animations_enabled();
         let Some(reader) = self.reader.as_mut() else {
             return;
         };
@@ -765,11 +731,7 @@ impl Yomu {
             reader.kinetic.push_motion(now, -dx, -dy);
         }
 
-        if touch_phase == TouchPhase::Ended
-            && reader
-                .kinetic
-                .end_touch(reader.animate && animations_enabled)
-        {
+        if touch_phase == TouchPhase::Ended && reader.kinetic.end_touch(true) {
             self.wake();
             cx.notify();
             return;
@@ -920,7 +882,6 @@ impl Yomu {
         if self.is_quitting {
             return;
         }
-        let animations_enabled = self.animations_enabled();
         let Some(reader) = self.reader.as_mut() else {
             return;
         };
@@ -928,10 +889,7 @@ impl Yomu {
             return;
         };
         if drag.moved {
-            if reader
-                .kinetic
-                .end_touch(reader.animate && animations_enabled)
-            {
+            if reader.kinetic.end_touch(true) {
                 self.wake();
                 cx.notify();
             }
@@ -957,7 +915,6 @@ impl Yomu {
         dt: f32,
     ) -> bool {
         let vp = viewport_of(window);
-        let animate = self.animations_enabled();
 
         let ReaderSyncOutcome {
             wanted,
@@ -968,7 +925,7 @@ impl Yomu {
                 return false;
             };
             reader.viewport = vp;
-            reader.animate = animate;
+            reader.animate = true;
             let pages_len = match reader.pages.as_deref() {
                 Some(pages) => pages.len(),
                 None => return false,
