@@ -726,19 +726,15 @@ pub fn render_reader(
         )
     });
 
-    let vim_status = if reader.vim.in_cmdline() {
-        None
-    } else {
-        reader.vim.status().map(|text| {
-            pill(
-                div().absolute().bottom_4().left_0().right_0(),
-                text,
-                props.colors,
-                props.radius,
-            )
-            .into_any_element()
-        })
-    };
+    let vim_status = reader.vim.status().map(|text| {
+        pill(
+            div().absolute().bottom_4().left_0().right_0(),
+            text,
+            props.colors,
+            props.radius,
+        )
+        .into_any_element()
+    });
 
     let current_page_str = reader.current_page_str();
     let top_bar = reader_header(

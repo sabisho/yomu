@@ -15,6 +15,7 @@ use std::{
 };
 
 use gpui_kit::component::Theme as KitTheme;
+use gpui_kit::component::WindowExt as _;
 #[allow(unused_imports)]
 use gpui_kit::popup::{PopupAnchor, PopupConstraintAdjustment, PopupGravity, PopupOptions};
 #[allow(unused_imports)]
@@ -90,6 +91,7 @@ impl Yomu {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     pub(crate) fn widget_surface(&self, color: gpui_kit::Hsla) -> gpui_kit::Hsla {
         color
     }
@@ -204,15 +206,44 @@ impl Yomu {
     }
 
     /// Escape / click outside. Cancelling the "reset settings?" question goes back to Settings.
-    pub(crate) fn close_overlay(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_overlay_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let back_to_settings = matches!(
             &self.overlay,
-            Some(Overlay::Confirm(dialog)) if matches!(dialog.action, ConfirmAction::ResetSettings)
+            Some(Overlay::Confirm(dialog))
+                if matches!(
+                    dialog.action,
+                    ConfirmAction::ResetSettings
+                        | ConfirmAction::ClearThumbnailCache
+                        | ConfirmAction::ClearAllData
+                )
         );
         self.dismiss();
         if back_to_settings {
             self.overlay = Some(Overlay::Settings);
         }
+        window.close_dialog(cx);
+        cx.notify();
+    }
+
+    /// Escape / click outside (without a Window reference).
+    pub(crate) fn close_overlay(&mut self, cx: &mut Context<Self>) {
+        let back_to_settings = matches!(
+            &self.overlay,
+            Some(Overlay::Confirm(dialog))
+                if matches!(
+                    dialog.action,
+                    ConfirmAction::ResetSettings
+                        | ConfirmAction::ClearThumbnailCache
+                        | ConfirmAction::ClearAllData
+                )
+        );
+        self.dismiss();
+        if back_to_settings {
+            self.overlay = Some(Overlay::Settings);
+        }
+        let _ = self.window_handle.update(cx, move |_, window, cx| {
+            window.close_dialog(cx);
+        });
         cx.notify();
     }
 
@@ -226,17 +257,59 @@ impl Yomu {
     // Settings
     // ------------------------------------------------------------------------------------
 
-    pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
-        match self.overlay {
-            None => self.overlay = Some(Overlay::Settings),
-            Some(Overlay::Settings) => self.close_overlay(cx),
-            Some(_) => {}
-        }
-        cx.notify();
+    pub(crate) fn show_settings_dialog_on_window(
+        window: &mut Window,
+        cx: &mut App,
+        yomu: Entity<Self>,
+    ) {
+        let yomu_for_focus = yomu.clone();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let focus = yomu_for_focus.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
+            let yomu_close = yomu.clone();
+            let view = yomu.update(cx, |this, cx| this.render_settings_content(window, cx));
+            dialog
+                .title("Preferences")
+                .close_button(true)
+                .w(px(860.))
+                .max_w(px(960.))
+                .on_close(move |_, _window, cx| {
+                    yomu_close.update(cx, |this, cx| {
+                        if matches!(this.overlay, Some(Overlay::Settings)) {
+                            this.dismiss();
+                            cx.notify();
+                        }
+                    });
+                })
+                .child(view)
+        });
     }
 
-    pub(crate) fn open_settings_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.open_settings(cx);
+    pub(crate) fn open_settings_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.overlay, Some(Overlay::Settings)) {
+            window.close_dialog(cx);
+            self.dismiss();
+            cx.notify();
+            return;
+        }
+        self.overlay = Some(Overlay::Settings);
+        cx.notify();
+        let entity = cx.entity().clone();
+        Self::show_settings_dialog_on_window(window, cx, entity);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.overlay, Some(Overlay::Settings)) {
+            self.close_overlay(cx);
+            return;
+        }
+        self.overlay = Some(Overlay::Settings);
+        cx.notify();
+        let entity = cx.entity().clone();
+        let _ = self.window_handle.update(cx, move |_, window, cx| {
+            Self::show_settings_dialog_on_window(window, cx, entity);
+        });
     }
 
     pub(crate) fn set_thumbnail_size(&mut self, size: ThumbnailSize, cx: &mut Context<Self>) {
@@ -264,6 +337,7 @@ impl Yomu {
         self.library.settings().corner_rounding.radius_pixels()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn radius_lg_px(&self) -> f32 {
         self.library.settings().corner_rounding.radius_lg_pixels()
     }
@@ -294,13 +368,13 @@ impl Yomu {
     }
 
     pub(crate) fn request_clear_thumbnail_cache(&mut self, cx: &mut Context<Self>) {
-        self.overlay = Some(Overlay::Confirm(ConfirmDialog {
+        let dialog = ConfirmDialog {
             title: "Clear thumbnail cache?".into(),
             message: "All cached cover thumbnails will be deleted and regenerated on demand. Comics and reading progress remain intact.".into(),
             confirm_label: "Clear Cache",
             action: ConfirmAction::ClearThumbnailCache,
-        }));
-        cx.notify();
+        };
+        self.prompt_confirm(dialog, cx);
     }
 
     pub(crate) fn clear_thumbnail_cache(&mut self, cx: &mut Context<Self>) {
@@ -320,19 +394,18 @@ impl Yomu {
                 library.ensure_covers_for_size(&dirs, size);
             })
             .detach();
-        self.overlay = Some(Overlay::Settings);
         self.show_toast("Thumbnail cache cleared", cx);
         cx.notify();
     }
 
     pub(crate) fn request_clear_all_data(&mut self, cx: &mut Context<Self>) {
-        self.overlay = Some(Overlay::Confirm(ConfirmDialog {
+        let dialog = ConfirmDialog {
             title: "Reset all application data?".into(),
             message: "This will permanently remove all books, reading progress, marks, settings, and cached thumbnails.".into(),
             confirm_label: "Reset Everything",
             action: ConfirmAction::ClearAllData,
-        }));
-        cx.notify();
+        };
+        self.prompt_confirm(dialog, cx);
     }
 
     pub(crate) fn clear_all_data(&mut self, cx: &mut Context<Self>) {
@@ -356,7 +429,6 @@ impl Yomu {
             })
             .detach();
         self.save_library(cx);
-        self.overlay = Some(Overlay::Settings);
         self.show_toast("Application data reset to defaults", cx);
         cx.notify();
     }
@@ -365,13 +437,13 @@ impl Yomu {
         if *self.library.settings() == Settings::default() {
             return;
         }
-        self.overlay = Some(Overlay::Confirm(ConfirmDialog {
+        let dialog = ConfirmDialog {
             title: "Reset settings?".into(),
             message: "All preferences go back to their defaults.".into(),
             confirm_label: "Reset",
             action: ConfirmAction::ResetSettings,
-        }));
-        cx.notify();
+        };
+        self.prompt_confirm(dialog, cx);
     }
 
     pub(crate) fn reset_settings(&mut self, cx: &mut Context<Self>) {
@@ -396,7 +468,6 @@ impl Yomu {
             reader.arrive = Some(Arrive::Start);
         }
         self.save_library(cx);
-        self.overlay = Some(Overlay::Settings);
         cx.notify();
     }
 
@@ -429,24 +500,7 @@ impl Yomu {
         }
         self.colors = UiColors::from_app(cx);
         self.colors.widget_opacity = self.library.settings().opacity;
-        self.theme_before_preview = None;
         self.save_library(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn preview_theme(&mut self, name: &str, cx: &mut Context<Self>) {
-        let config = self
-            .custom_themes
-            .get(name)
-            .cloned()
-            .or_else(|| built_in_theme(name));
-        let Some(config) = config else {
-            return;
-        };
-        KitTheme::update(cx, |theme| theme.apply_config(&config));
-        Self::apply_corner_rounding(self.library.settings().corner_rounding, cx);
-        self.colors = UiColors::from_app(cx);
-        self.colors.widget_opacity = self.library.settings().opacity;
         cx.notify();
     }
 
@@ -1094,8 +1148,6 @@ impl Render for Yomu {
         };
 
         let root_bg = self.colors.background;
-        let overlay = self.render_overlay(window, cx);
-        let cmd_box = self.render_command_box(cx);
 
         let shutdown_barrier = if self.is_quitting {
             Some(
@@ -1160,8 +1212,6 @@ impl Render for Yomu {
                 }
             }))
             .child(content)
-            .children(overlay)
-            .children(cmd_box)
             .children(shutdown_barrier)
     }
 }
@@ -1268,7 +1318,7 @@ fn main() {
                             false
                         }
                     });
-                    view
+                    cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
                 },
             )
             .expect("failed to open the window");

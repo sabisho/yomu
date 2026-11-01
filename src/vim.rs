@@ -1,5 +1,5 @@
-//! Vim-style key handling for the reader: counts (`5j`), prefixes (`gg`, `zw`, `ma`, `'a`)
-//! and a `:` command line. It turns key tokens into [`Action`]s and knows nothing about the GUI.
+//! Vim-style key handling for the reader: counts (`5j`), prefixes (`gg`, `zw`, `ma`, `'a`).
+//! It turns key tokens into [`Action`]s and knows nothing about the GUI.
 
 use crate::layout::FitMode;
 
@@ -81,7 +81,6 @@ enum Prefix {
 pub struct Vim {
     count: Option<usize>,
     prefix: Option<Prefix>,
-    cmd: Option<String>,
 }
 
 fn scroll(dir: Dir, amount: Amount, count: usize) -> Vec<Action> {
@@ -113,29 +112,8 @@ impl Vim {
         *self = Self::default();
     }
 
-    pub fn in_cmdline(&self) -> bool {
-        self.cmd.is_some()
-    }
-
-    pub fn cmdline_text(&self) -> Option<&str> {
-        self.cmd.as_deref()
-    }
-
-    pub fn replace_cmdline(&mut self, text: String) {
-        if self.cmd.is_some() {
-            self.cmd = Some(text);
-        }
-    }
-
-    pub fn cancel_cmdline(&mut self) {
-        self.cmd = None;
-    }
-
-    /// Text for the small status line shown while something is half-typed (`12`, `g`, `:fit w`).
+    /// Text for the small status line shown while something is half-typed (`12`, `g`).
     pub fn status(&self) -> Option<String> {
-        if let Some(cmd) = &self.cmd {
-            return Some(format!(":{cmd}"));
-        }
         if self.count.is_none() && self.prefix.is_none() {
             return None;
         }
@@ -155,10 +133,6 @@ impl Vim {
 
     /// Feed one key (see [`key_token`]) and get back what should happen.
     pub fn feed(&mut self, token: &str) -> Vec<Action> {
-        if self.cmd.is_some() {
-            return self.feed_cmdline(token);
-        }
-
         if token == "escape" {
             // Escape first cancels anything half-typed; on a clean slate it leaves the book.
             return if self.count.is_some() || self.prefix.is_some() {
@@ -187,10 +161,6 @@ impl Vim {
         let n = count.unwrap_or(1);
 
         match token {
-            ":" => {
-                self.cmd = Some(String::new());
-                vec![]
-            }
             "j" | "down" | "C-e" => scroll(Dir::Down, Amount::Line, n),
             "k" | "up" | "C-y" => scroll(Dir::Up, Amount::Line, n),
             "h" | "left" => scroll(Dir::Left, Amount::Line, n),
@@ -271,150 +241,6 @@ impl Vim {
             },
             _ => vec![],
         }
-    }
-
-    fn feed_cmdline(&mut self, token: &str) -> Vec<Action> {
-        match token {
-            "escape" | "C-c" => {
-                self.cmd = None;
-                vec![]
-            }
-            "enter" => {
-                let line = self.cmd.take().unwrap_or_default();
-                parse_command(&line)
-            }
-            "backspace" => {
-                let empty = self
-                    .cmd
-                    .as_mut()
-                    .map(|buf| buf.pop().is_none())
-                    .unwrap_or(true);
-                if empty {
-                    self.cmd = None;
-                }
-                vec![]
-            }
-            "C-u" => {
-                if let Some(buf) = self.cmd.as_mut() {
-                    buf.clear();
-                }
-                vec![]
-            }
-            "space" => {
-                if let Some(buf) = self.cmd.as_mut() {
-                    buf.push(' ');
-                }
-                vec![]
-            }
-            other => {
-                if single_char(other).is_some()
-                    && let Some(buf) = self.cmd.as_mut()
-                {
-                    buf.push_str(other);
-                }
-                vec![]
-            }
-        }
-    }
-}
-
-fn parse_fit(word: &str) -> Option<FitMode> {
-    match word {
-        "page" | "p" | "best" | "all" => Some(FitMode::Page),
-        "width" | "w" => Some(FitMode::Width),
-        "height" | "h" => Some(FitMode::Height),
-        "original" | "o" | "actual" | "100" => Some(FitMode::Original),
-        _ => None,
-    }
-}
-
-/// Run a `:` command line.
-pub fn parse_command(line: &str) -> Vec<Action> {
-    let line = line.trim();
-    if line.is_empty() {
-        return vec![];
-    }
-    if let Ok(page) = line.parse::<usize>() {
-        return vec![Action::GotoPage(page)];
-    }
-    if line == "$" {
-        return vec![Action::LastPage];
-    }
-
-    let mut words = line.split_whitespace();
-    let cmd = words.next().unwrap_or_default();
-    let arg = words.next();
-    let bad = || vec![Action::Message(format!("Not a command: {line}"))];
-
-    match (cmd, arg) {
-        ("q" | "quit" | "close" | "lib" | "library" | "bd", None) => vec![Action::CloseBook],
-        ("qa" | "qall" | "q!" | "qa!" | "exit", _) => vec![Action::QuitApp],
-        ("fit", None) => vec![Action::CycleFit],
-        ("fit", Some(mode)) => match parse_fit(mode) {
-            Some(fit) => vec![Action::Fit(fit)],
-            None => vec![Action::Message(format!(
-                "Unknown fit mode: {mode} (page, width, height, original)"
-            ))],
-        },
-        ("zoom" | "z", None | Some("reset")) => vec![Action::ZoomReset],
-        ("zoom" | "z", Some(value)) => match value.trim_end_matches('%').parse::<f32>() {
-            Ok(percent) if percent > 0.0 => vec![Action::ZoomSet(percent / 100.0)],
-            _ => vec![Action::Message(format!(
-                "Bad zoom: {value} (use a percentage like 150)"
-            ))],
-        },
-        ("info", _) => vec![Action::ToggleInfo],
-        ("help" | "h", _) => vec![Action::ToggleHelp],
-        ("fullscreen" | "fs", _) => vec![Action::ToggleFullscreen],
-        ("settings" | "set" | "preferences" | "prefs", _) => vec![Action::OpenSettings],
-        ("animate" | "animations" | "anim", None) => vec![Action::SetAnimations(None)],
-        ("animate" | "animations" | "anim", Some("on" | "true" | "1" | "yes")) => {
-            vec![Action::SetAnimations(Some(true))]
-        }
-        ("animate" | "animations" | "anim", Some("off" | "false" | "0" | "no")) => {
-            vec![Action::SetAnimations(Some(false))]
-        }
-        ("continuous" | "scroll", None) => vec![Action::SetContinuous(None)],
-        ("continuous" | "scroll", Some("on" | "true" | "1" | "yes")) => {
-            vec![Action::SetContinuous(Some(true))]
-        }
-        ("continuous" | "scroll", Some("off" | "false" | "0" | "no")) => {
-            vec![Action::SetContinuous(Some(false))]
-        }
-        ("webcomics" | "webcomic", None) => vec![Action::SetWebcomics(None)],
-        ("webcomics" | "webcomic", Some("on" | "true" | "1" | "yes")) => {
-            vec![Action::SetWebcomics(Some(true))]
-        }
-        ("webcomics" | "webcomic", Some("off" | "false" | "0" | "no")) => {
-            vec![Action::SetWebcomics(Some(false))]
-        }
-        ("double" | "doublepage" | "spread", None) => vec![Action::SetDoublePage(Some(true))],
-        ("single" | "singlepage", None) => vec![Action::SetDoublePage(Some(false))],
-        ("layout", None) => vec![Action::SetDoublePage(None)],
-        ("layout", Some("double" | "spread" | "2")) => vec![Action::SetDoublePage(Some(true))],
-        ("layout", Some("single" | "1")) => vec![Action::SetDoublePage(Some(false))],
-        ("remember-zoom" | "rememberzoom" | "retain-zoom", None) => {
-            vec![Action::SetRememberZoom(None)]
-        }
-        ("remember-zoom" | "rememberzoom" | "retain-zoom", Some("on" | "true" | "1" | "yes")) => {
-            vec![Action::SetRememberZoom(Some(true))]
-        }
-        ("remember-zoom" | "rememberzoom" | "retain-zoom", Some("off" | "false" | "0" | "no")) => {
-            vec![Action::SetRememberZoom(Some(false))]
-        }
-        ("theme" | "colorscheme" | "colo" | "colors", _) => {
-            let theme_name = line.strip_prefix(cmd).unwrap_or("").trim().to_string();
-            vec![Action::SetTheme(theme_name)]
-        }
-        ("mark", Some(key)) => match single_char(key) {
-            Some(c) if c.is_alphabetic() => vec![Action::SetMark(c)],
-            _ => bad(),
-        },
-        ("goto" | "page" | "p", Some(n)) => match n.parse::<usize>() {
-            Ok(page) => vec![Action::GotoPage(page)],
-            Err(_) => bad(),
-        },
-        _ => bad(),
     }
 }
 
@@ -571,94 +397,6 @@ mod tests {
         assert_eq!(vim.status().as_deref(), Some("12"));
         vim.feed("g");
         assert_eq!(vim.status().as_deref(), Some("12g"));
-        vim.reset();
-        vim.feed(":");
-        vim.feed("f");
-        assert_eq!(vim.status().as_deref(), Some(":f"));
-        assert!(vim.in_cmdline());
-    }
-
-    #[test]
-    fn command_line_editing_and_execution() {
-        let mut vim = Vim::new();
-        let actions = feed_all(&mut vim, &[":", "1", "2", "enter"]);
-        assert_eq!(actions, vec![Action::GotoPage(12)]);
-        assert!(!vim.in_cmdline());
-
-        let actions = feed_all(&mut vim, &[":", "f", "i", "t", "space", "w", "enter"]);
-        assert_eq!(actions, vec![Action::Fit(FitMode::Width)]);
-
-        // backspace edits, and backspacing an empty line leaves the command line
-        feed_all(&mut vim, &[":", "x", "backspace"]);
-        assert!(vim.in_cmdline());
-        feed_all(&mut vim, &["backspace"]);
-        assert!(!vim.in_cmdline());
-
-        feed_all(&mut vim, &[":", "q", "escape"]);
-        assert!(!vim.in_cmdline());
-    }
-
-    #[test]
-    fn parse_commands() {
-        assert_eq!(parse_command("q"), vec![Action::CloseBook]);
-        assert_eq!(parse_command("qa"), vec![Action::QuitApp]);
-        assert_eq!(
-            parse_command("fit height"),
-            vec![Action::Fit(FitMode::Height)]
-        );
-        assert_eq!(parse_command("fit"), vec![Action::CycleFit]);
-        assert_eq!(parse_command("zoom 150"), vec![Action::ZoomSet(1.5)]);
-        assert_eq!(parse_command("zoom"), vec![Action::ZoomReset]);
-        assert_eq!(parse_command("$"), vec![Action::LastPage]);
-        assert_eq!(parse_command("mark b"), vec![Action::SetMark('b')]);
-        assert_eq!(parse_command("settings"), vec![Action::OpenSettings]);
-        assert_eq!(
-            parse_command("theme Catppuccin Mocha"),
-            vec![Action::SetTheme("Catppuccin Mocha".to_string())]
-        );
-        assert_eq!(
-            parse_command("colorscheme Gruvbox Dark"),
-            vec![Action::SetTheme("Gruvbox Dark".to_string())]
-        );
-        assert_eq!(
-            parse_command("theme"),
-            vec![Action::SetTheme(String::new())]
-        );
-        assert_eq!(parse_command("animate"), vec![Action::SetAnimations(None)]);
-        assert_eq!(
-            parse_command("animate off"),
-            vec![Action::SetAnimations(Some(false))]
-        );
-        assert_eq!(
-            parse_command("animations on"),
-            vec![Action::SetAnimations(Some(true))]
-        );
-        assert_eq!(
-            parse_command("double"),
-            vec![Action::SetDoublePage(Some(true))]
-        );
-        assert_eq!(
-            parse_command("single"),
-            vec![Action::SetDoublePage(Some(false))]
-        );
-        assert_eq!(parse_command("layout"), vec![Action::SetDoublePage(None)]);
-        assert!(matches!(
-            parse_command("animate maybe").as_slice(),
-            [Action::Message(_)]
-        ));
-        assert!(matches!(
-            parse_command("bogus").as_slice(),
-            [Action::Message(_)]
-        ));
-        assert!(matches!(
-            parse_command("fit sideways").as_slice(),
-            [Action::Message(_)]
-        ));
-        assert!(matches!(
-            parse_command("zoom lots").as_slice(),
-            [Action::Message(_)]
-        ));
-        assert!(parse_command("   ").is_empty());
     }
 
     #[test]

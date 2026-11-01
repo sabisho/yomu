@@ -3,7 +3,7 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -16,8 +16,8 @@ use gpui_kit::{
 };
 
 use super::components::{
-    CONTROL_HEIGHT_TOOLBAR, ICON_SIZE_COMPACT, SPACE_2XS, SPACE_SM, TOOLBAR_HEIGHT, button_radius,
-    inner_radius, open_shortcut_str, segmented_button, toolbar_icon_button, with_alpha,
+    CONTROL_HEIGHT_TOOLBAR, ICON_SIZE_COMPACT, SPACE_SM, TOOLBAR_HEIGHT, button_radius,
+    open_shortcut_str, toolbar_icon_button, with_alpha,
 };
 use super::theme::UiColors;
 use yomu::library::{SortBy, SortDirection};
@@ -215,82 +215,63 @@ pub fn render_main_toolbar(
                     this
                         // 1. Folder Grouping switch: Folders vs Individual Volumes
                         .when(props.show_grouping, |this| {
-                            let inner_r = inner_radius(button_radius, SPACE_2XS);
                             this.child(
-                                div()
-                                    .id("toolbar-grouping-segmented")
-                                    .flex()
-                                    .items_center()
-                                    .h(CONTROL_HEIGHT_TOOLBAR)
-                                    .bg(with_alpha(colors.surface, 0.6))
-                                    .border_1()
-                                    .border_color(colors.border)
-                                    .rounded(button_radius)
-                                    .p(SPACE_2XS)
-                                    .gap(SPACE_2XS)
-                                    .child(segmented_button(
-                                        "toolbar-group-folders-toggle",
-                                        IconName::Folder,
-                                        "Group by series folders",
-                                        props.is_group_series,
-                                        inner_r,
-                                        {
-                                            let on_toggle = on_toggle_group_series.clone();
-                                            move |_, window, cx| on_toggle(true, window, cx)
-                                        },
-                                    ))
-                                    .child(segmented_button(
-                                        "toolbar-group-volumes-toggle",
-                                        IconName::BookOpen,
-                                        "Show individual volumes",
-                                        !props.is_group_series,
-                                        inner_r,
-                                        {
-                                            let on_toggle = on_toggle_group_series.clone();
-                                            move |_, window, cx| on_toggle(false, window, cx)
-                                        },
-                                    )),
+                                ButtonGroup::new("toolbar-grouping-segmented")
+                                    .ghost()
+                                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                    .child(
+                                        Button::new("toolbar-group-folders-toggle")
+                                            .icon(IconName::Folder)
+                                            .tooltip("Group by series folders")
+                                            .selected(props.is_group_series)
+                                            .on_click({
+                                                let on_toggle = on_toggle_group_series.clone();
+                                                move |_, window, cx| on_toggle(true, window, cx)
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("toolbar-group-volumes-toggle")
+                                            .icon(IconName::BookOpen)
+                                            .tooltip("Show individual volumes")
+                                            .selected(!props.is_group_series)
+                                            .on_click({
+                                                let on_toggle = on_toggle_group_series.clone();
+                                                move |_, window, cx| on_toggle(false, window, cx)
+                                            }),
+                                    ),
                             )
                         })
                         // 2. View Mode switch: Grid vs List
                         .when(props.show_view_switches, |this| {
-                            let inner_r = inner_radius(button_radius, SPACE_2XS);
                             this.child(
-                                div()
-                                    .id("toolbar-viewmode-segmented")
-                                    .flex()
-                                    .items_center()
-                                    .h(CONTROL_HEIGHT_TOOLBAR)
-                                    .bg(with_alpha(colors.surface, 0.6))
-                                    .border_1()
-                                    .border_color(colors.border)
-                                    .rounded(button_radius)
-                                    .p(SPACE_2XS)
-                                    .gap(SPACE_2XS)
-                                    .child(segmented_button(
-                                        "view-mode-grid-toggle",
-                                        IconName::LayoutGrid,
-                                        "Grid view",
-                                        props.is_grid_mode,
-                                        inner_r,
-                                        {
-                                            let on_toggle_grid = on_toggle_grid.clone();
-                                            move |_, window, cx| on_toggle_grid(true, window, cx)
-                                        },
-                                    ))
-                                    .child(segmented_button(
-                                        "view-mode-list-toggle",
-                                        IconName::List,
-                                        "List view",
-                                        !props.is_grid_mode,
-                                        inner_r,
-                                        {
-                                            let on_toggle_grid_false = on_toggle_grid_false.clone();
-                                            move |_, window, cx| {
-                                                on_toggle_grid_false(false, window, cx)
-                                            }
-                                        },
-                                    )),
+                                ButtonGroup::new("toolbar-viewmode-segmented")
+                                    .ghost()
+                                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                    .child(
+                                        Button::new("view-mode-grid-toggle")
+                                            .icon(IconName::LayoutGrid)
+                                            .tooltip("Grid view")
+                                            .selected(props.is_grid_mode)
+                                            .on_click({
+                                                let on_toggle_grid = on_toggle_grid.clone();
+                                                move |_, window, cx| {
+                                                    on_toggle_grid(true, window, cx)
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("view-mode-list-toggle")
+                                            .icon(IconName::List)
+                                            .tooltip("List view")
+                                            .selected(!props.is_grid_mode)
+                                            .on_click({
+                                                let on_toggle_grid_false =
+                                                    on_toggle_grid_false.clone();
+                                                move |_, window, cx| {
+                                                    on_toggle_grid_false(false, window, cx)
+                                                }
+                                            }),
+                                    ),
                             )
                         })
                         // 3. Sort Dropdown

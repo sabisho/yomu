@@ -8,71 +8,11 @@ use yomu::layout::{self, Arrive, FitMode, Viewport};
 use yomu::vim::{self, Action, Amount, Dir};
 
 use crate::app::state::Yomu;
-use crate::ui::overlays::{Overlay, SettingsTab, command_suggestions};
+use crate::ui::overlays::{Overlay, SettingsTab};
 use crate::ui::reader::viewport_of;
 use crate::ui::theme::BUILT_IN_THEMES;
 
 impl Yomu {
-    pub(crate) fn in_cmdline(&self) -> bool {
-        if let Some(reader) = &self.reader {
-            reader.vim.in_cmdline()
-        } else {
-            self.library_vim.in_cmdline()
-        }
-    }
-
-    pub(crate) fn cmdline_text(&self) -> Option<&str> {
-        if let Some(reader) = &self.reader {
-            reader.vim.cmdline_text()
-        } else {
-            self.library_vim.cmdline_text()
-        }
-    }
-
-    pub(crate) fn replace_cmdline(&mut self, text: String) {
-        if let Some(reader) = self.reader.as_mut() {
-            reader.vim.replace_cmdline(text);
-        } else {
-            self.library_vim.replace_cmdline(text);
-        }
-    }
-
-    pub(crate) fn cancel_cmdline(&mut self, cx: &mut Context<Self>) {
-        if let Some(reader) = self.reader.as_mut() {
-            reader.vim.cancel_cmdline();
-        } else {
-            self.library_vim.cancel_cmdline();
-        }
-        self.command_selection = 0;
-        self.restore_theme_preview(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn sync_theme_preview(&mut self, draft: &str, cx: &mut Context<Self>) {
-        let trimmed = draft.trim_start();
-        let words = trimmed.split_whitespace();
-        let first_word = words.into_iter().next().unwrap_or_default();
-        if matches!(first_word, "theme" | "colorscheme" | "colo" | "colors") {
-            if self.theme_before_preview.is_none() {
-                self.theme_before_preview = Some(self.library.settings().theme_name.clone());
-            }
-            let suggestions = command_suggestions(draft, &self.custom_themes);
-            if let Some((_, label, _)) = suggestions.get(self.command_selection) {
-                self.preview_theme(label, cx);
-            }
-        } else {
-            self.restore_theme_preview(cx);
-        }
-    }
-
-    pub(crate) fn restore_theme_preview(&mut self, cx: &mut Context<Self>) {
-        if let Some(prev) = self.theme_before_preview.take()
-            && self.library.settings().theme_name != prev
-        {
-            self.preview_theme(&prev, cx);
-        }
-    }
-
     pub(crate) fn on_overlay_key(
         &mut self,
         token: &str,
@@ -100,8 +40,8 @@ impl Yomu {
                 }
             }
             Some(Overlay::Settings) => {
-                if matches!(token, "escape" | "enter" | "q") {
-                    self.close_overlay(cx);
+                if matches!(token, "escape" | "enter" | "q" | "C-,") {
+                    self.close_overlay_window(window, cx);
                 }
             }
             None => {}
@@ -160,7 +100,7 @@ impl Yomu {
                     self.exit_group(cx);
                 }
             }
-            "delete" => self.request_remove_selected(cx),
+            "delete" => self.request_remove_selected(window, cx),
             _ => {}
         }
     }
@@ -200,73 +140,8 @@ impl Yomu {
             return;
         }
 
-        // Active command line prompt (works in both reader and library)
-        if self.in_cmdline() {
-            let draft = self.cmdline_text().map(str::to_owned).unwrap_or_default();
-            if matches!(token.as_str(), "up" | "down" | "tab" | "S-tab") {
-                let suggestions = command_suggestions(&draft, &self.custom_themes);
-                if !suggestions.is_empty() {
-                    let count = suggestions.len();
-                    let backwards = token == "up" || token == "S-tab";
-                    self.command_selection = if backwards {
-                        self.command_selection.wrapping_add(count).wrapping_sub(1) % count
-                    } else {
-                        (self.command_selection + 1) % count
-                    };
-                    if token == "tab" || token == "S-tab" {
-                        self.replace_cmdline(suggestions[self.command_selection].0.clone());
-                        self.command_selection = 0;
-                    }
-                    self.sync_theme_preview(&draft, cx);
-                }
-                cx.notify();
-                return;
-            }
-
-            if token == "escape" {
-                self.cancel_cmdline(cx);
-                return;
-            }
-
-            if token == "enter" {
-                let suggestions = command_suggestions(&draft, &self.custom_themes);
-                if !suggestions.is_empty() && self.command_selection < suggestions.len() {
-                    self.replace_cmdline(suggestions[self.command_selection].0.clone());
-                }
-            }
-
-            let vp = viewport_of(window);
-            let actions = if let Some(reader) = self.reader.as_mut() {
-                reader.vim.feed(&token)
-            } else {
-                self.library_vim.feed(&token)
-            };
-            self.command_selection = 0;
-            if let Some(new_draft) = self.cmdline_text().map(str::to_owned) {
-                self.sync_theme_preview(&new_draft, cx);
-            } else {
-                let trimmed = draft.trim_start();
-                let words = trimmed.split_whitespace();
-                let first_word = words.into_iter().next().unwrap_or_default();
-                if !matches!(first_word, "theme" | "colorscheme" | "colo" | "colors") {
-                    self.restore_theme_preview(cx);
-                }
-            }
-            cx.notify();
-            for action in actions {
-                self.apply(action, vp, window, cx);
-            }
-            return;
-        }
-
         let vim_enabled = self.is_vim_enabled();
         let Some(reader) = self.reader.as_mut() else {
-            if vim_enabled && token == ":" && !self.search_active {
-                self.library_vim.feed(":");
-                self.command_selection = 0;
-                cx.notify();
-                return;
-            }
             self.on_library_key(
                 &token,
                 keystroke.key_char.as_deref(),
@@ -287,7 +162,6 @@ impl Yomu {
         let vp = viewport_of(window);
         if vim_enabled {
             let actions = reader.vim.feed(&token);
-            self.command_selection = 0;
             cx.notify();
             for action in actions {
                 self.apply(action, vp, window, cx);
@@ -521,7 +395,7 @@ impl Yomu {
                     cx.notify();
                 } else {
                     self.settings_tab = SettingsTab::Shortcuts;
-                    self.open_settings(cx);
+                    self.open_settings_window(window, cx);
                 }
             }
             Action::ToggleFullscreen => window.toggle_fullscreen(),
@@ -576,7 +450,6 @@ impl Yomu {
                         self.show_toast(format!("Theme “{name}” is unavailable"), cx);
                     }
                 }
-                self.theme_before_preview = None;
             }
             Action::Message(text) => self.show_hud(text, cx),
         }

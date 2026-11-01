@@ -66,7 +66,7 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
    - **Phase 2A (Completed):** Relocated `src/scroll.rs` to `src/ui/scroll.rs`, fully decoupling `src/lib.rs` from GPUI.
    - **Phase 2B (Completed):** Established `src/app/` module; extracted `app/state.rs` with `Yomu` root state, navigation router, and lifecycle initialization.
    - **Phase 2C (Completed):** Extracted `app/reader_controller.rs` handling reader lifecycle, async decode queue, prefetch cancellation safety, zoom/fit/reading modes, and gesture navigation.
-   - **Phase 2D.1 (Completed):** Extracted `app/keybindings.rs` handling keyboard shortcut event dispatch (`on_key`), Vim actions (`apply`), overlay keys (`on_overlay_key`), library keys (`on_library_key`), and command-line prompt editing / live theme preview sync.
+   - **Phase 2D.1 (Completed):** Extracted `app/keybindings.rs` handling keyboard shortcut event dispatch (`on_key`), Vim actions (`apply`), overlay keys (`on_overlay_key`), and library keys (`on_library_key`).
    - **Phase 2D.2 (Completed & Remediated):** Extracted `app/persistence.rs` and resolved UI persistence concurrency:
      - Replaced all ~38 synchronous `save_library()` calls across UI handlers with non-blocking asynchronous dispatch (`save_library(cx)` for discrete actions, `save_library_debounced(cx)` for page turns and scroll progress).
      - Replaced blocking mutex checks on the UI thread with lock-free `last_saved_seq: Arc<AtomicU64>` and serialized background writes via `write_lock: Arc<Mutex<()>>`.
@@ -86,7 +86,7 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Preserved all shutdown guards (`is_quitting` checks), confirmation flows, selection semantics, toast feedback, and persistence coordination.
      - Full test suite passing (241 total active tests: 106 lib, 135 bin).
    - **Phase 2E.3 (Completed):** Extracted `src/app/views/` for shell and view presentation adapters:
-     - Relocated view adapters into dedicated submodules: `shell.rs` (two-pane shell, sidebar/toolbar adapters), `library.rs` (card/list items, all manga, downloads), `continue_reading.rs` (dashboard hero banner and up next queue), `collections.rs` (smart and custom collection grids), `history.rs` (reading history log), `details.rs` (manga inspector screen), `settings.rs` (settings modal view and tab callback wiring), and `overlays.rs` (modal dialogs, context menus, and bottom command box).
+     - Relocated view adapters into dedicated submodules: `shell.rs` (two-pane shell, sidebar/toolbar adapters), `library.rs` (card/list items, all manga, downloads), `continue_reading.rs` (dashboard hero banner and up next queue), `collections.rs` (smart and custom collection grids), `history.rs` (reading history log), `details.rs` (manga inspector screen), and `settings.rs` (settings modal view and tab callback wiring).
      - Maintained `render_reader` in `src/main.rs` as the direct top-level reader branch adapter for `Render for Yomu`.
      - Reduced `src/main.rs` to ~1,250 lines, focused on application startup, root `Render` implementation (frame timing, texture GC, shutdown barrier), and root event listeners.
      - Full test suite passing (241 total active tests: 106 lib, 135 bin).

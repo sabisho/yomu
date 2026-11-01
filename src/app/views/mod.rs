@@ -8,6 +8,5 @@ pub mod continue_reading;
 pub mod details;
 pub mod history;
 pub mod library;
-pub mod overlays;
 pub mod settings;
 pub mod shell;

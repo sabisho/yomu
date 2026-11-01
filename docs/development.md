@@ -80,11 +80,10 @@ cargo test perf_ -- --ignored --nocapture
 4. If the field alters stored semantics of previous versions, bump `LIBRARY_VERSION` and add a migration test.
 5. Update `README.md` and `docs/architecture.md`.
 
-### Adding a Reader Command or Keybinding
-1. Map the raw key token or command string in `src/vim.rs` to an `Action` variant. Keep parsing GUI-independent.
-2. Update `command_suggestions` in `src/ui/overlays.rs` if the command supports auto-completion.
-3. Handle the resulting `Action` in `Yomu::apply` in `src/main.rs`.
-4. Add unit test coverage in `src/vim.rs` and update the keyboard table in `README.md`.
+### Adding a Reader Keybinding or Motion
+1. Map the raw key token in `src/vim.rs` to an `Action` variant. Keep parsing GUI-independent.
+2. Handle the resulting `Action` in `Yomu::apply` in `src/app/keybindings.rs`.
+3. Add unit test coverage in `src/vim.rs` and update the keyboard table in `README.md`.
 
 ### Adding or Updating a View Screen
 1. Create or modify the view module under `src/ui/` (e.g., `src/ui/<screen>_view.rs`).

@@ -3,7 +3,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{Disableable, Selectable, Sizable, Size};
+use gpui_kit::component::{Selectable, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, Div, ElementId, Pixels, Rgba, SharedString, Styled, Window, div,
@@ -21,6 +21,7 @@ use crate::library::ThumbnailSize;
 pub const CONTROL_HEIGHT_TOOLBAR: Pixels = px(28.);
 
 /// Compact height for segmented control options and inline toggle buttons (24px).
+#[allow(dead_code)]
 pub const CONTROL_HEIGHT_SEGMENT: Pixels = px(24.);
 
 /// Standard height for action buttons, dialog buttons, and sidebar nav rows (32px).
@@ -62,6 +63,7 @@ pub const ICON_SIZE_EMPTY: Pixels = px(48.);
 // ============================================================================
 
 /// 2px: Micro gaps, optical adjustments, segmented container insets.
+#[allow(dead_code)]
 pub const SPACE_2XS: Pixels = px(2.);
 
 /// 4px: Tight gaps, icon-to-label spacing, title-to-subtitle spacing.
@@ -120,6 +122,7 @@ pub fn button_radius(app_radius: Pixels, control_height: Pixels) -> Pixels {
 /// Calculates an inner nested corner radius ensuring concentric geometry:
 /// `inner ≈ max(2.0, outer - gap)`
 #[inline]
+#[allow(dead_code)]
 pub fn inner_radius(outer_radius: Pixels, gap: Pixels) -> Pixels {
     px((f32::from(outer_radius) - f32::from(gap)).max(2.0))
 }
@@ -148,6 +151,7 @@ pub fn toolbar_icon_button(
 }
 
 /// Creates a compact segmented toggle button (24x24px) for view mode or grouping switches.
+#[allow(dead_code)]
 pub fn segmented_button(
     id: impl Into<ElementId>,
     icon: IconName,
@@ -268,6 +272,7 @@ pub fn zoom_shortcut_str() -> &'static str {
 /// Preserves previous contrast reference for easy revert if requested:
 ///   Previous Dark:  with_alpha(colors.surface, 0.45)
 ///   Previous Light: with_alpha(colors.surface, 0.85)
+#[allow(dead_code)]
 pub fn macos_sidebar_bg(colors: UiColors) -> Rgba {
     if colors.is_dark() {
         // Refined Dark mode: subtle deeper tone for the macOS navigation pane
@@ -315,52 +320,6 @@ pub fn pill(row: Div, text: impl Into<SharedString>, colors: UiColors, radius: P
             .text_color(colors.foreground)
             .child(text.into()),
     )
-}
-
-#[derive(Clone, Copy)]
-pub enum ButtonKind {
-    Normal,
-    Primary,
-    Danger,
-}
-
-/// A button for dialogs: same shape as the header buttons, on the dialog's raised surface.
-pub fn panel_button(
-    id: &'static str,
-    label: impl Into<SharedString>,
-    kind: ButtonKind,
-    colors: UiColors,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let button = Button::new(id)
-        .label(label)
-        .rounded(ButtonRounded::Medium)
-        .small()
-        .disabled(!enabled)
-        .when(enabled, |btn| btn.cursor_pointer())
-        .when(!enabled, |btn| btn.cursor_not_allowed())
-        .on_click(on_click);
-    let button = match kind {
-        ButtonKind::Normal => button
-            .secondary()
-            .outline()
-            .bg(colors.surface)
-            .border_color(colors.border),
-        ButtonKind::Primary => button.primary().bg(colors.accent),
-        ButtonKind::Danger => button.danger().outline(),
-    };
-    #[cfg(test)]
-    {
-        div()
-            .debug_selector(|| id.into())
-            .child(button)
-            .into_any_element()
-    }
-    #[cfg(not(test))]
-    {
-        button.into_any_element()
-    }
 }
 
 /// Subtle count badge used in the sidebar and navigation items.

@@ -26,7 +26,6 @@ use yomu::motion;
 use yomu::{
     library::{Book, CornerRounding, DataDirs, Library, SortBy, SortDirection, sort_book_indices},
     selection::Selection,
-    vim::Vim,
 };
 
 use crate::ui;
@@ -118,9 +117,6 @@ pub struct Yomu {
     pub frame_dt: Option<f32>,
     pub(crate) overlay: Option<Overlay>,
     pub(crate) settings_tab: SettingsTab,
-    pub(crate) command_selection: usize,
-    pub(crate) library_vim: Vim,
-    pub(crate) theme_before_preview: Option<String>,
     pub(crate) overlay_closed_at: Option<Instant>,
     /// Books picked for bulk actions in the library.
     pub(crate) selection: Selection,
@@ -168,6 +164,7 @@ pub struct Yomu {
     pub(crate) details_cover_seq: u64,
     pub(crate) sorted_books_cache: RefCell<Option<SortedBooksCache>>,
     pub(crate) last_context_menu_book: Option<String>,
+    pub(crate) window_handle: gpui_kit::AnyWindowHandle,
 }
 
 impl Yomu {
@@ -276,9 +273,6 @@ impl Yomu {
             frame_dt: None,
             overlay: None,
             settings_tab: SettingsTab::Appearance,
-            command_selection: 0,
-            library_vim: Vim::new(),
-            theme_before_preview: None,
             overlay_closed_at: None,
             selection: Selection::new(),
             search_query: String::new(),
@@ -323,6 +317,7 @@ impl Yomu {
             details_cover_seq: 0,
             sorted_books_cache: RefCell::new(None),
             last_context_menu_book: None,
+            window_handle: window.window_handle(),
         };
 
         state.refresh_downloads_count(cx);
@@ -367,6 +362,19 @@ impl Yomu {
             return true;
         }
         self.library.settings().vim_mode
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_window<R>(
+        &self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Window, &mut gpui_kit::App) -> R,
+    ) -> Option<R> {
+        let mut result = None;
+        let _ = self.window_handle.update(cx, |_, window, cx| {
+            result = Some(f(window, cx));
+        });
+        result
     }
 
     /// Refresh the count of downloaded (locally present on disk) books off the UI thread.

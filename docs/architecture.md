@@ -13,10 +13,10 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
   ├─ Application Orchestration (`src/app/`, `src/main.rs`)
   │    ├─ State & Router (`src/app/state.rs`) ── root state, navigation history, lifecycle init
   │    ├─ Reader Controller (`src/app/reader_controller.rs`) ── page decode tasks, prefetch queue, navigation, gestures
-  │    ├─ Keybindings (`src/app/keybindings.rs`) ── keyboard event routing, Vim tokens, command-line prompt, action execution
+  │    ├─ Keybindings (`src/app/keybindings.rs`) ── keyboard event routing, Vim tokens, action execution
   │    ├─ Persistence (`src/app/persistence.rs`) ── debounced autosave, atomic writes, background flush coordination
   │    ├─ Actions & Menus (`src/app/actions.rs`) ── context menus, action dispatch, confirmations, removal workflows
-  │    ├─ View Adapters (`src/app/views/`) ── shell, library, continue reading, collections, history, details, settings, overlays
+  │    ├─ View Adapters (`src/app/views/`) ── shell, library, continue reading, collections, history, details, settings
   │    ├─ Desktop (`src/app/desktop.rs`) ── desktop entry generation, icon installation, XDG integration
   │    └─ Main (`src/main.rs`) ── entry point, window setup, and event dispatch
   ├─ Presentation Shell (`src/ui/`)
@@ -28,7 +28,7 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
   │    ├─ Collections (src/ui/collections_view.rs) ── smart & custom folders
   │    ├─ History (src/ui/history_view.rs) ── in-progress & completed manga
   │    ├─ Settings (src/ui/settings_view.rs) ── 6-tab split-pane preferences
-  │    ├─ Overlays (src/ui/overlays.rs) ── dialogs, menus, command prompt, help
+  │    ├─ Overlays (src/ui/overlays.rs) ── dialogs, menus, help
   │    ├─ Reader (src/ui/reader.rs) ── edge-to-edge canvas with autohiding HUD
   │    └─ Momentum Controller (src/ui/scroll.rs) ── platform momentum adapter
   ├─ Core Library (src/library.rs) ── JSON persistence & XDG data management
@@ -50,7 +50,7 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `layout.rs` | Fit modes (Page, Width, Height, Original), zoom calculation, viewport geometry, decode tiers, dual-page spreads, and mixed-source SpreadPlan | Pure math. Page indices are strictly zero-based and ordered in reading sequence regardless of RTL display travel. Spread plans precalculate single-image vs two-image spreads with zero per-frame allocation. |
 | `motion.rs` | Frame-time scroll easing, page-turn transitions, reduced-motion detection | Driven by delta time ($dt$), not frame counts. Pure analytical decay; zero UI dependencies. |
 | `pagecache.rs` | Prefetch order and texture eviction planning | Pure policy. Preserves current page texture even if it exceeds budget. Adaptive decoded image budget: defaults to 1.0 GiB (`BUDGET_BYTES`) and scales between 512 MiB and 3.0 GiB based on 1/8th of detected host RAM. Static metrics cached to prevent UI-thread I/O. |
-| `vim.rs` | Parse key tokens, counts, motions, and `:` command-line strings into typed `Action`s | Pure parser without UI dependencies. The UI applies the resulting `Action` enum. |
+| `vim.rs` | Parse key tokens, counts, and motions into typed `Action`s | Pure parser without UI dependencies. The UI applies the resulting `Action` enum. |
 | `selection.rs` | Multi-selection state, toggle, and range selection anchors | Pure state machine. Emits selected IDs in stable library order for deterministic batch operations. |
 | `search.rs` | Case-insensitive title, source path, and series substring matching | Pure helper. Query state is transient in the UI and never alters persisted library order. |
 | `menu.rs` | Context menu item generation, validation, and confirmation requirements | Decides available book and library actions; UI renders and dispatches them. |
@@ -69,7 +69,7 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `collections_view.rs`| Smart and custom collections screen | 2x2 smart collection cards with accent icons; custom collection folder grid with management menus. |
 | `history_view.rs` | Reading history screen | Chronological reading log of in-progress and completed books with progress bars and quick navigation. |
 | `settings_view.rs` | Split-pane macOS preferences | 6 dedicated categories (General, Appearance, Reader, Library, Shortcuts, Advanced) with native GPUI Kit switches, dropdowns, and tables. |
-| `overlays.rs` | Modal dialogs, menus, command prompt, help | Consolidated modal layer. Uses `OverlayStyle` for consistent geometry. Floating command prompt with live auto-completion; shortcuts modal. |
+| `overlays.rs` | Modal dialogs, menus, help | Consolidated modal layer. Uses native GPUI Kit components; shortcuts modal. |
 | `reader.rs` | Reader viewport state, continuous strip, and visual presentation | Edge-to-edge canvas with decoded page layers (`page_layer`); autohiding header with fit mode and window controls (`reader_header`); floating progress bar (`reader_progress_bar`); lateral turn chevrons (`lateral_turners`); and continuous vertical scrollbar integration (`ReaderScrollHandle`). |
 | `components.rs` | Shared atomic visual primitives | Window controls, responsive grid math, status badges, and genre tags. |
 | `theme.rs` | Theme management and TOML loader | Bridges GPUI Kit themes and custom `themes.toml` files with automatic SHA-256 fingerprint reloading. |
@@ -80,10 +80,10 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 |---|---|---|
 | `state.rs` | Root application state (`struct Yomu`), navigation history, and lifecycle initialization | Holds `pub(crate)` fields for `Yomu` across binary crate modules; implements `new`, `with_dirs`, navigation router (`navigate_to`, `navigate_to_dest`, `apply_destination`, `navigate_back`, `navigate_forward`), search activation, and theme file watcher. |
 | `reader_controller.rs` | Reader lifecycle, background decoding queue, prefetch planning, zoom/fit/continuous modes, and gestures | Decoupled from GPUI presentation views; coordinates async archive decoding and prefetch scheduling off UI thread; strictly preserves Phase 1 task identity and cancellation invariants. |
-| `keybindings.rs` | Keyboard event routing, Vim token translation, overlay shortcuts, command-line prompt, and action execution | Implements `on_key`, `apply`, `on_library_key`, `on_overlay_key`, and Vim command prompt helpers on `Yomu`; respects Vim-mode settings, overlay priority, and platform modifier standards. |
+| `keybindings.rs` | Keyboard event routing, Vim token translation, overlay shortcuts, and action execution | Implements `on_key`, `apply`, `on_library_key`, and `on_overlay_key` on `Yomu`; respects Vim-mode settings, overlay priority, and platform modifier standards. |
 | `persistence.rs` | Application persistence, debounced autosave, atomic filesystem synchronization, and graceful shutdown flush | Manages `save_library` (immediate non-blocking background dispatch), `save_library_debounced` (500ms trailing timer for page turns/scrolling), `flush_save_background`, `request_quit` (async wait on in-flight saves before exiting), non-blocking zero-I/O `Drop for Yomu`, full-window native GPUI pointer occlusion barrier, and error recovery confirmation dialog with `ForceQuit`; enforces monotonic `save_seq` ordering via `Arc<AtomicU64>`, background-only `write_lock: Arc<Mutex<()>>`, and 4-tier shutdown mutation isolation; guarantees zero synchronous filesystem I/O or mutex contention on the UI thread during rendering, scrolling, or user interaction. |
 | `actions.rs` | Context menu generation, action dispatch, confirmation dialog routing, and removal workflows | Encapsulates book/group/library context menus (`open_book_menu`, `open_context_menu`, `open_group_context_menu`, `open_library_menu`), menu hover tracking (`menu_hover`), action routing (`run_book_action`, `perform_book_action`, `run_library_menu_action`), confirmation routing (`confirm_accept`), series dialog handling (`open_series_dialog`, `save_series_dialog`), and book/selection removal pipelines (`request_remove_books`, `remove_books`, `request_remove_selected`, `remove_selected`, `remove_book`); strictly enforces shutdown `is_quitting` guards and delegates persistence to `persistence.rs`. |
-| `views/` | View presentation adapters bridging application state and presentation modules | Subdivided into focused adapters: `shell.rs` (two-pane shell, sidebar/toolbar adapters), `library.rs` (grid/list rows, cards, all manga, downloads), `continue_reading.rs` (continue reading dashboard), `collections.rs` (smart and custom collection views), `history.rs` (reading history log), `details.rs` (manga inspector details), `settings.rs` (settings modal view and tab callback wiring), and `overlays.rs` (modal overlays, context menus, and Vim command box). |
+| `views/` | View presentation adapters bridging application state and presentation modules | Subdivided into focused adapters: `shell.rs` (two-pane shell, sidebar/toolbar adapters), `library.rs` (grid/list rows, cards, all manga, downloads), `continue_reading.rs` (continue reading dashboard), `collections.rs` (smart and custom collection views), `history.rs` (reading history log), `details.rs` (manga inspector details), and `settings.rs` (settings modal view and tab callback wiring). |
 | `desktop.rs` | Desktop environment integration, application icons, and XDG desktop entry installation | Implements `desktop_entry_content`, `app_icon`, `install_desktop_integration_to`, and `install_desktop_integration`; embeds logo and hicolor icons across standard desktop resolutions; preserves user customizations when `--force` is omitted; platform-gated for Linux with graceful non-Linux bails. |
 | `main.rs` | Executable entry point, window initialization, GPUI lifecycle, event dispatch, and frame coordination | Focused on top-level runtime startup, action dispatch, window event handlers, reader adapter, and `Render` trait implementation (frame timing, texture GC, shutdown barrier). |
 
@@ -111,11 +111,10 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 2. Symmetrical history navigation is tracked in `Yomu.nav_history` (`Vec<NavDestination>`).
 3. Entering a folder group or details screen pushes a destination; the toolbar Back button pops back without losing selection or scroll position.
 
-### 4. Input and Command Execution
+### 4. Input and Navigation Execution
 1. Global and vim key presses pass through `Yomu::on_key`.
 2. Vim mode is opt-in via settings or temporary CLI flag (`--vim`).
-3. Reader `:` key opens the floating command box. Suggestions filter dynamically against supported commands and themes.
-4. Pressing Enter passes the command string to `vim::Vim::feed`, producing typed `Action` values executed by `Yomu::apply`.
+3. When Vim mode is enabled, reading navigation and motions pass to `vim::Vim::feed`, producing typed `Action` values executed by `Yomu::apply`.
 
 ---
 

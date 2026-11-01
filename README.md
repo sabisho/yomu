@@ -23,7 +23,7 @@ GPU-accelerated rendering with [GPUI Kit](https://gpui-kit.com/) and direct Wayl
 - 📂 **Flexible imports** — open CBZ/CBR/ZIP/RAR archives or image folders; add files by browsing or drag and drop.
 - 🖼️ **Distraction-free reader** — clean single-page view with a slim progress line and controls that stay out of the way.
 - 🖱️ **Fast library actions** — context menus, multi-select, bulk removal, read/unread status, and progress reset.
-- 🔎 **Powerful navigation** — Vim-style motions, counts, marks, a command prompt, and familiar keyboard shortcuts.
+- 🔎 **Powerful navigation** — Vim-style motions, counts, marks, and familiar keyboard shortcuts.
 - 🔍 **Flexible viewing** — fit page/width/height, original size, zoom, drag-to-pan, continuous scrolling, and gapless webcomics mode.
 - 🌀 **Smooth input** — kinetic touchpad/touchscreen scrolling, pinch-to-zoom at gesture anchor, and frame-rate-independent page transitions.
 - 💾 **Persistent progress** — page position and marks are saved and restored when you return to a book.
@@ -113,7 +113,7 @@ environment.systemPackages = [ (pkgs.callPackage /home/you/Projects/yomu/nix/pac
 
 ## Keys
 
-Vim keybindings (motions like `j`/`k`/`gg`/`G`, marks, counts, and `:`) are opt-in via Settings → Reader or the `--vim` / `--vim-mode` command-line flag. When Vim mode is off (the default), standard desktop navigation shortcuts (arrows, PageUp/PageDown, Space, Home/End, `+`/`-`, Ctrl+wheel) operate cleanly without interception. When Vim mode is enabled, Vim motions take precedence for reading actions while preserving standard text editing in input fields. Press `?` in the reader for a cheat sheet.
+Vim keybindings (motions like `j`/`k`/`gg`/`G`, marks, and counts) are opt-in via Settings → Reader or the `--vim` / `--vim-mode` command-line flag. When Vim mode is off (the default), standard desktop navigation shortcuts (arrows, PageUp/PageDown, Space, Home/End, `+`/`-`, Ctrl+wheel) operate cleanly without interception. When Vim mode is enabled, Vim motions take precedence for reading actions while preserving standard text editing in input fields. Press `?` in the reader for a cheat sheet.
 
 **Library**
 
@@ -125,7 +125,7 @@ Vim keybindings (motions like `j`/`k`/`gg`/`G`, marks, counts, and `:`) are opt-
 | `Ctrl+A`, `Delete`, `Esc` | Select all, remove the selection, clear the selection |
 | `Ctrl+O` / `Ctrl+Shift+O` | Add files / Add folder |
 | `/`, click the search field, or `Ctrl+F` | Search titles, source paths, and series |
-| `Ctrl+,`, `:settings`, or library hamburger → **Settings** | Settings |
+| `Ctrl+,`, or Settings icon → **Settings** | Settings |
 
 **Moving**
 
@@ -135,7 +135,7 @@ Vim keybindings (motions like `j`/`k`/`gg`/`G`, marks, counts, and `:`) are opt-
 | `Space` / `Shift+Space`, `Ctrl+F` / `Ctrl+B` | Scroll a screen down / up |
 | `Ctrl+D` / `Ctrl+U` | Scroll half a screen |
 | `J` `K`, `PageDown` `PageUp` | Next / previous page |
-| `gg`, `G`, `12G`, `:12`, `Home`, `End` | First page, last page, page 12 |
+| `gg`, `G`, `12G`, `Home`, `End` | First page, last page, page 12 |
 | `ma`, `'a`, `''` | Set mark `a`, jump to it, jump back to where you were |
 | Click left / right third of the window | Turn the page toward that side |
 | Mouse wheel / Touchpad | Scroll; touchpad two-finger flicks launch natural inertial momentum scrolling |
@@ -163,26 +163,8 @@ Counts work on motions: `5j` scrolls five steps, `3J` skips three pages. Marks a
 | `i` | Show page number, fit mode and zoom |
 | `f`, `F11` | Fullscreen |
 | `?` | Help |
-| `Esc`, `q` | Back to the library (`Esc` first cancels a half-typed command) |
+| `Esc`, `q` | Back to the library (`Esc` first cancels a half-typed motion or count) |
 | `Ctrl+Q` | Quit |
-
-**Command prompt** (press `:` in the library or reader)
-
-The floating prompt shows matching commands and short descriptions. Use `↑`/`↓` to select, `Tab` or
-`Shift+Tab` to complete, `Enter` to run the draft, and `Esc` to cancel. Unknown commands remain editable
-and show the parser's error message when run.
-
-| Command | Action |
-|---------|--------|
-| `:12` | Go to page 12 |
-| `:fit width`, `:fit page`, `:fit height`, `:fit original` | Set the fit mode |
-| `:zoom 150` | Zoom to 150% of the fit size (`:zoom` resets) |
-| `:continuous on`, `:continuous off` | Stack pages vertically or return to single-page reading |
-| `:webcomics on`, `:webcomics off` | Force gapless pages or restore the normal reading mode |
-| `:remember-zoom on`, `:remember-zoom off` | Keep custom zoom and pinch scale across all books |
-| `:theme [name]` | Set color theme by name, or cycle to the next theme |
-| `:q` | Back to the library |
-| `:qa` | Quit |
 
 By default pages run left to right: `Right` and `l` go forward, `Left` and `h` go back. The fit mode and
 animation preference are remembered between books.

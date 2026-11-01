@@ -1,7 +1,6 @@
 //! Collections screen view presentation adapter.
 
-use gpui_kit::component::input::InputState;
-use gpui_kit::{AnyElement, AppContext, Context, Window, px};
+use gpui_kit::{AnyElement, Context, Window, px};
 
 use crate::app::state::Yomu;
 use crate::ui;
@@ -70,32 +69,21 @@ impl Yomu {
                 let yomu = yomu.clone();
                 move |_, window, cx| {
                     yomu.update(cx, |this, cx| {
-                        let input = cx
-                            .new(|cx| InputState::new(window, cx).placeholder("Collection Name…"));
-                        this.overlay = Some(ui::overlays::Overlay::Collection(
-                            ui::overlays::CollectionDialog {
-                                is_new: true,
-                                collection_id: None,
-                                input,
-                            },
-                        ));
-                        cx.notify();
+                        this.open_collection_dialog(true, None, window, cx);
                     })
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |id, _pos, _, cx| {
+                move |id, _pos, window, cx| {
                     yomu.update(cx, |this, cx| {
-                        this.overlay = Some(ui::overlays::Overlay::Confirm(
-                            ui::overlays::ConfirmDialog {
-                                title: "Delete Collection?".into(),
-                                message: "This collection will be deleted. Underlying manga files will not be affected.".into(),
-                                confirm_label: "Delete",
-                                action: ui::overlays::ConfirmAction::DeleteCollection(id.to_string()),
-                            },
-                        ));
-                        cx.notify();
+                        let dialog = ui::overlays::ConfirmDialog {
+                            title: "Delete Collection?".into(),
+                            message: "This collection will be deleted. Underlying manga files will not be affected.".into(),
+                            confirm_label: "Delete",
+                            action: ui::overlays::ConfirmAction::DeleteCollection(id.to_string()),
+                        };
+                        this.open_confirm_alert(dialog, window, cx);
                     })
                 }
             },

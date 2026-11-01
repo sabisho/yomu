@@ -9,7 +9,6 @@ use std::{
     fs,
     io::{Cursor, Write},
 };
-use ui::overlays::command_suggestions;
 use ui::reader::Page;
 use yomu::archive::SourceKind;
 use yomu::imaging;
@@ -147,11 +146,17 @@ fn launch<'a>(
         );
         cx.bind_keys([KeyBinding::new("ctrl-,", OpenSettings, None)]);
     });
-    cx.add_window_view(move |window, cx| {
-        let yomu = Yomu::with_dirs(dirs, window, cx);
-        window.focus(&yomu.focus_handle, cx);
-        yomu
-    })
+    let yomu_cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let yomu_for_view = yomu_cell.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let yomu = cx.new(|cx| Yomu::with_dirs(dirs, window, cx));
+        let focus = yomu.read(cx).focus_handle.clone();
+        window.focus(&focus, cx);
+        *yomu_for_view.borrow_mut() = Some(yomu.clone());
+        gpui_kit::component::Root::new(yomu, window, cx)
+    });
+    let yomu = yomu_cell.borrow().as_ref().unwrap().clone();
+    (yomu, cx)
 }
 
 fn book(view: &Entity<Yomu>, cx: &mut VisualTestContext, id: &str) -> Book {
@@ -2742,32 +2747,18 @@ fn built_in_themes_cycle_and_persist(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn theme_command_changes_theme_and_suggests_all_themes(cx: &mut TestAppContext) {
-    let fx = fixture("theme-command");
+fn theme_action_changes_and_cycles_theme(cx: &mut TestAppContext) {
+    let fx = fixture("theme-action");
     let (view, cx) = launch(&fx, cx);
     open_book_by_index(&fx, &view, cx, 0);
 
     view.update_in(cx, |this, window, cx| {
-        let suggestions = command_suggestions("theme ", &this.custom_themes);
-        assert!(suggestions.len() >= 6);
-        let labels: Vec<String> = suggestions.iter().map(|s| s.1.clone()).collect();
-        assert!(labels.contains(&"Catppuccin Mocha".to_string()));
-        assert!(labels.contains(&"Catppuccin Latte".to_string()));
-        assert!(labels.contains(&"Gruvbox Dark".to_string()));
-        assert!(labels.contains(&"Gruvbox Light".to_string()));
-
-        // Filtering works
-        let filtered = command_suggestions("theme gruv", &this.custom_themes);
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().any(|s| s.1 == "Gruvbox Dark"));
-        assert!(filtered.iter().any(|s| s.1 == "Gruvbox Light"));
-
-        // Running theme command applies theme
+        // Running theme action applies theme
         let vp = viewport_of(window);
         this.apply(Action::SetTheme("Gruvbox Dark".to_string()), vp, window, cx);
         assert_eq!(this.library.settings().theme_name, "Gruvbox Dark");
 
-        // Empty theme command cycles theme
+        // Empty theme action cycles theme
         this.apply(Action::SetTheme(String::new()), vp, window, cx);
         assert_ne!(this.library.settings().theme_name, "Gruvbox Dark");
     });
@@ -2819,88 +2810,6 @@ fn extended_thumbnail_border_and_rounding_options(cx: &mut TestAppContext) {
         );
         assert_eq!(this.radius_px(), 12.0);
         assert_eq!(this.radius_lg_px(), 16.0);
-    });
-}
-
-#[gpui_kit::test]
-fn library_view_command_box_and_theme_preview(cx: &mut TestAppContext) {
-    let fx = fixture("cmdbox-test");
-    let (view, cx) = launch(&fx, cx);
-    view.update_in(cx, |this, _, _| {
-        this.library.settings_mut().vim_mode = true;
-    });
-
-    // Initial state: in library view, not in cmdline
-    view.update_in(cx, |this, _, _| {
-        assert!(this.reader.is_none());
-        assert!(!this.in_cmdline());
-        assert_eq!(this.cmdline_text(), None);
-    });
-
-    // Press ':' to open command box in library
-    cx.simulate_keystrokes(":");
-    view.update_in(cx, |this, _, _| {
-        assert!(this.in_cmdline());
-        assert_eq!(this.cmdline_text(), Some(""));
-    });
-
-    // Type "theme "
-    cx.simulate_keystrokes("t h e m e space");
-    view.update_in(cx, |this, _, _| {
-        assert!(this.in_cmdline());
-        assert_eq!(this.cmdline_text(), Some("theme "));
-    });
-
-    // Initial theme before preview
-    let initial_theme = view.read_with(cx, |this, _| this.library.settings().theme_name.clone());
-
-    // Cycle completions with Down: should trigger live preview
-    cx.simulate_keystrokes("down");
-    view.update_in(cx, |this, _, _| {
-        assert!(this.theme_before_preview.is_some());
-        assert_eq!(
-            this.theme_before_preview.as_deref(),
-            Some(initial_theme.as_str())
-        );
-    });
-
-    // Press escape to cancel: should restore theme and exit cmdline
-    cx.simulate_keystrokes("escape");
-    view.update_in(cx, |this, _, _| {
-        assert!(!this.in_cmdline());
-        assert_eq!(this.theme_before_preview, None);
-        assert_eq!(this.library.settings().theme_name, initial_theme);
-    });
-
-    // Press ':' again and run a theme command to completion
-    cx.simulate_keystrokes(":");
-    view.update_in(cx, |this, _, _| {
-        assert!(this.in_cmdline());
-    });
-    // Replace cmdline with ":theme Gruvbox Light" and press enter
-    view.update_in(cx, |this, _, _| {
-        this.replace_cmdline("theme Gruvbox Light".to_string());
-    });
-    cx.simulate_keystrokes("enter");
-    view.update_in(cx, |this, _, _| {
-        assert!(!this.in_cmdline());
-        assert_eq!(this.library.settings().theme_name, "Gruvbox Light");
-        assert_eq!(this.theme_before_preview, None);
-    });
-}
-
-#[gpui_kit::test]
-fn command_box_rendering_and_cancellation(cx: &mut TestAppContext) {
-    let fx = fixture("cmdbox-render");
-    let (view, cx) = launch(&fx, cx);
-
-    view.update_in(cx, |this, _, cx| {
-        assert!(this.render_command_box(cx).is_none());
-        this.library_vim.feed(":");
-        this.replace_cmdline("theme ".to_string());
-        assert!(this.render_command_box(cx).is_some());
-        this.cancel_cmdline(cx);
-        assert!(this.render_command_box(cx).is_none());
     });
 }
 
@@ -3343,29 +3252,18 @@ fn test_vim_mode_default_off_and_settings_persistence(cx: &mut TestAppContext) {
         assert!(!this.is_vim_enabled());
     });
 
-    // Pressing ':' in library when vim mode is off does NOT enter cmdline
+    // Pressing ':' in library when vim mode is off is completely inert
     cx.simulate_keystrokes(":");
-    view.update_in(cx, |this, _, _| {
-        assert!(
-            !this.in_cmdline(),
-            "colon must not open cmdline when vim mode is off"
-        );
-    });
+    assert_eq!(overlay_kind(&view, cx), "none");
 
     // 2. Enable vim mode via settings
     view.update_in(cx, |this, _, cx| {
         this.toggle_vim_mode(true, cx);
     });
 
-    // Now typing ':' opens cmdline
+    // Pressing ':' when vim mode is enabled is also inert (command palette removed)
     cx.simulate_keystrokes(":");
-    view.update_in(cx, |this, _, _| {
-        assert!(
-            this.in_cmdline(),
-            "colon opens cmdline when vim mode is enabled"
-        );
-    });
-    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
 
     // 3. Persists across restarts
     let on_disk = Library::load(&fx.dirs).unwrap();
@@ -3389,12 +3287,9 @@ fn test_vim_mode_cli_flag_override(cx: &mut TestAppContext) {
         assert!(this.is_vim_enabled());
     });
 
-    // Typing ':' opens cmdline
+    // Pressing ':' is inert
     cx.simulate_keystrokes(":");
-    view.update_in(cx, |this, _, _| {
-        assert!(this.in_cmdline());
-    });
-    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
 
     // Disk settings are NOT modified by CLI session override
     assert!(
@@ -5307,12 +5202,8 @@ fn test_vim_reader_layout_and_spread_commands(cx: &mut TestAppContext) {
         assert_eq!(reader.page_layout, PageLayout::Single);
     });
 
-    // Test ':double' command
-    cx.simulate_keystrokes(":");
-    view.update_in(cx, |this, _, _| {
-        this.replace_cmdline("double".to_string());
-    });
-    cx.simulate_keystrokes("enter");
+    // Press 'd' again to toggle
+    cx.simulate_keystrokes("d");
     cx.run_until_parked();
 
     view.update(cx, |this, _| {
@@ -5320,30 +5211,13 @@ fn test_vim_reader_layout_and_spread_commands(cx: &mut TestAppContext) {
         assert_eq!(reader.page_layout, PageLayout::Double);
     });
 
-    // Test ':single' command
-    cx.simulate_keystrokes(":");
-    view.update_in(cx, |this, _, _| {
-        this.replace_cmdline("single".to_string());
-    });
-    cx.simulate_keystrokes("enter");
+    // Press 'd' again to return to Single
+    cx.simulate_keystrokes("d");
     cx.run_until_parked();
 
     view.update(cx, |this, _| {
         let reader = this.reader.as_ref().unwrap();
         assert_eq!(reader.page_layout, PageLayout::Single);
-    });
-
-    // Test ':layout' toggle command
-    cx.simulate_keystrokes(":");
-    view.update_in(cx, |this, _, _| {
-        this.replace_cmdline("layout".to_string());
-    });
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-
-    view.update(cx, |this, _| {
-        let reader = this.reader.as_ref().unwrap();
-        assert_eq!(reader.page_layout, PageLayout::Double);
     });
 
     // Test 'z s' to cycle spread override
@@ -5462,5 +5336,530 @@ fn test_empty_archive_handling(cx: &mut TestAppContext) {
         let reader = this.reader.as_ref().unwrap();
         assert_eq!(reader.total, 0);
         assert_eq!(reader.current_page_str().as_ref(), "0 / 0");
+    });
+}
+
+#[gpui_kit::test]
+fn regression_settings_dialog_open_close_reopen(cx: &mut TestAppContext) {
+    let fx = fixture("settings-regression");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Initial state: no overlay
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 2. Open via shortcut ctrl-,
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 3. Toggle close via shortcut ctrl-,
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 4. Open via sidebar action (simulating sidebar button click callback)
+    view.update_in(cx, |this, window, cx| {
+        this.open_settings_window(window, cx);
+    });
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 5. Close via Escape
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 6. Reopen via shortcut ctrl-,
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 7. Close via close_overlay_window
+    view.update_in(cx, |this, window, cx| {
+        this.close_overlay_window(window, cx);
+    });
+    assert_eq!(overlay_kind(&view, cx), "none");
+}
+
+#[gpui_kit::test]
+fn regression_colon_key_is_inert_and_does_not_open_command_palette(cx: &mut TestAppContext) {
+    let fx = fixture("colon-inert-regression");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. In library with vim mode disabled: ':' does nothing
+    cx.simulate_keystrokes(":");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 2. In library with vim mode enabled: ':' does nothing
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_vim_mode(true, cx);
+    });
+    cx.simulate_keystrokes(":");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 3. Open book in reader with vim mode enabled: ':' does nothing
+    let id = fx.ids[0].clone();
+    act(&view, cx, &id, BookAction::Open);
+    assert_eq!(reading(&view, cx), Some(0));
+
+    cx.simulate_keystrokes(":");
+    assert_eq!(overlay_kind(&view, cx), "none");
+    assert_eq!(reading(&view, cx), Some(0));
+
+    // 4. In reader with vim mode disabled: ':' does nothing
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_vim_mode(false, cx);
+    });
+    cx.simulate_keystrokes(":");
+    assert_eq!(overlay_kind(&view, cx), "none");
+    assert_eq!(reading(&view, cx), Some(0));
+}
+
+#[gpui_kit::test]
+fn regression_normal_vim_navigation_remains_functional(cx: &mut TestAppContext) {
+    let fx = fixture("normal-vim-regression");
+    let (view, cx) = launch(&fx, cx);
+
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_vim_mode(true, cx);
+    });
+
+    let id = fx.ids[0].clone();
+    act(&view, cx, &id, BookAction::Open);
+    assert_eq!(reading(&view, cx), Some(0));
+
+    // Jump to last page with 'G'
+    cx.simulate_keystrokes("G");
+    assert_eq!(reading(&view, cx), Some(4));
+
+    // Jump to first page with 'gg'
+    cx.simulate_keystrokes("g g");
+    assert_eq!(reading(&view, cx), Some(0));
+
+    // Set mark 'a'
+    cx.simulate_keystrokes("m a");
+
+    // Jump to last page
+    cx.simulate_keystrokes("G");
+    assert_eq!(reading(&view, cx), Some(4));
+
+    // Jump back to mark 'a'
+    cx.simulate_keystrokes("' a");
+    assert_eq!(reading(&view, cx), Some(0));
+
+    // Jump back with ''
+    cx.simulate_keystrokes("' '");
+    assert_eq!(reading(&view, cx), Some(4));
+
+    // Test layout toggles: 'd' toggles to Double, 'z d' toggles to Single
+    cx.simulate_keystrokes("d");
+    cx.run_until_parked();
+    view.update(cx, |this, _| {
+        assert_eq!(
+            this.reader.as_ref().unwrap().page_layout,
+            PageLayout::Double
+        );
+    });
+
+    cx.simulate_keystrokes("z d");
+    cx.run_until_parked();
+    view.update(cx, |this, _| {
+        assert_eq!(
+            this.reader.as_ref().unwrap().page_layout,
+            PageLayout::Single
+        );
+    });
+
+    // Test 'z s' spread override
+    cx.simulate_keystrokes("z s");
+    cx.run_until_parked();
+    view.update(cx, |this, _| {
+        assert_eq!(
+            this.reader.as_ref().unwrap().current_spread_override(),
+            PageSpreadOverride::ForceSpread
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn regression_settings_dialog_full_lifecycle(cx: &mut TestAppContext) {
+    let fx = fixture("settings-lifecycle-regression");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Open with ctrl-,
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 2. Close with escape
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 3. Open with ctrl-, and toggle close with ctrl-,
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 4. Reopen and change color scheme
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    view.update_in(cx, |this, _, cx| {
+        this.set_color_scheme("Gruvbox", cx);
+    });
+
+    view.update_in(cx, |this, _, _| {
+        assert_eq!(this.library.settings().color_scheme, "Gruvbox");
+    });
+
+    // 5. Close settings
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 6. Verify setting persisted on disk
+    let on_disk = Library::load(&fx.dirs).unwrap();
+    assert_eq!(on_disk.settings().color_scheme, "Gruvbox");
+}
+
+#[gpui_kit::test]
+fn regression_settings_advanced_clear_cache_cancel_and_confirm(cx: &mut TestAppContext) {
+    let fx = fixture("settings-cache-actions");
+    let (view, cx) = launch(&fx, cx);
+
+    // Initial state: no overlay
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 1. Open settings
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 2. Request Clear Thumbnail Cache
+    view.update(cx, |this, cx| this.request_clear_thumbnail_cache(cx));
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "confirm");
+
+    // 3. Cancel confirmation -> must return cleanly to Settings
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 4. Close settings -> no overlay remains
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 5. Normal keyboard navigation is functional (not swallowed by zombie overlay)
+    cx.simulate_keystrokes("j");
+    cx.simulate_keystrokes("k");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 6. Reopen settings immediately via shortcut
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 7. Request Clear Thumbnail Cache again
+    view.update(cx, |this, cx| this.request_clear_thumbnail_cache(cx));
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "confirm");
+
+    // 8. Confirm action -> must return cleanly to Settings
+    cx.simulate_keystrokes("enter");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 9. Close settings -> no overlay remains
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 10. Reopen immediately
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+}
+
+#[gpui_kit::test]
+fn regression_settings_advanced_clear_all_data_cancel_and_confirm(cx: &mut TestAppContext) {
+    let fx = fixture("settings-all-data-actions");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Open settings
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 2. Request Clear All Data
+    view.update(cx, |this, cx| this.request_clear_all_data(cx));
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "confirm");
+
+    // 3. Cancel confirmation -> returns cleanly to Settings
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 4. Close settings -> overlay is none
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 5. Normal keyboard navigation is functional
+    cx.simulate_keystrokes("j");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 6. Reopen settings immediately
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 7. Request Clear All Data again
+    view.update(cx, |this, cx| this.request_clear_all_data(cx));
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "confirm");
+
+    // 8. Confirm action -> returns cleanly to Settings
+    cx.simulate_keystrokes("enter");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 9. Close settings
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+}
+
+#[gpui_kit::test]
+fn regression_settings_advanced_reset_settings_cancel_and_confirm(cx: &mut TestAppContext) {
+    let fx = fixture("settings-reset-actions");
+    let (view, cx) = launch(&fx, cx);
+
+    // Modify a setting so reset has something to do
+    view.update_in(cx, |this, _, cx| {
+        this.set_color_scheme("Gruvbox", cx);
+    });
+
+    // 1. Open settings
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 2. Request Reset Settings
+    view.update(cx, |this, cx| this.request_reset_settings(cx));
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "confirm");
+
+    // 3. Cancel confirmation -> returns cleanly to Settings
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 4. Close settings -> overlay is none
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 5. Reopen settings immediately
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 6. Request Reset Settings again
+    view.update(cx, |this, cx| this.request_reset_settings(cx));
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "confirm");
+
+    // 7. Confirm action -> returns cleanly to Settings
+    cx.simulate_keystrokes("enter");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 8. Close settings -> overlay is none
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 9. Navigation continues to work
+    cx.simulate_keystrokes("j");
+    assert_eq!(overlay_kind(&view, cx), "none");
+}
+
+#[gpui_kit::test]
+fn regression_toolbar_button_group_segmented_controls(cx: &mut TestAppContext) {
+    let fx = fixture("toolbar-segmented");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Initial state: grid mode is true, group series is false by default
+    view.read_with(cx, |this, _| {
+        assert!(this.library.settings().view_mode_grid);
+        assert!(!this.library.settings().group_series);
+    });
+
+    // 2. Toggle group series to true via view method (as triggered by ButtonGroup child)
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_group_series(true, cx);
+    });
+    view.read_with(cx, |this, _| {
+        assert!(this.library.settings().group_series);
+    });
+
+    // 3. Toggle back to false
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_group_series(false, cx);
+    });
+    view.read_with(cx, |this, _| {
+        assert!(!this.library.settings().group_series);
+    });
+
+    // 4. Toggle view mode grid vs list
+    view.update_in(cx, |this, _, cx| {
+        this.view_mode_grid = false;
+        this.library.settings_mut().view_mode_grid = false;
+        this.save_library(cx);
+    });
+    view.read_with(cx, |this, _| {
+        assert!(!this.library.settings().view_mode_grid);
+    });
+
+    view.update_in(cx, |this, _, cx| {
+        this.view_mode_grid = true;
+        this.library.settings_mut().view_mode_grid = true;
+        this.save_library(cx);
+    });
+    view.read_with(cx, |this, _| {
+        assert!(this.library.settings().view_mode_grid);
+    });
+}
+
+#[gpui_kit::test]
+fn regression_properties_dialog_with_native_description_list(cx: &mut TestAppContext) {
+    let fx = fixture("props-native-dl");
+    let (view, cx) = launch(&fx, cx);
+    let id = fx.ids[0].clone();
+
+    // 1. Open properties dialog
+    act(&view, cx, &id, BookAction::Properties);
+    assert_eq!(overlay_kind(&view, cx), "properties");
+
+    // 2. Verify all metadata rows are populated
+    let rows = view.read_with(cx, |this, _| match &this.overlay {
+        Some(Overlay::Properties(dialog)) => dialog.rows.clone(),
+        _ => Vec::new(),
+    });
+    let get = |name: &str| rows.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone());
+    assert_eq!(get("Pages").as_deref(), Some("5"));
+    assert_eq!(get("Format").as_deref(), Some("CBZ archive"));
+    assert!(get("Location").unwrap().ends_with("A.cbz"));
+    assert!(get("Size").is_some());
+
+    // 3. Close properties dialog via Escape
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 4. Keyboard navigation operates normally
+    cx.simulate_keystrokes("j");
+    assert_eq!(overlay_kind(&view, cx), "none");
+}
+
+#[gpui_kit::test]
+fn regression_phase5_main_sidebar_navigation_and_counts(cx: &mut TestAppContext) {
+    let fx = fixture("sidebar-nav-phase5");
+    let (view, cx) = launch(&fx, cx);
+
+    // Initial section is AllManga by default
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.active_section, ui::sidebar::SidebarSection::AllManga);
+        assert_eq!(this.library.books().len(), 3);
+    });
+
+    // Switch through all sidebar sections
+    for section in [
+        ui::sidebar::SidebarSection::AllManga,
+        ui::sidebar::SidebarSection::Collections,
+        ui::sidebar::SidebarSection::History,
+        ui::sidebar::SidebarSection::Downloads,
+        ui::sidebar::SidebarSection::ContinueReading,
+    ] {
+        view.update_in(cx, |this, _, cx| {
+            this.active_section = section;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |this, _| {
+            assert_eq!(this.active_section, section);
+        });
+    }
+
+    // Settings trigger from sidebar footer opens settings dialog
+    view.update_in(cx, |this, window, cx| {
+        this.open_settings_window(window, cx);
+    });
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // Close via Escape
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // Verify toolbar sidebar collapse/expand toggle operates cleanly
+    view.read_with(cx, |this, _| {
+        assert!(!this.sidebar_collapsed);
+    });
+    // Collapse sidebar
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_sidebar(cx);
+    });
+    view.read_with(cx, |this, _| {
+        assert!(this.sidebar_collapsed);
+    });
+    // Expand sidebar back
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_sidebar(cx);
+    });
+    view.read_with(cx, |this, _| {
+        assert!(!this.sidebar_collapsed);
+    });
+    // Verify repeated toggles work reliably
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_sidebar(cx);
+    });
+    view.read_with(cx, |this, _| {
+        assert!(this.sidebar_collapsed);
+    });
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_sidebar(cx);
+    });
+    view.read_with(cx, |this, _| {
+        assert!(!this.sidebar_collapsed);
+    });
+    // Verify navigation destinations still function after re-expansion
+    view.update_in(cx, |this, _, cx| {
+        this.active_section = ui::sidebar::SidebarSection::AllManga;
+        cx.notify();
+    });
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.active_section, ui::sidebar::SidebarSection::AllManga);
+    });
+}
+
+#[gpui_kit::test]
+fn regression_phase5_settings_native_sidebar_navigation_and_tabs(cx: &mut TestAppContext) {
+    let fx = fixture("settings-sidebar-phase5");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Open settings dialog
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    // 2. Default tab is Appearance
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.settings_tab, ui::overlays::SettingsTab::Appearance);
+    });
+
+    // 3. Switch through each SettingsTab and verify rendering and state
+    let tabs = [
+        ui::overlays::SettingsTab::Appearance,
+        ui::overlays::SettingsTab::Reader,
+        ui::overlays::SettingsTab::Library,
+        ui::overlays::SettingsTab::Shortcuts,
+        ui::overlays::SettingsTab::Advanced,
+        ui::overlays::SettingsTab::General,
+    ];
+
+    for tab in tabs {
+        view.update_in(cx, |this, window, cx| {
+            this.settings_tab = tab;
+            let _content = this.render_settings_content(window, cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |this, _| {
+            assert_eq!(this.settings_tab, tab);
+        });
+    }
+
+    // 4. Verify closing dialog via Escape dismisses cleanly without orphaned state
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
+    view.read_with(cx, |this, _| {
+        assert!(this.overlay.is_none());
     });
 }

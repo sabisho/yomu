@@ -6,6 +6,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::{Disableable, Icon, Side, Sizable, Size};
@@ -16,8 +17,7 @@ use gpui_kit::{
 };
 
 use super::components::{
-    CONTROL_HEIGHT_TOOLBAR, macos_sidebar_bg, open_shortcut_str, settings_shortcut_str, with_alpha,
-    zoom_shortcut_str,
+    CONTROL_HEIGHT_TOOLBAR, open_shortcut_str, settings_shortcut_str, with_alpha, zoom_shortcut_str,
 };
 use super::overlays::SettingsTab;
 use super::theme::{UiColors, is_standalone_scheme};
@@ -32,7 +32,6 @@ pub struct SettingsViewProps<'a> {
     pub settings: &'a Settings,
     pub available_schemes: Vec<String>,
     pub cache_size_str: String,
-    pub is_client_decorated: bool,
     pub system_reduced_motion: bool,
     pub vim_mode: bool,
     pub colors: UiColors,
@@ -42,7 +41,6 @@ pub struct SettingsViewProps<'a> {
 pub fn render_settings_view(
     props: SettingsViewProps,
     on_select_tab: impl Fn(SettingsTab, &mut Window, &mut App) + 'static,
-    on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_set_page_layout: impl Fn(PageLayout, &mut Window, &mut App) + 'static,
     on_set_reading_direction: impl Fn(ReadingDirection, &mut Window, &mut App) + 'static,
     on_toggle_first_page_is_cover: impl Fn(bool, &mut Window, &mut App) + 'static,
@@ -63,7 +61,6 @@ pub fn render_settings_view(
     on_reset_all_data: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let on_select_tab = std::rc::Rc::new(on_select_tab);
-    let on_close = std::rc::Rc::new(on_close);
     let on_set_page_layout = std::rc::Rc::new(on_set_page_layout);
     let on_set_reading_direction = std::rc::Rc::new(on_set_reading_direction);
     let on_set_theme_mode = std::rc::Rc::new(on_set_theme_mode);
@@ -89,126 +86,26 @@ pub fn render_settings_view(
         .flex()
         .flex_row()
         .bg(colors.background)
-        // Left macOS System Settings Navigation Sidebar
+        // Left Native Settings Navigation Sidebar
         .child(
-            div()
-                .w(px(210.))
-                .flex_none()
-                .h_full()
-                .rounded_l(props.radius)
-                .overflow_hidden()
-                .p_3()
+            Sidebar::new("settings-sidebar")
+                .side(Side::Left)
+                .w(px(200.))
                 .border_r_1()
-                .border_color(with_alpha(colors.border, 0.45))
-                .bg(macos_sidebar_bg(colors))
-                .flex()
-                .flex_col()
-                .justify_between()
+                .collapsible(false)
+                .collapsed(false)
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1p5()
-                        // Platform-aware header: close button placement adapts to OS & decoration mode
-                        .child({
-                            let is_macos = cfg!(target_os = "macos");
-                            let is_windows = cfg!(target_os = "windows");
-                            let close_btn = Button::new("settings-close-btn")
-                                .ghost()
-                                .with_size(Size::Size(px(24.)))
-                                .rounded(ButtonRounded::Size(px(4.)))
-                                .tooltip("Close settings (Esc)")
-                                .icon(IconName::Close)
-                                .on_click({
-                                    let on_close = on_close.clone();
-                                    move |e, window, cx| on_close(e, window, cx)
-                                });
-                            let title = div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(colors.foreground)
-                                .child("Settings");
-
-                            if is_macos {
-                                div()
-                                    .px_2()
-                                    .pt_1p5()
-                                    .pb_3()
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(close_btn)
-                                    .child(title)
-                            } else if is_windows || props.is_client_decorated {
-                                div()
-                                    .px_2()
-                                    .pt_1p5()
-                                    .pb_3()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(title)
-                                    .child(close_btn)
-                            } else {
-                                div()
-                                    .px_2()
-                                    .pt_1p5()
-                                    .pb_3()
-                                    .flex()
-                                    .items_center()
-                                    .child(title)
-                            }
-                        })
-                        .children(tabs.iter().map(|&(tab, icon, label)| {
-                            let on_select_tab = on_select_tab.clone();
-                            let active = props.current_tab == tab;
-                            let (bg, text_col, icon_col) = if active {
-                                (
-                                    colors.accent.into(),
-                                    colors.accent_foreground,
-                                    colors.accent_foreground,
-                                )
-                            } else {
-                                (
-                                    with_alpha(colors.foreground, 0.0),
-                                    colors.foreground,
-                                    colors.muted,
-                                )
-                            };
-
-                            div()
-                                .id(ElementId::from(SharedString::from(format!(
-                                    "settings-tab-item-{}",
-                                    tab.label()
-                                ))))
-                                .h(px(32.))
-                                .px_3()
-                                .rounded(props.radius)
-                                .flex()
-                                .items_center()
-                                .gap_2p5()
-                                .bg(bg)
-                                .text_color(text_col)
-                                .cursor_pointer()
-                                .when(!active, |this| {
-                                    this.hover(|style| style.bg(with_alpha(colors.foreground, 0.06)))
-                                })
-                                .on_click(move |_, window, cx| on_select_tab(tab, window, cx))
-                                .child(Icon::new(icon).size(px(16.)).text_color(icon_col))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(if active {
-                                            FontWeight::SEMIBOLD
-                                        } else {
-                                            FontWeight::NORMAL
-                                        })
-                                        .child(label),
-                                )
-                        })),
+                    SidebarMenu::new().children(tabs.iter().map(|&(tab, icon, label)| {
+                        let on_select_tab = on_select_tab.clone();
+                        let is_active = props.current_tab == tab;
+                        SidebarMenuItem::new(label)
+                            .icon(icon)
+                            .active(is_active)
+                            .on_click(move |_, window, cx| on_select_tab(tab, window, cx))
+                    })),
                 ),
         )
-        // Right macOS Settings Content Pane
+        // Right Settings Content Pane
         .child(
             div()
                 .id("settings-content-scroll")
@@ -220,24 +117,24 @@ pub fn render_settings_view(
                 .track_scroll(props.scroll_handle)
                 .scroll_bounce(true)
                 .scroll_wheel(false)
-                .px_7()
-                .py_6()
+                .px_6()
+                .py_4()
                 .flex()
                 .flex_col()
                 .gap_4()
-                    .child(
-                        div()
-                            .pb_1()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(colors.foreground)
-                                    .child(props.current_tab.label()),
-                            )
+                .child(
+                    div()
+                        .pb_1()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_base()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(colors.foreground)
+                                .child(props.current_tab.label()),
+                        )
                             .child(
                                 div().text_xs().text_color(colors.muted).child(match props
                                     .current_tab
@@ -930,14 +827,12 @@ fn render_tab_shortcuts(colors: UiColors, vim_mode: bool) -> Div {
     let settings_sc = settings_shortcut_str();
     let open_sc = open_shortcut_str();
 
-    let mut shortcuts: Vec<(&'static str, String)> = Vec::new();
-    shortcuts.push(("Continue / Open Manga", "Enter or Left Click".to_string()));
-    shortcuts.push(("Import Manga Files / Folder", open_sc.to_string()));
-    shortcuts.push(("Search Library", search_sc.to_string()));
-    if vim_mode {
-        shortcuts.push(("Command Prompt", ":".to_string()));
-    }
-    shortcuts.push(("Toggle Fullscreen", "F or F11".to_string()));
+    let mut shortcuts: Vec<(&'static str, String)> = vec![
+        ("Continue / Open Manga", "Enter or Left Click".to_string()),
+        ("Import Manga Files / Folder", open_sc.to_string()),
+        ("Search Library", search_sc.to_string()),
+        ("Toggle Fullscreen", "F or F11".to_string()),
+    ];
     if vim_mode {
         shortcuts.push((
             "Next Page / Scroll Down",
@@ -949,7 +844,7 @@ fn render_tab_shortcuts(colors: UiColors, vim_mode: bool) -> Div {
         ));
         shortcuts.push(("First Page / Cover", "gg or Home".to_string()));
         shortcuts.push(("Last Page", "G or End".to_string()));
-        shortcuts.push(("Jump to Page", "{count}G or :{count}".to_string()));
+        shortcuts.push(("Jump to Page", "{count}G".to_string()));
         shortcuts.push(("Set / Jump to Mark", "m{a-z} / '{a-z}".to_string()));
     } else {
         shortcuts.push((

@@ -6,16 +6,22 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::{AppContext, Context, Entity, Focusable, Window, px};
+use gpui_kit::component::{WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::{App, AppContext, Context, Entity, Focusable, SharedString, Window, px};
 
 use yomu::library::Book;
 use yomu::menu::{self, BookAction, Entry};
 
 use crate::app::state::Yomu;
 use crate::ui::library_view::directory_groups;
-use crate::ui::overlays::{ConfirmAction, ConfirmDialog, Overlay, PropertiesDialog, SeriesDialog};
+use crate::ui::overlays::{
+    CollectionDialog, ConfirmAction, ConfirmDialog, Overlay, PropertiesDialog, SeriesDialog,
+};
 
 impl Yomu {
     pub(crate) fn build_book_context_menu(
@@ -189,14 +195,83 @@ impl Yomu {
         });
         let focus_handle = input.read(cx).focus_handle(cx);
         window.focus(&focus_handle, cx);
-        cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
+        let yomu = cx.entity().clone();
+        cx.subscribe(&input, move |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.save_series_dialog(cx);
+                let _ = this.window_handle.update(cx, |_, window, cx| {
+                    window.close_dialog(cx);
+                });
             }
         })
         .detach();
-        self.overlay = Some(Overlay::Series(SeriesDialog { book_ids, input }));
+        self.overlay = Some(Overlay::Series(SeriesDialog {
+            book_ids: book_ids.clone(),
+            input: input.clone(),
+        }));
         cx.notify();
+
+        let title = if book_ids.len() == 1 {
+            "Set Series"
+        } else {
+            "Set Series for Selected Books"
+        };
+        let input_clone = input.clone();
+        let initial_focus = std::cell::Cell::new(true);
+
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if initial_focus.replace(false) {
+                input_clone.read(cx).focus_handle(cx).focus(window, cx);
+            }
+            let yomu_close = yomu.clone();
+            let yomu_save = yomu.clone();
+            dialog
+                .title(title)
+                .close_button(true)
+                .w(px(460.))
+                .on_close(move |_, _window, cx| {
+                    yomu_close.update(cx, |this, cx| {
+                        if matches!(this.overlay, Some(Overlay::Series(_))) {
+                            this.dismiss();
+                            cx.notify();
+                        }
+                    });
+                })
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .py_2()
+                        .child(
+                            gpui_kit::div()
+                                .text_xs()
+                                .text_color(yomu.read(cx).colors.muted)
+                                .child("Assign a series name to group these volumes."),
+                        )
+                        .child(
+                            Input::new(&input_clone)
+                                .id("series-name-input")
+                                .cleanable(true),
+                        ),
+                )
+                .footer(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(Button::new("series-cancel").label("Cancel").on_click(
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                            },
+                        ))
+                        .child(Button::new("series-save").primary().label("Save").on_click(
+                            move |_, window, cx| {
+                                yomu_save.update(cx, |this, cx| {
+                                    this.save_series_dialog(cx);
+                                });
+                                window.close_dialog(cx);
+                            },
+                        )),
+                )
+        });
     }
 
     pub(crate) fn save_series_dialog(&mut self, cx: &mut Context<Self>) {
@@ -222,6 +297,133 @@ impl Yomu {
         };
         self.show_toast(message, cx);
         cx.notify();
+    }
+
+    pub(crate) fn open_collection_dialog(
+        &mut self,
+        is_new: bool,
+        collection_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_quitting {
+            return;
+        }
+        self.dismiss();
+        let default_name = if let Some(id) = &collection_id {
+            self.library
+                .collections
+                .iter()
+                .find(|c| c.id == *id)
+                .map(|c| c.name.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(default_name)
+                .placeholder("Collection Name…")
+        });
+        self.overlay = Some(Overlay::Collection(CollectionDialog {
+            is_new,
+            collection_id: collection_id.clone(),
+            input: input.clone(),
+        }));
+        cx.notify();
+
+        let yomu = cx.entity().clone();
+        let input_clone = input.clone();
+        let initial_focus = std::cell::Cell::new(true);
+        let editing_id = collection_id.clone();
+        let save_title = if is_new { "Create" } else { "Rename" };
+        let dialog_title = if is_new {
+            "New Collection"
+        } else {
+            "Rename Collection"
+        };
+
+        let yomu_enter = yomu.clone();
+        let input_enter = input.clone();
+        let edit_id_enter = collection_id.clone();
+        cx.subscribe(&input, move |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                let name = input_enter.read(cx).value().trim().to_string();
+                if !name.is_empty() {
+                    yomu_enter.update(cx, |this, cx| {
+                        if let Some(id) = &edit_id_enter {
+                            this.library.rename_collection(id, &name);
+                        } else {
+                            this.library.add_collection(&name);
+                        }
+                        this.save_library(cx);
+                        this.dismiss();
+                    });
+                    let _ = this.window_handle.update(cx, |_, window, cx| {
+                        window.close_dialog(cx);
+                    });
+                }
+            }
+        })
+        .detach();
+
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if initial_focus.replace(false) {
+                input_clone.read(cx).focus_handle(cx).focus(window, cx);
+            }
+            let yomu_close = yomu.clone();
+            let yomu_save = yomu.clone();
+            let input_state = input_clone.clone();
+            let edit_id = editing_id.clone();
+
+            dialog
+                .title(dialog_title)
+                .close_button(true)
+                .w(px(400.))
+                .on_close(move |_, _window, cx| {
+                    yomu_close.update(cx, |this, cx| {
+                        if matches!(this.overlay, Some(Overlay::Collection(_))) {
+                            this.dismiss();
+                            cx.notify();
+                        }
+                    });
+                })
+                .child(v_flex().py_2().child(Input::new(&input_clone)))
+                .footer(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("collection-dialog-cancel")
+                                .label("Cancel")
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(
+                            Button::new("collection-dialog-save")
+                                .primary()
+                                .label(save_title)
+                                .on_click(move |_, window, cx| {
+                                    let name = input_state.read(cx).value().trim().to_string();
+                                    if !name.is_empty() {
+                                        yomu_save.update(cx, |this, cx| {
+                                            if let Some(id) = &edit_id {
+                                                this.library.rename_collection(id, &name);
+                                            } else {
+                                                this.library.add_collection(&name);
+                                            }
+                                            this.save_library(cx);
+                                            this.dismiss();
+                                        });
+                                        window.close_dialog(cx);
+                                    }
+                                }),
+                        ),
+                )
+        });
     }
 
     /// Run a menu action, asking first if it would throw away progress.
@@ -301,10 +503,10 @@ impl Yomu {
             }
             BookAction::RemoveSelected => {
                 if id.starts_with("group:") || target_ids.len() > 1 {
-                    self.request_remove_books(target_ids, cx);
+                    self.request_remove_books(target_ids, window, cx);
                     return;
                 }
-                self.request_remove_selected(cx);
+                self.request_remove_selected(window, cx);
                 return;
             }
             BookAction::ClearSelection => {
@@ -321,13 +523,13 @@ impl Yomu {
             return;
         };
         if let Some(confirmation) = menu::confirmation(action, &book) {
-            self.overlay = Some(Overlay::Confirm(ConfirmDialog {
+            let confirm_dialog = ConfirmDialog {
                 title: confirmation.title.into(),
                 message: confirmation.message.into(),
                 confirm_label: confirmation.confirm_label,
                 action: ConfirmAction::Book(action, id.to_string()),
-            }));
-            cx.notify();
+            };
+            self.open_confirm_alert(confirm_dialog, window, cx);
             return;
         }
         self.perform_book_action(action, id, window, cx);
@@ -381,12 +583,7 @@ impl Yomu {
                 _ => self.show_toast(format!("“{title}” is missing from disk"), cx),
             },
             BookAction::Properties => {
-                if let Some(book) = self.library.get(id) {
-                    self.overlay = Some(Overlay::Properties(PropertiesDialog {
-                        title: book.title.clone().into(),
-                        rows: menu::properties(book),
-                    }));
-                }
+                self.open_properties_dialog(id, window, cx);
             }
             BookAction::SetSeries => {}
             BookAction::Remove => self.remove_book(id, cx),
@@ -394,6 +591,152 @@ impl Yomu {
             BookAction::RemoveSelected | BookAction::ClearSelection => {}
         }
         cx.notify();
+    }
+
+    pub(crate) fn open_properties_dialog(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_quitting {
+            return;
+        }
+        let Some(book) = self.library.get(id).cloned() else {
+            return;
+        };
+        self.dismiss();
+        let title: SharedString = book.title.clone().into();
+        let rows = menu::properties(&book);
+        self.overlay = Some(Overlay::Properties(PropertiesDialog {
+            title: title.clone(),
+            rows: rows.clone(),
+        }));
+        cx.notify();
+
+        let yomu = cx.entity().clone();
+        let content_rows = rows.clone();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let yomu_close = yomu.clone();
+            dialog
+                .title(title.clone())
+                .close_button(true)
+                .w(px(520.))
+                .on_close(move |_, _window, cx| {
+                    yomu_close.update(cx, |this, cx| {
+                        if matches!(this.overlay, Some(Overlay::Properties(_))) {
+                            this.dismiss();
+                            cx.notify();
+                        }
+                    });
+                })
+                .child(
+                    DescriptionList::new()
+                        .columns(1)
+                        .bordered(false)
+                        .label_width(px(100.))
+                        .children(
+                            content_rows
+                                .iter()
+                                .cloned()
+                                .map(|(label, value)| DescriptionItem::new(label).value(value)),
+                        ),
+                )
+                .footer(h_flex().justify_end().child(
+                    Button::new("properties-close").label("Close").on_click(
+                        move |_, window, cx| {
+                            window.close_dialog(cx);
+                        },
+                    ),
+                ))
+        });
+    }
+
+    pub(crate) fn show_confirm_alert_on_window(
+        window: &mut Window,
+        cx: &mut App,
+        dialog: &ConfirmDialog,
+        yomu: Entity<Self>,
+    ) {
+        let title = dialog.title.clone();
+        let message = dialog.message.clone();
+        let confirm_label = dialog.confirm_label;
+        let action = dialog.action.clone();
+        let is_destructive = matches!(
+            action,
+            ConfirmAction::ClearAllData
+                | ConfirmAction::ForceQuit
+                | ConfirmAction::RemoveBooks(_)
+                | ConfirmAction::RemoveSelected
+                | ConfirmAction::DeleteCollection(_)
+                | ConfirmAction::ResetSettings
+                | ConfirmAction::Book(BookAction::Remove | BookAction::RemoveSelected, _)
+        );
+
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let yomu_ok = yomu.clone();
+            let yomu_cancel = yomu.clone();
+            let action_cancel = action.clone();
+            alert
+                .confirm()
+                .title(title.clone())
+                .description(message.clone())
+                .ok_text(confirm_label)
+                .ok_variant(if is_destructive {
+                    ButtonVariant::Danger
+                } else {
+                    ButtonVariant::Primary
+                })
+                .on_ok(move |_event, window, cx| {
+                    yomu_ok.update(cx, |this, cx| {
+                        this.confirm_accept(window, cx);
+                    });
+                    true
+                })
+                .on_cancel(move |_event, _window, cx| {
+                    yomu_cancel.update(cx, |this, cx| {
+                        let back_to_settings = matches!(
+                            action_cancel,
+                            ConfirmAction::ResetSettings
+                                | ConfirmAction::ClearThumbnailCache
+                                | ConfirmAction::ClearAllData
+                        );
+                        this.dismiss();
+                        if back_to_settings {
+                            this.overlay = Some(Overlay::Settings);
+                        }
+                        cx.notify();
+                    });
+                    true
+                })
+        });
+    }
+
+    pub(crate) fn open_confirm_alert(
+        &mut self,
+        dialog: ConfirmDialog,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_quitting && !matches!(dialog.action, ConfirmAction::ForceQuit) {
+            return;
+        }
+        self.overlay = Some(Overlay::Confirm(dialog.clone()));
+        cx.notify();
+        let entity = cx.entity().clone();
+        Self::show_confirm_alert_on_window(window, cx, &dialog, entity);
+    }
+
+    pub(crate) fn prompt_confirm(&mut self, dialog: ConfirmDialog, cx: &mut Context<Self>) {
+        if self.is_quitting && !matches!(dialog.action, ConfirmAction::ForceQuit) {
+            return;
+        }
+        self.overlay = Some(Overlay::Confirm(dialog.clone()));
+        cx.notify();
+        let entity = cx.entity().clone();
+        let _ = self.window_handle.update(cx, |_, window, cx| {
+            Self::show_confirm_alert_on_window(window, cx, &dialog, entity);
+        });
     }
 
     pub(crate) fn confirm_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -404,6 +747,12 @@ impl Yomu {
             return;
         }
         self.overlay_closed_at = Some(Instant::now());
+        let back_to_settings = matches!(
+            dialog.action,
+            ConfirmAction::ResetSettings
+                | ConfirmAction::ClearThumbnailCache
+                | ConfirmAction::ClearAllData
+        );
         match dialog.action {
             ConfirmAction::Book(action, id) => self.perform_book_action(action, &id, window, cx),
             ConfirmAction::RemoveBooks(ids) => self.remove_books(&ids, cx),
@@ -420,6 +769,9 @@ impl Yomu {
                 self.overlay = None;
                 cx.quit();
             }
+        }
+        if back_to_settings {
+            self.overlay = Some(Overlay::Settings);
         }
     }
 
@@ -439,7 +791,12 @@ impl Yomu {
     }
 
     /// Remove books from the library, asking first only if progress or marks would be lost.
-    pub(crate) fn request_remove_books(&mut self, ids: &[String], cx: &mut Context<Self>) {
+    pub(crate) fn request_remove_books(
+        &mut self,
+        ids: &[String],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if ids.is_empty() {
             return;
         }
@@ -449,16 +806,38 @@ impl Yomu {
         };
         match confirmation {
             Some(confirmation) => {
-                self.overlay = Some(Overlay::Confirm(ConfirmDialog {
+                let confirm_dialog = ConfirmDialog {
                     title: confirmation.title.into(),
                     message: confirmation.message.into(),
                     confirm_label: confirmation.confirm_label,
                     action: ConfirmAction::RemoveBooks(ids.to_vec()),
-                }));
-                cx.notify();
+                };
+                self.open_confirm_alert(confirm_dialog, window, cx);
             }
             None => self.remove_books(ids, cx),
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn prompt_remove_books(&mut self, ids: &[String], cx: &mut Context<Self>) {
+        let ids = ids.to_vec();
+        let entity = cx.entity().clone();
+        let _ = self.window_handle.update(cx, move |_, window, cx| {
+            entity.update(cx, |this, cx| {
+                this.request_remove_books(&ids, window, cx);
+            });
+        });
+    }
+
+    pub(crate) fn request_remove_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ids = self.selected_ids();
+        self.request_remove_books(&ids, window, cx);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn prompt_remove_selected(&mut self, cx: &mut Context<Self>) {
+        let ids = self.selected_ids();
+        self.prompt_remove_books(&ids, cx);
     }
 
     pub(crate) fn remove_books(&mut self, ids: &[String], cx: &mut Context<Self>) {
@@ -479,13 +858,6 @@ impl Yomu {
             format!("Removed {} books from the library", ids.len())
         };
         self.show_toast(message, cx);
-    }
-
-    /// Remove every selected book from the library, asking first only if progress or marks
-    /// would be lost. The comic files are never touched.
-    pub(crate) fn request_remove_selected(&mut self, cx: &mut Context<Self>) {
-        let ids = self.selected_ids();
-        self.request_remove_books(&ids, cx);
     }
 
     pub(crate) fn remove_selected(&mut self, cx: &mut Context<Self>) {

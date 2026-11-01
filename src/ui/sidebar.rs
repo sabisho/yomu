@@ -1,18 +1,17 @@
 //! Navigation sidebar for Yomu's two-pane application shell.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::h_flex;
+use gpui_kit::component::sidebar::{
+    Sidebar, SidebarCollapsible, SidebarFooter, SidebarMenu, SidebarMenuItem,
+};
+use gpui_kit::component::{Icon, Side};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
-    Styled, Window, div, px,
+    AnyElement, App, ClickEvent, FontWeight, Pixels, ScrollHandle, Styled, Window, div, px,
 };
 
-use super::components::{
-    TOOLBAR_HEIGHT, macos_sidebar_bg, settings_shortcut_str, stat_badge, toolbar_icon_button,
-    with_alpha,
-};
+use super::components::{TOOLBAR_HEIGHT, settings_shortcut_str, stat_badge, toolbar_icon_button};
 use super::theme::UiColors;
 
 #[allow(dead_code)]
@@ -38,7 +37,9 @@ pub enum SidebarSection {
 }
 
 pub struct SidebarProps<'a> {
+    #[allow(dead_code)]
     pub scroll_handle: &'a ScrollHandle,
+    pub collapsed: bool,
     pub current_section: SidebarSection,
     pub continue_reading_count: usize,
     pub all_manga_count: usize,
@@ -55,97 +56,26 @@ pub fn render_sidebar(
 ) -> AnyElement {
     let on_select = std::rc::Rc::new(on_select);
     let colors = props.colors;
-    let sidebar_bg = macos_sidebar_bg(colors);
 
-    let nav_item = |section: SidebarSection,
-                    icon: IconName,
-                    label: &'static str,
-                    count: Option<usize>,
-                    active: bool|
-     -> AnyElement {
-        let (bg, text_col, icon_col) = if active {
-            (
-                colors.accent.into(),
-                colors.accent_foreground,
-                colors.accent_foreground,
-            )
-        } else {
-            (
-                with_alpha(colors.foreground, 0.0),
-                colors.foreground,
-                colors.muted,
-            )
-        };
-
-        let on_select = on_select.clone();
-        let mut row = div()
-            .id(ElementId::from(label))
-            .h(px(32.))
-            .px_3()
-            .mx_2()
-            .my_0p5()
-            .rounded(props.radius)
-            .flex()
-            .items_center()
-            .justify_between()
-            .bg(bg)
-            .text_color(text_col)
-            .cursor_pointer()
-            .when(!active, |this| {
-                this.hover(|style| style.bg(with_alpha(colors.foreground, 0.06)))
-            })
-            .on_click(move |_, window, cx| on_select(section, window, cx))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2p5()
-                    .child(Icon::new(icon).size(px(16.)).text_color(icon_col))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(if active {
-                                FontWeight::SEMIBOLD
-                            } else {
-                                FontWeight::NORMAL
-                            })
-                            .child(label),
-                    ),
-            );
-
-        if let Some(c) = count {
-            row = row.child(stat_badge(c, active, colors, props.radius));
-        }
-
-        row.into_any_element()
-    };
-
-    div()
+    Sidebar::new("app-sidebar")
+        .side(Side::Left)
         .w(px(240.))
-        .h_full()
-        .flex()
-        .flex_col()
-        .justify_between()
-        .bg(sidebar_bg)
-        .border_r_1()
-        .border_color(colors.border)
-        // Top Header: App Brand "Yomu" (offset on macOS for native traffic lights)
-        .child(
-            div()
+        .collapsible(SidebarCollapsible::Offcanvas)
+        .collapsed(props.collapsed)
+        .header(
+            h_flex()
                 .h(TOOLBAR_HEIGHT)
                 .w_full()
                 .when(cfg!(target_os = "macos"), |s| s.pl(px(80.)))
-                .when(!cfg!(target_os = "macos"), |s| s.px_4())
-                .flex()
+                .when(!cfg!(target_os = "macos"), |s| s.px_3())
                 .items_center()
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
+                    h_flex()
                         .gap_2()
+                        .items_center()
                         .child(
                             Icon::new(IconName::BookOpen)
-                                .size(px(17.))
+                                .size(px(18.))
                                 .text_color(colors.accent),
                         )
                         .child(
@@ -158,59 +88,82 @@ pub fn render_sidebar(
                 ),
         )
         .child(
-            div()
-                .id("sidebar-nav-scroll")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scrollbar()
-                .track_scroll(props.scroll_handle)
-                .scroll_bounce(true)
-                .scroll_wheel(false)
-                .flex()
-                .flex_col()
-                // Main Navigation
-                .child(nav_item(
-                    SidebarSection::ContinueReading,
-                    IconName::Play,
-                    "Continue Reading",
-                    Some(props.continue_reading_count),
-                    props.current_section == SidebarSection::ContinueReading,
-                ))
-                .child(nav_item(
-                    SidebarSection::AllManga,
-                    IconName::LayoutGrid,
-                    "All Manga",
-                    Some(props.all_manga_count),
-                    props.current_section == SidebarSection::AllManga,
-                ))
-                .child(nav_item(
-                    SidebarSection::Collections,
-                    IconName::Folder,
-                    "Collections",
-                    Some(props.collections_count),
-                    props.current_section == SidebarSection::Collections,
-                ))
-                .child(nav_item(
-                    SidebarSection::History,
-                    IconName::Clock,
-                    "History",
-                    None,
-                    props.current_section == SidebarSection::History,
-                ))
-                .child(nav_item(
-                    SidebarSection::Downloads,
-                    IconName::Download,
-                    "Downloads",
-                    Some(props.downloads_count),
-                    props.current_section == SidebarSection::Downloads,
-                )),
+            SidebarMenu::new()
+                .child(
+                    SidebarMenuItem::new("Continue Reading")
+                        .icon(IconName::Play)
+                        .active(props.current_section == SidebarSection::ContinueReading)
+                        .on_click({
+                            let on_select = on_select.clone();
+                            move |_, window, cx| {
+                                on_select(SidebarSection::ContinueReading, window, cx)
+                            }
+                        })
+                        .when(props.continue_reading_count > 0, |this| {
+                            let count = props.continue_reading_count;
+                            let is_active =
+                                props.current_section == SidebarSection::ContinueReading;
+                            let radius = props.radius;
+                            this.suffix(move |_, _| stat_badge(count, is_active, colors, radius))
+                        }),
+                )
+                .child(
+                    SidebarMenuItem::new("All Manga")
+                        .icon(IconName::LayoutGrid)
+                        .active(props.current_section == SidebarSection::AllManga)
+                        .on_click({
+                            let on_select = on_select.clone();
+                            move |_, window, cx| on_select(SidebarSection::AllManga, window, cx)
+                        })
+                        .when(props.all_manga_count > 0, |this| {
+                            let count = props.all_manga_count;
+                            let is_active = props.current_section == SidebarSection::AllManga;
+                            let radius = props.radius;
+                            this.suffix(move |_, _| stat_badge(count, is_active, colors, radius))
+                        }),
+                )
+                .child(
+                    SidebarMenuItem::new("Collections")
+                        .icon(IconName::Folder)
+                        .active(props.current_section == SidebarSection::Collections)
+                        .on_click({
+                            let on_select = on_select.clone();
+                            move |_, window, cx| on_select(SidebarSection::Collections, window, cx)
+                        })
+                        .when(props.collections_count > 0, |this| {
+                            let count = props.collections_count;
+                            let is_active = props.current_section == SidebarSection::Collections;
+                            let radius = props.radius;
+                            this.suffix(move |_, _| stat_badge(count, is_active, colors, radius))
+                        }),
+                )
+                .child(
+                    SidebarMenuItem::new("History")
+                        .icon(IconName::Clock)
+                        .active(props.current_section == SidebarSection::History)
+                        .on_click({
+                            let on_select = on_select.clone();
+                            move |_, window, cx| on_select(SidebarSection::History, window, cx)
+                        }),
+                )
+                .child(
+                    SidebarMenuItem::new("Downloads")
+                        .icon(IconName::Download)
+                        .active(props.current_section == SidebarSection::Downloads)
+                        .on_click({
+                            let on_select = on_select.clone();
+                            move |_, window, cx| on_select(SidebarSection::Downloads, window, cx)
+                        })
+                        .when(props.downloads_count > 0, |this| {
+                            let count = props.downloads_count;
+                            let is_active = props.current_section == SidebarSection::Downloads;
+                            let radius = props.radius;
+                            this.suffix(move |_, _| stat_badge(count, is_active, colors, radius))
+                        }),
+                ),
         )
-        // Settings bar at the bottom
-        .child(
-            div()
-                .p_3()
-                .flex()
-                .items_center()
+        .footer(
+            SidebarFooter::new()
                 .justify_end()
                 .child(toolbar_icon_button(
                     "sidebar-settings-btn",

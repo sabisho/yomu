@@ -214,7 +214,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Barrier};
 
-    use gpui_kit::{App, Entity, KeyBinding, TestAppContext, VisualTestContext};
+    use gpui_kit::{App, AppContext, Entity, KeyBinding, TestAppContext, VisualTestContext};
     use yomu::archive::SourceKind;
     use yomu::library::{Book, DataDirs, Library};
 
@@ -249,11 +249,17 @@ mod tests {
             gpui_kit::init(cx);
             cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
         });
-        cx.add_window_view(move |window, cx| {
-            let yomu = Yomu::with_dirs(dirs, window, cx);
-            window.focus(&yomu.focus_handle, cx);
-            yomu
-        })
+        let host = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let host_clone = host.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| Yomu::with_dirs(dirs, window, cx));
+            let focus = view.read(cx).focus_handle.clone();
+            *host_clone.borrow_mut() = Some(view.clone());
+            window.focus(&focus, cx);
+            gpui_kit::component::Root::new(view, window, cx)
+        });
+        let view = host.borrow().clone().unwrap();
+        (view, cx)
     }
 
     // 1. Rapid page navigation followed by immediate quit persists the final page.

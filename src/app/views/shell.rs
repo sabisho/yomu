@@ -34,6 +34,7 @@ impl Yomu {
 
         let sidebar_props = ui::sidebar::SidebarProps {
             scroll_handle: &self.sidebar_scroll,
+            collapsed: is_collapsed,
             current_section: self.active_section,
             continue_reading_count,
             all_manga_count,
@@ -70,9 +71,9 @@ impl Yomu {
             },
             {
                 let yomu = yomu.clone();
-                move |_, _, cx| {
+                move |_, window, cx| {
                     yomu.update(cx, |this, cx| {
-                        this.open_settings(cx);
+                        this.open_settings_window(window, cx);
                     });
                 }
             },
@@ -118,7 +119,9 @@ impl Yomu {
             })),
             on_remove_selected: Some(Rc::new({
                 let yomu = yomu.clone();
-                move |_, _, cx| yomu.update(cx, |this, cx| this.request_remove_selected(cx))
+                move |_, window, cx| {
+                    yomu.update(cx, |this, cx| this.request_remove_selected(window, cx))
+                }
             })),
             on_cancel_selection: Some(Rc::new({
                 let yomu = yomu.clone();
@@ -197,7 +200,7 @@ impl Yomu {
                 let id = book_id.clone();
                 self.render_details_screen(&id, window, cx)
             }
-            ui::sidebar::MainView::Settings => self.render_settings(window, cx),
+            ui::sidebar::MainView::Settings => self.render_settings_content(window, cx),
         };
 
         div()
@@ -205,7 +208,7 @@ impl Yomu {
             .flex()
             .flex_row()
             .bg(colors.background)
-            .when(!is_collapsed, |s| s.child(sidebar))
+            .child(sidebar)
             .child(
                 div()
                     .flex_1()
