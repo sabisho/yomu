@@ -14,7 +14,7 @@ use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::{ScrollableElement, ScrollbarHandle};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Side as MenuSide, Sizable};
+use gpui_kit::component::{Icon, Side as MenuSide, Sizable, Size as ComponentSize};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Bounds, ClickEvent, Div, FontWeight, Hsla, InteractiveElement, MouseButton,
@@ -33,7 +33,10 @@ use yomu::{
     vim::Vim,
 };
 
-use super::components::{TOOLBAR_HEIGHT, centered, pill, with_alpha};
+use super::components::{
+    CONTROL_HEIGHT_TOOLBAR, SPACE_MD, SPACE_SM, TOOLBAR_HEIGHT, button_radius, centered, pill,
+    toolbar_icon_button, with_alpha,
+};
 use super::theme::UiColors;
 
 pub fn viewport_of(window: &Window) -> Viewport {
@@ -188,6 +191,7 @@ pub fn reader_header(
     first_page_is_cover: bool,
     current_spread_override: PageSpreadOverride,
     colors: UiColors,
+    radius: Pixels,
     on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_set_fit: impl Fn(FitMode, &mut Window, &mut App) + 'static,
     on_set_layout: impl Fn(PageLayout, &mut Window, &mut App) + 'static,
@@ -195,6 +199,7 @@ pub fn reader_header(
     on_toggle_cover: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_set_spread_override: impl Fn(PageSpreadOverride, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let btn_radius = button_radius(radius, CONTROL_HEIGHT_TOOLBAR);
     let on_set_fit = Rc::new(on_set_fit);
     let on_set_layout = Rc::new(on_set_layout);
     let on_set_direction = Rc::new(on_set_direction);
@@ -230,14 +235,14 @@ pub fn reader_header(
                     div()
                         .flex()
                         .items_center()
-                        .gap_3()
+                        .gap(SPACE_MD)
                         .child(
                             Button::new("reader-back-btn")
                                 .ghost()
-                                .small()
+                                .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(btn_radius))
                                 .label("← Library")
                                 .tooltip("Back to library (Esc)")
-                                .rounded(ButtonRounded::Medium)
                                 .on_click(move |event, window, cx| {
                                     on_back(event, window, cx);
                                 }),
@@ -263,13 +268,13 @@ pub fn reader_header(
                     div()
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(SPACE_SM)
                         .child(
                             Button::new("reader-layout-toggle")
                                 .ghost()
-                                .small()
+                                .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(btn_radius))
                                 .dropdown_caret(true)
-                                .rounded(ButtonRounded::Medium)
                                 .tooltip("Page layout & reading direction")
                                 .label(page_layout.label())
                                 .dropdown_menu({
@@ -341,9 +346,9 @@ pub fn reader_header(
                         .child(
                             Button::new("reader-fit-toggle")
                                 .ghost()
-                                .small()
+                                .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(btn_radius))
                                 .dropdown_caret(true)
-                                .rounded(ButtonRounded::Medium)
                                 .tooltip("Display fit mode")
                                 .label(fit_mode.label())
                                 .dropdown_menu({
@@ -370,15 +375,13 @@ pub fn reader_header(
                                     }
                                 }),
                         )
-                        .child(
-                            Button::new("reader-fullscreen-toggle")
-                                .ghost()
-                                .small()
-                                .rounded(ButtonRounded::Medium)
-                                .tooltip("Toggle fullscreen (F11)")
-                                .icon(IconName::Maximize)
-                                .on_click(move |_, window, _| window.toggle_fullscreen()),
-                        ),
+                        .child(toolbar_icon_button(
+                            "reader-fullscreen-toggle",
+                            IconName::Maximize,
+                            "Toggle fullscreen (F11)",
+                            radius,
+                            move |_, window, _| window.toggle_fullscreen(),
+                        )),
                 ),
         )
 }
@@ -747,6 +750,7 @@ pub fn render_reader(
         reader.first_page_is_cover,
         reader.current_spread_override(),
         props.colors,
+        props.radius,
         on_back,
         on_set_fit,
         on_set_layout,

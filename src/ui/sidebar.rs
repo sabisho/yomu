@@ -1,9 +1,8 @@
 //! Navigation sidebar for Yomu's two-pane application shell.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::Icon;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
@@ -11,8 +10,8 @@ use gpui_kit::{
 };
 
 use super::components::{
-    CONTROL_HEIGHT_TOOLBAR, TOOLBAR_HEIGHT, button_radius, macos_sidebar_bg, settings_shortcut_str,
-    stat_badge, with_alpha,
+    TOOLBAR_HEIGHT, macos_sidebar_bg, settings_shortcut_str, stat_badge, toolbar_icon_button,
+    with_alpha,
 };
 use super::theme::UiColors;
 
@@ -208,18 +207,18 @@ pub fn render_sidebar(
         )
         // Settings bar at the bottom
         .child(
-            div().p_3().flex().items_center().justify_end().child(
-                Button::new("sidebar-settings-btn")
-                    .ghost()
-                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
-                    .rounded(ButtonRounded::Size(button_radius(
-                        props.radius,
-                        CONTROL_HEIGHT_TOOLBAR,
-                    )))
-                    .tooltip(format!("Settings ({})", settings_shortcut_str()))
-                    .icon(IconName::Settings)
-                    .on_click(on_settings),
-            ),
+            div()
+                .p_3()
+                .flex()
+                .items_center()
+                .justify_end()
+                .child(toolbar_icon_button(
+                    "sidebar-settings-btn",
+                    IconName::Settings,
+                    format!("Settings ({})", settings_shortcut_str()),
+                    props.radius,
+                    on_settings,
+                )),
         )
         .into_any_element()
 }

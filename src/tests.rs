@@ -4434,6 +4434,29 @@ fn test_toolbar_sort_button_exists_in_library_view(cx: &mut TestAppContext) {
             yomu::library::SortDirection::Descending
         );
     });
+
+    // Reset back to default sorting
+    view.update(cx, |this, cx| {
+        this.set_sort_mode(
+            yomu::library::SortBy::Default,
+            yomu::library::SortDirection::Ascending,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    // Verify reset to default
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.library.settings().sort_by,
+            yomu::library::SortBy::Default
+        );
+        assert_eq!(
+            this.library.settings().sort_direction,
+            yomu::library::SortDirection::Ascending
+        );
+    });
+    assert!(cx.debug_bounds("toolbar-sort").is_some());
 }
 
 #[gpui_kit::test]

@@ -3,11 +3,11 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonGroup, ButtonRounded, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Icon, Sizable, Size};
+use gpui_kit::component::{Icon, Selectable, Sizable, Size};
 use gpui_kit::gpui::Anchor;
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use super::components::{
-    CONTROL_HEIGHT_TOOLBAR, ICON_SIZE_COMPACT, SPACE_2XS, TOOLBAR_HEIGHT, button_radius,
+    CONTROL_HEIGHT_TOOLBAR, ICON_SIZE_COMPACT, SPACE_2XS, SPACE_SM, TOOLBAR_HEIGHT, button_radius,
     inner_radius, open_shortcut_str, segmented_button, toolbar_icon_button, with_alpha,
 };
 use super::theme::UiColors;
@@ -87,7 +87,7 @@ pub fn render_main_toolbar(
             div()
                 .flex()
                 .items_center()
-                .gap_1p5()
+                .gap(SPACE_SM)
                 .child(toolbar_icon_button(
                     "toolbar-sidebar-toggle",
                     IconName::PanelLeft,
@@ -156,7 +156,7 @@ pub fn render_main_toolbar(
             div()
                 .flex()
                 .items_center()
-                .gap_2p5()
+                .gap(SPACE_SM)
                 .when(props.selection_count > 0, |this| {
                     let on_select_all = props.on_select_all.clone();
                     let on_remove_selected = props.on_remove_selected.clone();
@@ -172,7 +172,8 @@ pub fn render_main_toolbar(
                         div().debug_selector(|| "select-all".into()).child(
                             Button::new("select-all")
                                 .ghost()
-                                .small()
+                                .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(button_radius))
                                 .label("Select all")
                                 .on_click(move |e, window, cx| {
                                     if let Some(f) = on_select_all.as_ref() {
@@ -185,7 +186,8 @@ pub fn render_main_toolbar(
                         div().debug_selector(|| "select-remove".into()).child(
                             Button::new("select-remove")
                                 .ghost()
-                                .small()
+                                .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(button_radius))
                                 .label("Remove")
                                 .on_click(move |e, window, cx| {
                                     if let Some(f) = on_remove_selected.as_ref() {
@@ -198,7 +200,8 @@ pub fn render_main_toolbar(
                         div().debug_selector(|| "select-cancel".into()).child(
                             Button::new("select-cancel")
                                 .ghost()
-                                .small()
+                                .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(button_radius))
                                 .label("Cancel")
                                 .on_click(move |e, window, cx| {
                                     if let Some(f) = on_cancel_selection.as_ref() {
@@ -212,16 +215,19 @@ pub fn render_main_toolbar(
                     this
                         // 1. Folder Grouping switch: Folders vs Individual Volumes
                         .when(props.show_grouping, |this| {
-                            let inner_r = inner_radius(props.radius, SPACE_2XS);
+                            let inner_r = inner_radius(button_radius, SPACE_2XS);
                             this.child(
-                                ButtonGroup::new("toolbar-grouping-segmented")
-                                    .h(CONTROL_HEIGHT_TOOLBAR)
+                                div()
+                                    .id("toolbar-grouping-segmented")
+                                    .flex()
                                     .items_center()
+                                    .h(CONTROL_HEIGHT_TOOLBAR)
                                     .bg(with_alpha(colors.surface, 0.6))
                                     .border_1()
                                     .border_color(colors.border)
-                                    .rounded(props.radius)
+                                    .rounded(button_radius)
                                     .p(SPACE_2XS)
+                                    .gap(SPACE_2XS)
                                     .child(segmented_button(
                                         "toolbar-group-folders-toggle",
                                         IconName::Folder,
@@ -248,16 +254,19 @@ pub fn render_main_toolbar(
                         })
                         // 2. View Mode switch: Grid vs List
                         .when(props.show_view_switches, |this| {
-                            let inner_r = inner_radius(props.radius, SPACE_2XS);
+                            let inner_r = inner_radius(button_radius, SPACE_2XS);
                             this.child(
-                                ButtonGroup::new("toolbar-viewmode-segmented")
-                                    .h(CONTROL_HEIGHT_TOOLBAR)
+                                div()
+                                    .id("toolbar-viewmode-segmented")
+                                    .flex()
                                     .items_center()
+                                    .h(CONTROL_HEIGHT_TOOLBAR)
                                     .bg(with_alpha(colors.surface, 0.6))
                                     .border_1()
                                     .border_color(colors.border)
-                                    .rounded(props.radius)
+                                    .rounded(button_radius)
                                     .p(SPACE_2XS)
+                                    .gap(SPACE_2XS)
                                     .child(segmented_button(
                                         "view-mode-grid-toggle",
                                         IconName::LayoutGrid,
@@ -298,20 +307,7 @@ pub fn render_main_toolbar(
                                         .ghost()
                                         .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                         .rounded(ButtonRounded::Size(button_radius))
-                                        .border_1()
-                                        .border_color(if is_custom_sorted {
-                                            colors.accent
-                                        } else {
-                                            colors.border
-                                        })
-                                        .bg(with_alpha(
-                                            if is_custom_sorted {
-                                                colors.accent
-                                            } else {
-                                                colors.surface
-                                            },
-                                            if is_custom_sorted { 0.15 } else { 0.6 },
-                                        ))
+                                        .selected(is_custom_sorted)
                                         .tooltip(format!(
                                             "Sort: {} ({})",
                                             current_by.label(),
@@ -366,7 +362,7 @@ pub fn render_main_toolbar(
                                 ),
                             )
                         })
-                        // 4. Import Button: unified rounded-square button matching 28px toolbar controls
+                        // 4. Import Button: unified ghost button matching 28px toolbar controls
                         .when(props.show_import, |this| {
                             let on_import_files = on_import_files.clone();
                             let on_import_folder = on_import_folder.clone();
@@ -377,9 +373,6 @@ pub fn render_main_toolbar(
                                         .ghost()
                                         .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                         .rounded(ButtonRounded::Size(button_radius))
-                                        .border_1()
-                                        .border_color(colors.border)
-                                        .bg(with_alpha(colors.surface, 0.6))
                                         .tooltip(format!("Import manga ({})", open_shortcut_str()))
                                         .dropdown_menu_with_anchor(
                                             Anchor::TopRight,
@@ -410,19 +403,17 @@ pub fn render_main_toolbar(
                         })
                 })
                 .when(props.is_client_decorated, |this| {
-                    this.child(
-                        Button::new("toolbar-csd-close")
-                            .ghost()
-                            .with_size(Size::Size(px(24.)))
-                            .rounded(ButtonRounded::Large)
-                            .tooltip("Close")
-                            .icon(IconName::Close)
-                            .on_click(move |e, window, cx| {
-                                if let Some(on_close) = on_close_window.as_ref() {
-                                    on_close(e, window, cx);
-                                }
-                            }),
-                    )
+                    this.child(toolbar_icon_button(
+                        "toolbar-csd-close",
+                        IconName::Close,
+                        "Close",
+                        props.radius,
+                        move |e, window, cx| {
+                            if let Some(on_close) = on_close_window.as_ref() {
+                                on_close(e, window, cx);
+                            }
+                        },
+                    ))
                 }),
         )
         .into_any_element()
