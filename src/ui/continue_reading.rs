@@ -4,13 +4,14 @@ use std::path::PathBuf;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, InteractiveElement, Pixels, ScrollHandle,
-    SharedString, Styled, Window, div, img, px,
+    Anchor, AnyElement, App, ClickEvent, Context, ElementId, FontWeight, InteractiveElement,
+    Pixels, ScrollHandle, SharedString, Styled, Window, div, img, px,
 };
 use yomu::library::Book;
 
@@ -43,7 +44,7 @@ pub fn render_continue_reading_view(
     on_continue_hero: impl Fn(&str, &mut Window, &mut App) + 'static,
     on_open_details: impl Fn(&str, &mut Window, &mut App) + 'static,
     on_see_all: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_book_menu: impl Fn(&str, (f32, f32), &mut Window, &mut App) + 'static,
+    on_book_menu: impl Fn(&str, PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
     on_import: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let on_open_details = std::rc::Rc::new(on_open_details);
@@ -189,17 +190,20 @@ pub fn render_continue_reading_view(
                                                         .items_center()
                                                         .gap_3()
                                                         .child(
-                                                            div()
-                                                                .w_full()
-                                                                .max_w(px(220.))
-                                                                .child(Progress::new("hero-progress").value(hero.progress * 100.0)),
+                                                            div().w_full().max_w(px(220.)).child(
+                                                                Progress::new("hero-progress")
+                                                                    .value(hero.progress * 100.0),
+                                                            ),
                                                         )
                                                         .child(
                                                             div()
                                                                 .text_xs()
                                                                 .font_weight(FontWeight::MEDIUM)
                                                                 .text_color(colors.muted)
-                                                                .child(format!("{:.0}%", hero.progress * 100.0)),
+                                                                .child(format!(
+                                                                    "{:.0}%",
+                                                                    hero.progress * 100.0
+                                                                )),
                                                         ),
                                                 )
                                                 .child(
@@ -208,7 +212,13 @@ pub fn render_continue_reading_view(
                                                         .flex_wrap()
                                                         .gap_1p5()
                                                         .pt_1()
-                                                        .children(hero.genres.iter().map(|g| genre_tag(g.as_str(), colors, props.radius))),
+                                                        .children(hero.genres.iter().map(|g| {
+                                                            genre_tag(
+                                                                g.as_str(),
+                                                                colors,
+                                                                props.radius,
+                                                            )
+                                                        })),
                                                 ),
                                         )
                                         .child(
@@ -234,10 +244,17 @@ pub fn render_continue_reading_view(
                                                         .rounded(ButtonRounded::Size(props.radius))
                                                         .tooltip("More options")
                                                         .icon(IconName::Ellipsis)
-                                                        .on_click(move |event: &ClickEvent, window, cx| {
-                                                            let pos: (f32, f32) = (event.position().x.into(), event.position().y.into());
-                                                            on_book_menu_hero(&hero_id_clone, pos, window, cx);
-                                                        }),
+                                                        .dropdown_menu_with_anchor(
+                                                            Anchor::TopRight,
+                                                            move |menu, window, cx| {
+                                                                on_book_menu_hero(
+                                                                    &hero_id_clone,
+                                                                    menu,
+                                                                    window,
+                                                                    cx,
+                                                                )
+                                                            },
+                                                        ),
                                                 ),
                                         ),
                                 )
@@ -263,16 +280,22 @@ pub fn render_continue_reading_view(
                                         px(0.)
                                     };
                                     div()
-                                        .id(ElementId::from(SharedString::from(format!("queue-item-{}", item.book.id))))
+                                        .id(ElementId::from(SharedString::from(format!(
+                                            "queue-item-{}",
+                                            item.book.id
+                                        ))))
                                         .h(px(68.))
                                         .p_2()
                                         .rounded(props.radius)
                                         .bg(with_alpha(colors.surface, 0.6))
                                         .when(props.border_px > 0.0, |s| {
-                                            s.border(px(props.border_px)).border_color(colors.border)
+                                            s.border(px(props.border_px))
+                                                .border_color(colors.border)
                                         })
                                         .cursor_pointer()
-                                        .hover(|style| style.bg(with_alpha(colors.foreground, 0.06)))
+                                        .hover(|style| {
+                                            style.bg(with_alpha(colors.foreground, 0.06))
+                                        })
                                         .on_click(move |_, window, cx| {
                                             on_open_details(&book_id, window, cx)
                                         })

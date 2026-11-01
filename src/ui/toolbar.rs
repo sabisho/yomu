@@ -7,7 +7,7 @@ use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Icon, Selectable, Sizable, Size};
+use gpui_kit::component::{Icon, Selectable, Side, Sizable, Size};
 use gpui_kit::gpui::Anchor;
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -317,7 +317,7 @@ pub fn render_main_toolbar(
                                             Anchor::TopRight,
                                             move |mut menu, _, _| {
                                                 let on_change_sort = on_change_sort.clone();
-                                                menu = menu.min_w(px(200.));
+                                                menu = menu.check_side(Side::Left).min_w(px(200.));
                                                 for by in SortBy::ALL {
                                                     let on_change_sort = on_change_sort.clone();
                                                     let is_active = current_by == by;

@@ -5,55 +5,30 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::{AppContext, Context, Focusable, Pixels, Point, Window};
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::{AppContext, Context, Entity, Focusable, Window, px};
 
 use yomu::library::Book;
-use yomu::menu::{self, BookAction};
+use yomu::menu::{self, BookAction, Entry};
 
 use crate::app::state::Yomu;
 use crate::ui::library_view::directory_groups;
-use crate::ui::overlays::{
-    BookMenu, ConfirmAction, ConfirmDialog, LibraryMenu, Overlay, PropertiesDialog, SeriesDialog,
-};
+use crate::ui::overlays::{ConfirmAction, ConfirmDialog, Overlay, PropertiesDialog, SeriesDialog};
 
 impl Yomu {
-    pub(crate) fn open_book_menu(
+    pub(crate) fn build_book_context_menu(
         &mut self,
         id: &str,
-        position: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
+        mut menu: PopupMenu,
+        yomu: Entity<Self>,
+    ) -> PopupMenu {
         if self.is_quitting {
-            return;
+            return menu;
         }
-        let Some(book) = self.library.get(id) else {
-            return;
-        };
-        let entries = menu::book_menu(book, book.path.exists());
-        self.overlay = Some(Overlay::Menu(BookMenu {
-            book_id: id.to_string(),
-            target_ids: vec![id.to_string()],
-            entries,
-            position,
-            selected: None,
-        }));
-        cx.notify();
-    }
 
-    /// Right-click on a book: a book inside an existing multi-selection preserves the multi-selection
-    /// and gets the bulk menu; right-clicking an unselected book drops previous selection (if any),
-    /// does not select the book or trigger selection mode, and opens the book's individual menu.
-    pub(crate) fn open_context_menu(
-        &mut self,
-        id: &str,
-        position: Point<Pixels>,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.is_quitting {
-            return;
-        }
+        self.last_context_menu_book = Some(id.to_string());
         let selected_ids = self.selected_ids();
         let (entries, target_ids) =
             if selected_ids.contains(&id.to_string()) && selected_ids.len() > 1 {
@@ -61,88 +36,112 @@ impl Yomu {
             } else {
                 self.selection.clear();
                 let Some(book) = self.library.get(id) else {
-                    return;
+                    return menu;
                 };
                 (
                     menu::book_menu(book, book.path.exists()),
                     vec![id.to_string()],
                 )
             };
-        let menu = BookMenu {
-            book_id: id.to_string(),
-            target_ids,
-            entries,
-            position,
-            selected: None,
-        };
-        self.overlay = Some(Overlay::Menu(menu));
-        cx.notify();
+
+        menu = menu.min_w(px(200.));
+        for entry in entries {
+            match entry {
+                Entry::Separator => {
+                    menu = menu.separator();
+                }
+                Entry::Item(item) => {
+                    let icon = match item.action {
+                        BookAction::Open => IconName::BookOpen,
+                        BookAction::StartOver | BookAction::ResetProgress => IconName::RotateCcw,
+                        BookAction::MarkRead => IconName::CircleCheck,
+                        BookAction::MarkUnread => IconName::CircleX,
+                        BookAction::RevealFile => IconName::FolderOpen,
+                        BookAction::Properties => IconName::Info,
+                        BookAction::SetSeries => IconName::Library,
+                        BookAction::Remove | BookAction::RemoveSelected => IconName::Trash,
+                        BookAction::ClearSelection => IconName::X,
+                    };
+                    let action = item.action;
+                    let book_id = id.to_string();
+                    let target_ids = target_ids.clone();
+                    let yomu = yomu.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label)
+                            .icon(icon)
+                            .disabled(!item.enabled)
+                            .on_click(move |_, window, cx| {
+                                yomu.update(cx, |this, cx| {
+                                    this.run_book_action(action, &book_id, &target_ids, window, cx);
+                                });
+                            }),
+                    );
+                }
+            }
+        }
+        menu
     }
 
-    pub(crate) fn open_group_context_menu(
+    pub(crate) fn build_group_context_menu(
         &mut self,
         group_key: &str,
         group_name: &str,
-        book_ids: &[String],
-        position: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
+        mut menu: PopupMenu,
+        yomu: Entity<Self>,
+    ) -> PopupMenu {
         if self.is_quitting {
-            return;
+            return menu;
         }
-        // Right-clicking a folder or group opens its context menu for that folder's contents,
-        // without selecting all books or activating selection mode/toolbar.
         self.selection.clear();
-        let entries = menu::group_menu(group_name, book_ids.len());
-        let menu = BookMenu {
-            book_id: format!("group:{}", group_key),
-            target_ids: book_ids.to_vec(),
-            entries,
-            position,
-            selected: None,
-        };
-        self.overlay = Some(Overlay::Menu(menu));
-        cx.notify();
-    }
-
-    pub(crate) fn open_group_context_menu_by_key(
-        &mut self,
-        group_key: &str,
-        group_name: &str,
-        position: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.is_quitting {
-            return;
-        }
         let book_ids: Vec<String> = directory_groups(self.library.books())
             .into_iter()
             .find(|g| g.key == group_key)
             .map(|g| g.books.iter().map(|b| b.id.clone()).collect())
             .unwrap_or_default();
-        self.open_group_context_menu(group_key, group_name, &book_ids, position, cx);
-    }
 
-    #[allow(dead_code)]
-    pub(crate) fn open_library_menu(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_quitting {
-            return;
+        let entries = menu::group_menu(group_name, book_ids.len());
+        menu = menu.min_w(px(200.));
+        for entry in entries {
+            match entry {
+                Entry::Separator => {
+                    menu = menu.separator();
+                }
+                Entry::Item(item) => {
+                    let icon = match item.action {
+                        BookAction::Open => IconName::BookOpen,
+                        BookAction::StartOver | BookAction::ResetProgress => IconName::RotateCcw,
+                        BookAction::MarkRead => IconName::CircleCheck,
+                        BookAction::MarkUnread => IconName::CircleX,
+                        BookAction::RevealFile => IconName::FolderOpen,
+                        BookAction::Properties => IconName::Info,
+                        BookAction::SetSeries => IconName::Library,
+                        BookAction::Remove | BookAction::RemoveSelected => IconName::Trash,
+                        BookAction::ClearSelection => IconName::X,
+                    };
+                    let action = item.action;
+                    let target_ids = book_ids.clone();
+                    let group_id = format!("group:{}", group_key);
+                    let yomu = yomu.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label)
+                            .icon(icon)
+                            .disabled(!item.enabled)
+                            .on_click(move |_, window, cx| {
+                                yomu.update(cx, |this, cx| {
+                                    this.run_book_action(
+                                        action,
+                                        &group_id,
+                                        &target_ids,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            }),
+                    );
+                }
+            }
         }
-        if matches!(self.overlay, Some(Overlay::LibraryMenu(_))) {
-            self.close_overlay(cx);
-            return;
-        }
-        self.overlay = Some(Overlay::LibraryMenu(LibraryMenu::default()));
-        cx.notify();
-    }
-
-    pub(crate) fn menu_hover(&mut self, ix: usize, cx: &mut Context<Self>) {
-        if let Some(Overlay::Menu(menu)) = self.overlay.as_mut()
-            && menu.selected != Some(ix)
-        {
-            menu.selected = Some(ix);
-            cx.notify();
-        }
+        menu
     }
 
     pub(crate) fn open_series_dialog(
@@ -421,35 +420,6 @@ impl Yomu {
                 self.overlay = None;
                 cx.quit();
             }
-        }
-    }
-
-    pub(crate) fn run_library_menu_action(
-        &mut self,
-        selected: usize,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.is_quitting {
-            return;
-        }
-        self.overlay = None;
-        match selected {
-            0 => self.import_dialog(false, cx),
-            1 => self.import_dialog(true, cx),
-            2 => self.open_settings_window(_window, cx),
-            3 => {
-                self.library.settings_mut().group_series = !self.library.settings().group_series;
-                self.selection.clear();
-                self.open_group = None;
-                self.group_scroll.set_offset(Point::default());
-                self.save_library(cx);
-                cx.notify();
-            }
-            4 => {
-                self.request_quit(cx);
-            }
-            _ => {}
         }
     }
 

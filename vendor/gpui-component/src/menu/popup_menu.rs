@@ -1495,6 +1495,7 @@ impl Render for PopupMenu {
 
         v_flex()
             .id("popup-menu")
+            .debug_selector(|| "popup-menu".into())
             .test_support()
             .role(Role::Menu)
             .key_context(CONTEXT)

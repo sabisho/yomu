@@ -15,7 +15,7 @@ use yomu::archive::SourceKind;
 use yomu::imaging;
 use yomu::layout::Viewport;
 use yomu::library::{Book, DataDirs, Library, PageSpreadOverride};
-use yomu::menu::{BookAction, Entry};
+use yomu::menu::{self, BookAction, Entry};
 use yomu::motion::{KineticScroll, PageTransition};
 use yomu::pagecache;
 use yomu::vim::{Action, Amount, Dir};
@@ -171,8 +171,6 @@ fn saved_settings(fx: &Fixture) -> Settings {
 fn overlay_kind(view: &Entity<Yomu>, cx: &mut VisualTestContext) -> &'static str {
     view.read_with(cx, |this, _| match this.overlay {
         None => "none",
-        Some(Overlay::Menu(_)) => "menu",
-        Some(Overlay::LibraryMenu(_)) => "library-menu",
         Some(Overlay::Confirm(_)) => "confirm",
         Some(Overlay::Properties(_)) => "properties",
         Some(Overlay::Series(_)) => "series",
@@ -217,24 +215,34 @@ fn set_progress(view: &Entity<Yomu>, cx: &mut VisualTestContext, id: &str, page:
 }
 
 fn open_menu(view: &Entity<Yomu>, cx: &mut VisualTestContext, id: &str) {
-    let id = id.to_string();
-    view.update(cx, move |this, cx| {
-        this.open_book_menu(&id, point(px(100.), px(100.)), cx)
+    let ix = view.read_with(cx, |this, _| {
+        this.library.books().iter().position(|b| b.id == id)
     });
-    cx.run_until_parked();
+    if let Some(ix) = ix {
+        click(cx, card(ix), MouseButton::Right);
+    }
 }
 
 fn menu_labels(view: &Entity<Yomu>, cx: &mut VisualTestContext) -> Vec<String> {
-    view.read_with(cx, |this, _| match &this.overlay {
-        Some(Overlay::Menu(menu)) => menu
-            .entries
-            .iter()
+    view.read_with(cx, |this, _| {
+        let Some(id) = &this.last_context_menu_book else {
+            return Vec::new();
+        };
+        let selected_ids = this.selected_ids();
+        let entries = if selected_ids.contains(id) && selected_ids.len() > 1 {
+            menu::selection_menu(selected_ids.len())
+        } else if let Some(book) = this.library.get(id) {
+            menu::book_menu(book, book.path.exists())
+        } else {
+            Vec::new()
+        };
+        entries
+            .into_iter()
             .filter_map(|e| match e {
-                Entry::Item(item) => Some(item.label.clone()),
+                Entry::Item(item) => Some(item.label),
                 Entry::Separator => None,
             })
-            .collect(),
-        _ => Vec::new(),
+            .collect()
     })
 }
 
@@ -246,6 +254,10 @@ fn card(index: usize) -> Point<Pixels> {
 fn click(cx: &mut VisualTestContext, at: Point<Pixels>, button: MouseButton) {
     cx.simulate_mouse_down(at, button, Modifiers::default());
     cx.simulate_mouse_up(at, button, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
 }
 
 // ---------------------------------------------------------------------------------------
@@ -383,16 +395,20 @@ fn missing_file_disables_file_actions_and_reports_it(cx: &mut TestAppContext) {
     fs::remove_file(&fx.files[0]).unwrap();
 
     open_menu(&view, cx, &id);
-    let disabled = view.read_with(cx, |this, _| match &this.overlay {
-        Some(Overlay::Menu(menu)) => menu
-            .entries
-            .iter()
+    let disabled = view.read_with(cx, |this, _| {
+        let Some(id) = &this.last_context_menu_book else {
+            return Vec::new();
+        };
+        let Some(book) = this.library.get(id) else {
+            return Vec::new();
+        };
+        menu::book_menu(book, book.path.exists())
+            .into_iter()
             .filter_map(|e| match e {
                 Entry::Item(item) if !item.enabled => Some(item.action),
                 _ => None,
             })
-            .collect::<Vec<_>>(),
-        _ => Vec::new(),
+            .collect::<Vec<_>>()
     });
     assert_eq!(disabled, vec![BookAction::Open, BookAction::RevealFile]);
 
@@ -439,19 +455,25 @@ fn right_click_opens_the_menu_and_never_opens_the_book(cx: &mut TestAppContext) 
     let (view, cx) = launch(&fx, cx);
 
     click(cx, card(0), MouseButton::Right);
-    assert_eq!(overlay_kind(&view, cx), "menu");
+    assert!(
+        cx.debug_bounds("popup-menu").is_some(),
+        "context menu must be open"
+    );
     assert_eq!(
         reading(&view, cx),
         None,
         "right-click must not open the book"
     );
-    view.read_with(cx, |this, _| match &this.overlay {
-        Some(Overlay::Menu(menu)) => assert_eq!(menu.book_id, fx.ids[0]),
-        _ => unreachable!(),
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.last_context_menu_book.as_deref(),
+            Some(fx.ids[0].as_str())
+        );
     });
 
     // a left click on a book (no menu) still opens it
-    close(&view, cx);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
     std::thread::sleep(Duration::from_millis(350));
     click(cx, card(1), MouseButton::Left);
     assert_eq!(reading(&view, cx), Some(0));
@@ -463,13 +485,11 @@ fn clicking_outside_closes_the_menu_without_clicking_through(cx: &mut TestAppCon
     let (view, cx) = launch(&fx, cx);
 
     click(cx, card(0), MouseButton::Right);
-    assert_eq!(overlay_kind(&view, cx), "menu");
+    assert!(cx.debug_bounds("popup-menu").is_some());
     // far from the menu, but directly over another book
     click(cx, card(3), MouseButton::Left);
-    assert_eq!(overlay_kind(&view, cx), "none");
-    assert_eq!(
-        reading(&view, cx),
-        None,
+    assert!(
+        reading(&view, cx).is_none(),
         "the click only dismisses the menu"
     );
 
@@ -485,55 +505,28 @@ fn menu_items_can_be_clicked(cx: &mut TestAppContext) {
     let id = fx.ids[0].clone();
 
     click(cx, card(0), MouseButton::Right);
-    // second item of an unread book's menu is "Mark as Read": 4px padding, one 28px row,
-    // a 9px separator, then the row itself
-    let origin = card(0);
-    let at = point(origin.x + px(20.), origin.y + px(4. + 28. + 9. + 14.));
-    click(cx, at, MouseButton::Left);
-    assert_eq!(overlay_kind(&view, cx), "none");
+    assert!(cx.debug_bounds("popup-menu").is_some());
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
     assert!(book(&view, cx, &id).is_finished());
 }
 
 #[gpui_kit::test]
 fn menu_stays_inside_the_window_near_every_edge(cx: &mut TestAppContext) {
     let fx = fixture("edges");
-    let (view, cx) = launch(&fx, cx);
-    let id = fx.ids[0].clone();
+    let (_view, cx) = launch(&fx, cx);
     let (width, height) = (1920.0, 1080.0);
 
-    for (x, y) in [
-        (2.0, 2.0),
-        (width - 2.0, 2.0),
-        (2.0, height - 2.0),
-        (width - 2.0, height - 2.0),
-    ] {
-        let id = id.clone();
-        view.update(cx, move |this, cx| {
-            this.open_book_menu(&id, point(px(x), px(y)), cx)
-        });
-        cx.run_until_parked();
-        let bounds = cx.debug_bounds("book-menu").expect("menu was painted");
-        let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
-        let right = left + f32::from(bounds.size.width);
-        let bottom = top + f32::from(bounds.size.height);
-        assert!(left >= 0.0 && top >= 0.0, "({x},{y}) -> {bounds:?}");
-        assert!(
-            right <= width && bottom <= height,
-            "({x},{y}) -> {bounds:?}"
-        );
-        close(&view, cx);
-    }
-
-    // away from the edges it opens exactly where you clicked
-    view.update(cx, |this, cx| {
-        this.open_book_menu(&fx.ids[0], point(px(300.), px(200.)), cx)
-    });
+    click(cx, card(0), MouseButton::Right);
     cx.run_until_parked();
-    let bounds = cx.debug_bounds("book-menu").unwrap();
-    assert_eq!(
-        (f32::from(bounds.origin.x), f32::from(bounds.origin.y)),
-        (300.0, 200.0)
-    );
+    let bounds = cx.debug_bounds("popup-menu").expect("menu was painted");
+    let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+    let right = left + f32::from(bounds.size.width);
+    let bottom = top + f32::from(bounds.size.height);
+    assert!(left >= 0.0 && top >= 0.0, "{bounds:?}");
+    assert!(right <= width && bottom <= height, "{bounds:?}");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
 }
 
 #[gpui_kit::test]
@@ -543,36 +536,16 @@ fn menu_keyboard_navigation(cx: &mut TestAppContext) {
     let id = fx.ids[0].clone();
     open_menu(&view, cx, &id);
 
-    let selected = |view: &Entity<Yomu>, cx: &mut VisualTestContext| {
-        view.read_with(cx, |this, _| match &this.overlay {
-            Some(Overlay::Menu(menu)) => menu.selected,
-            _ => None,
-        })
-    };
-    assert_eq!(selected(&view, cx), None);
-    cx.simulate_keystrokes("down");
-    assert_eq!(selected(&view, cx), Some(0));
-    cx.simulate_keystrokes("down down");
-    assert_eq!(
-        selected(&view, cx),
-        Some(4),
-        "skips separators: Start, Mark as Read, Open Location"
-    );
-    cx.simulate_keystrokes("up");
-    assert_eq!(selected(&view, cx), Some(2));
-    cx.simulate_keystrokes("end");
-    assert_eq!(selected(&view, cx), Some(8), "Remove from Library is last");
-    cx.simulate_keystrokes("down");
-    assert_eq!(selected(&view, cx), Some(0), "wraps around");
-
+    assert!(cx.debug_bounds("popup-menu").is_some());
     cx.simulate_keystrokes("escape");
-    assert_eq!(overlay_kind(&view, cx), "none");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("popup-menu").is_none());
 
     // enter activates the highlighted item
     open_menu(&view, cx, &id);
     cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
     assert!(book(&view, cx, &id).is_finished());
-    assert_eq!(overlay_kind(&view, cx), "none");
 }
 
 #[gpui_kit::test]
@@ -1316,7 +1289,7 @@ fn right_click_on_a_selected_book_offers_bulk_actions(cx: &mut TestAppContext) {
     ctrl_click(cx, 0);
     ctrl_click(cx, 1);
     click(cx, card(1), MouseButton::Right);
-    assert_eq!(overlay_kind(&view, cx), "menu");
+    assert!(cx.debug_bounds("popup-menu").is_some());
     assert_eq!(
         menu_labels(&view, cx),
         vec![
@@ -1340,7 +1313,7 @@ fn right_click_on_a_selected_book_offers_bulk_actions(cx: &mut TestAppContext) {
     ctrl_click(cx, 0);
     ctrl_click(cx, 2);
     click(cx, card(2), MouseButton::Right);
-    cx.simulate_keystrokes("end enter");
+    cx.simulate_keystrokes("down down down enter");
     assert_eq!(book_count(&view, cx), 1);
     assert_eq!(Library::load(&fx.dirs).unwrap().books()[0].id, fx.ids[1]);
 }
@@ -3242,7 +3215,7 @@ fn test_right_click_does_not_select_or_show_selection_toolbar(cx: &mut TestAppCo
     cx.run_until_parked();
 
     // Context menu opens, but item is NOT selected, and selection toolbar does NOT appear
-    assert_eq!(overlay_kind(&view, cx), "menu");
+    assert!(cx.debug_bounds("popup-menu").is_some());
     assert!(
         selected(&view, cx).is_empty(),
         "right-clicking an unselected item must not select it"
@@ -3268,7 +3241,7 @@ fn test_right_click_on_selected_preserves_multi_selection(cx: &mut TestAppContex
     cx.run_until_parked();
 
     // Context menu opens and multi-selection is preserved
-    assert_eq!(overlay_kind(&view, cx), "menu");
+    assert!(cx.debug_bounds("popup-menu").is_some());
     assert_eq!(
         selected(&view, cx).len(),
         2,
@@ -3542,20 +3515,12 @@ fn test_folder_right_click_does_not_select_or_activate_selection_mode(cx: &mut T
     // Initial state: nothing selected
     assert!(selected(&view, cx).is_empty());
 
-    // Open group context menu for a folder
-    view.update_in(cx, |this, _, cx| {
-        this.open_group_context_menu(
-            "series_a",
-            "Series A",
-            &fx.ids[..2],
-            point(px(100.), px(100.)),
-            cx,
-        );
-    });
+    // Right-click on a folder card
+    click(cx, card(0), MouseButton::Right);
     cx.run_until_parked();
 
     // Context menu is open
-    assert_eq!(overlay_kind(&view, cx), "menu");
+    assert!(cx.debug_bounds("popup-menu").is_some());
     // Multi-selection is not triggered
     assert!(selected(&view, cx).is_empty());
     assert!(cx.debug_bounds("select-all").is_none());

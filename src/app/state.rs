@@ -167,6 +167,7 @@ pub struct Yomu {
     pub(crate) details_cover_available: bool,
     pub(crate) details_cover_seq: u64,
     pub(crate) sorted_books_cache: RefCell<Option<SortedBooksCache>>,
+    pub(crate) last_context_menu_book: Option<String>,
 }
 
 impl Yomu {
@@ -321,6 +322,7 @@ impl Yomu {
             details_cover_available: true,
             details_cover_seq: 0,
             sorted_books_cache: RefCell::new(None),
+            last_context_menu_book: None,
         };
 
         state.refresh_downloads_count(cx);

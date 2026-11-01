@@ -1,7 +1,7 @@
 //! Manga details inspector view presentation adapter.
 
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Window, div, point, px};
+use gpui_kit::{AnyElement, Context, Window, div, px};
 
 use crate::app::state::Yomu;
 use crate::ui;
@@ -78,9 +78,10 @@ impl Yomu {
             {
                 let yomu = yomu.clone();
                 let book_id = book.id.clone();
-                move |_, pos, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.open_book_menu(&book_id, point(px(pos.0), px(pos.1)), cx)
+                move |_, menu, _window, cx| {
+                    let yomu_menu = yomu.clone();
+                    yomu.update(cx, |this, _cx| {
+                        this.build_book_context_menu(&book_id, menu, yomu_menu)
                     })
                 }
             },

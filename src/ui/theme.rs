@@ -22,7 +22,6 @@ pub const DEFAULT_THEME_NAME: &str = "Catppuccin Mocha";
 pub struct UiColors {
     pub background: gpui_kit::Hsla,
     pub surface: gpui_kit::Hsla,
-    pub surface_hover: gpui_kit::Hsla,
     pub border: gpui_kit::Hsla,
     pub foreground: gpui_kit::Hsla,
     pub muted: gpui_kit::Hsla,
@@ -38,7 +37,6 @@ impl UiColors {
         Self {
             background: tokens.background,
             surface: tokens.surface,
-            surface_hover: tokens.secondary,
             border: tokens.border,
             foreground: tokens.foreground,
             muted: tokens.muted_foreground,

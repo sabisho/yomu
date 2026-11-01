@@ -17,10 +17,10 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Side as MenuSide, Sizable, Size as ComponentSize};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Bounds, ClickEvent, Div, FontWeight, Hsla, InteractiveElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, PinchEvent, Pixels, Point,
-    RenderImage, ScrollEvent, SharedString, Size, Stateful, Styled, TouchPhase, Window, div, img,
-    point, px, relative, size,
+    Anchor, AnyElement, App, Bounds, ClickEvent, Div, FontWeight, Hsla, InteractiveElement,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, PinchEvent, Pixels,
+    Point, RenderImage, ScrollEvent, SharedString, Size, Stateful, Styled, TouchPhase, Window, div,
+    img, point, px, relative, size,
 };
 use yomu::{
     archive::SourceKind,
@@ -277,7 +277,7 @@ pub fn reader_header(
                                 .dropdown_caret(true)
                                 .tooltip("Page layout & reading direction")
                                 .label(page_layout.label())
-                                .dropdown_menu({
+                                .dropdown_menu_with_anchor(Anchor::TopRight, {
                                     let on_set_layout = on_set_layout.clone();
                                     let on_set_direction = on_set_direction.clone();
                                     let on_toggle_cover = on_toggle_cover.clone();
@@ -351,7 +351,7 @@ pub fn reader_header(
                                 .dropdown_caret(true)
                                 .tooltip("Display fit mode")
                                 .label(fit_mode.label())
-                                .dropdown_menu({
+                                .dropdown_menu_with_anchor(Anchor::TopRight, {
                                     let on_set_fit = on_set_fit.clone();
                                     move |mut menu, _, _| {
                                         menu = menu.check_side(MenuSide::Left).min_w(px(140.));

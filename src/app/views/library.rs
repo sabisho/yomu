@@ -6,11 +6,10 @@ use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, Entity, MouseDownEvent, Pixels, Window, div, px,
-};
+use gpui_kit::{AnyElement, App, ClickEvent, Context, Entity, Pixels, Window, div, px};
 
 use crate::app::state::Yomu;
 use crate::ui;
@@ -50,13 +49,16 @@ impl Yomu {
             });
         };
 
-        let yomu_right = yomu.clone();
-        let id_right = book_id;
-        let on_right_click = move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-            yomu_right.update(cx, |this, cx| {
-                this.open_context_menu(&id_right, event.position, window, cx);
-            });
-        };
+        let yomu_menu = yomu.clone();
+        let id_menu = Arc::clone(&book_id);
+        let context_menu =
+            move |menu: PopupMenu, _window: &mut Window, cx: &mut Context<PopupMenu>| {
+                let id = Arc::clone(&id_menu);
+                let yomu = yomu_menu.clone();
+                yomu_menu.update(cx, |this, _cx| {
+                    this.build_book_context_menu(&id, menu, yomu)
+                })
+            };
 
         render_book_card(
             BookCardProps {
@@ -70,7 +72,7 @@ impl Yomu {
                 colors,
             },
             on_click,
-            on_right_click,
+            context_menu,
         )
     }
 
@@ -100,13 +102,16 @@ impl Yomu {
             });
         };
 
-        let yomu_right = yomu.clone();
-        let id_right = book_id;
-        let on_right_click = move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-            yomu_right.update(cx, |this, cx| {
-                this.open_context_menu(&id_right, event.position, window, cx);
-            });
-        };
+        let yomu_menu = yomu.clone();
+        let id_menu = book_id;
+        let context_menu =
+            move |menu: PopupMenu, _window: &mut Window, cx: &mut Context<PopupMenu>| {
+                let id = Arc::clone(&id_menu);
+                let yomu = yomu_menu.clone();
+                yomu_menu.update(cx, |this, _cx| {
+                    this.build_book_context_menu(&id, menu, yomu)
+                })
+            };
 
         render_book_list_row(
             book,
@@ -116,7 +121,7 @@ impl Yomu {
             is_selected,
             colors,
             on_click,
-            on_right_click,
+            context_menu,
         )
     }
 
@@ -144,16 +149,18 @@ impl Yomu {
             });
         };
 
-        let yomu_right = yomu.clone();
-        let key_right = key_arc;
-        let name_right = name_arc;
-        let on_right_click = move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-            let key = Arc::clone(&key_right);
-            let name = Arc::clone(&name_right);
-            yomu_right.update(cx, |this, cx| {
-                this.open_group_context_menu_by_key(&key, &name, event.position, cx);
-            });
-        };
+        let yomu_menu = yomu.clone();
+        let key_menu = Arc::clone(&key_arc);
+        let name_menu = Arc::clone(&name_arc);
+        let context_menu =
+            move |menu: PopupMenu, _window: &mut Window, cx: &mut Context<PopupMenu>| {
+                let key = Arc::clone(&key_menu);
+                let name = Arc::clone(&name_menu);
+                let yomu = yomu_menu.clone();
+                yomu_menu.update(cx, |this, _cx| {
+                    this.build_group_context_menu(&key, &name, menu, yomu)
+                })
+            };
 
         render_folder_list_row(
             group_key,
@@ -164,7 +171,7 @@ impl Yomu {
             border_px,
             colors,
             on_click,
-            on_right_click,
+            context_menu,
         )
     }
 
@@ -194,16 +201,18 @@ impl Yomu {
             });
         };
 
-        let yomu_right = yomu.clone();
-        let key_right = key_arc;
-        let name_right = name_arc;
-        let on_right_click = move |event: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-            let key = Arc::clone(&key_right);
-            let name = Arc::clone(&name_right);
-            yomu_right.update(cx, |this, cx| {
-                this.open_group_context_menu_by_key(&key, &name, event.position, cx);
-            });
-        };
+        let yomu_menu = yomu.clone();
+        let key_menu = key_arc;
+        let name_menu = name_arc;
+        let context_menu =
+            move |menu: PopupMenu, _window: &mut Window, cx: &mut Context<PopupMenu>| {
+                let key = Arc::clone(&key_menu);
+                let name = Arc::clone(&name_menu);
+                let yomu = yomu_menu.clone();
+                yomu_menu.update(cx, |this, _cx| {
+                    this.build_group_context_menu(&key, &name, menu, yomu)
+                })
+            };
 
         render_folder_card(
             group_key,
@@ -216,7 +225,7 @@ impl Yomu {
             border_px,
             colors,
             on_click,
-            on_right_click,
+            context_menu,
         )
     }
 

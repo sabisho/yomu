@@ -4,11 +4,8 @@ use gpui_kit::{AnyElement, App, Context, MouseDownEvent, Window};
 
 use crate::app::state::Yomu;
 use crate::ui;
-use crate::ui::overlays::{
-    BookMenu, ConfirmDialog, LibraryMenu, Overlay, PropertiesDialog, SeriesDialog,
-};
+use crate::ui::overlays::{ConfirmDialog, Overlay, PropertiesDialog, SeriesDialog};
 use crate::ui::reader::viewport_of;
-use yomu::menu::BookAction;
 
 impl Yomu {
     pub(crate) fn render_overlay(
@@ -17,8 +14,6 @@ impl Yomu {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         Some(match self.overlay.as_ref()? {
-            Overlay::Menu(menu) => self.render_menu(menu, cx),
-            Overlay::LibraryMenu(menu) => self.render_library_menu(menu, cx),
             Overlay::Confirm(dialog) => self.render_confirm(dialog, cx),
             Overlay::Properties(dialog) => self.render_properties(dialog, cx),
             Overlay::Series(dialog) => self.render_series_dialog(dialog, cx),
@@ -37,70 +32,6 @@ impl Yomu {
             surface_bg,
             animations_enabled: self.animations_enabled(),
         }
-    }
-
-    pub(crate) fn render_menu(&self, menu: &BookMenu, cx: &mut Context<Self>) -> AnyElement {
-        let style = self.overlay_style(self.menu_surface());
-        let yomu = cx.entity();
-
-        let yomu_close = yomu.clone();
-        let on_close = move |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-            yomu_close.update(cx, |this, cx| this.close_overlay(cx));
-        };
-
-        let yomu_hover = yomu.clone();
-        let on_hover = move |ix: usize, _window: &mut Window, cx: &mut App| {
-            yomu_hover.update(cx, |this, cx| this.menu_hover(ix, cx));
-        };
-
-        let yomu_action = yomu.clone();
-        let on_action = move |action: BookAction,
-                              book_id: &str,
-                              target_ids: &[String],
-                              window: &mut Window,
-                              cx: &mut App| {
-            let book_id = book_id.to_string();
-            let target_ids = target_ids.to_vec();
-            yomu_action.update(cx, |this, cx| {
-                this.run_book_action(action, &book_id, &target_ids, window, cx);
-            });
-        };
-
-        ui::overlays::render_book_menu(menu, style, on_close, on_hover, on_action)
-    }
-
-    pub(crate) fn render_library_menu(
-        &self,
-        menu: &LibraryMenu,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let style = self.overlay_style(self.menu_surface());
-        let group_series = self.library.settings().group_series;
-        let yomu = cx.entity();
-
-        let yomu_close = yomu.clone();
-        let on_close = move |_: &MouseDownEvent, _window: &mut Window, cx: &mut App| {
-            yomu_close.update(cx, |this, cx| this.close_overlay(cx));
-        };
-
-        let yomu_hover = yomu.clone();
-        let on_hover = move |ix: usize, _window: &mut Window, cx: &mut App| {
-            yomu_hover.update(cx, |this, cx| {
-                if let Some(Overlay::LibraryMenu(menu)) = this.overlay.as_mut() {
-                    menu.selected = ix;
-                    cx.notify();
-                }
-            });
-        };
-
-        let yomu_action = yomu.clone();
-        let on_action = move |ix: usize, window: &mut Window, cx: &mut App| {
-            yomu_action.update(cx, |this, cx| {
-                this.run_library_menu_action(ix, window, cx);
-            });
-        };
-
-        ui::overlays::render_library_menu(menu, group_series, style, on_close, on_hover, on_action)
     }
 
     pub(crate) fn render_confirm(

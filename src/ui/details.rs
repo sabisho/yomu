@@ -3,14 +3,15 @@
 use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{Icon, IconName, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, FontWeight, InteractiveElement, Pixels, ScrollHandle,
-    SharedString, Styled, Window, div, img, px,
+    Anchor, AnyElement, App, ClickEvent, Context, Div, FontWeight, InteractiveElement, Pixels,
+    ScrollHandle, SharedString, Styled, Window, div, img, px,
 };
 use yomu::archive::SourceKind;
 use yomu::library::Book;
@@ -36,7 +37,7 @@ pub fn render_manga_details(
     on_continue_reading: impl Fn(&str, &mut Window, &mut App) + 'static,
     on_select_tab: impl Fn(usize, &mut Window, &mut App) + 'static,
     on_toggle_synopsis: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_more_menu: impl Fn(&str, (f32, f32), &mut Window, &mut App) + 'static,
+    on_more_menu: impl Fn(&str, PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
     let colors = props.colors;
     let book = props.book;
@@ -232,13 +233,12 @@ pub fn render_manga_details(
                                         .rounded(ButtonRounded::Size(props.radius))
                                         .tooltip("More options")
                                         .icon(IconName::Ellipsis)
-                                        .on_click(move |event: &ClickEvent, window, cx| {
-                                            let pos: (f32, f32) = (
-                                                event.position().x.into(),
-                                                event.position().y.into(),
-                                            );
-                                            on_more_menu(&book_id_clone, pos, window, cx);
-                                        }),
+                                        .dropdown_menu_with_anchor(
+                                            Anchor::TopRight,
+                                            move |menu, window, cx| {
+                                                on_more_menu(&book_id_clone, menu, window, cx)
+                                            },
+                                        ),
                                 ),
                         ),
                 ),

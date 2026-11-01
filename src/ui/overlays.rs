@@ -4,30 +4,20 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use gpui_kit::assets::IconName;
+use gpui_kit::component::ThemeConfig;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Icon, ThemeConfig};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Anchor, Animation, AnimationExt, AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, SharedString, Stateful,
-    Styled, Window, anchored, deferred, div, ease_out_quint, px,
+    Animation, AnimationExt, AnyElement, App, Entity, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString, Stateful, Styled,
+    Window, deferred, div, ease_out_quint, px,
 };
-use yomu::menu::{BookAction, Entry, Item};
+use yomu::menu::BookAction;
 
 use crate::ui::components::{ButtonKind, overlay_shade, panel_button, with_alpha};
 use crate::ui::theme::{BUILT_IN_THEMES, UiColors};
-
-#[derive(Clone)]
-pub struct BookMenu {
-    pub book_id: String,
-    pub target_ids: Vec<String>,
-    pub entries: Vec<Entry>,
-    pub position: Point<Pixels>,
-    pub selected: Option<usize>,
-}
 
 #[allow(dead_code)]
 pub enum ConfirmAction {
@@ -64,16 +54,9 @@ pub struct CollectionDialog {
     pub input: Entity<InputState>,
 }
 
-#[derive(Default)]
-pub struct LibraryMenu {
-    pub selected: usize,
-}
-
-/// At most one menu or dialog is open at a time; it sits on top of whatever view is showing.
+/// At most one dialog is open at a time; it sits on top of whatever view is showing.
 #[allow(dead_code)]
 pub enum Overlay {
-    Menu(BookMenu),
-    LibraryMenu(LibraryMenu),
     Confirm(ConfirmDialog),
     Properties(PropertiesDialog),
     Series(SeriesDialog),
@@ -519,302 +502,6 @@ pub fn render_collection_dialog(
                 ),
         )
         .into_any_element()
-}
-
-pub fn render_book_menu(
-    menu: &BookMenu,
-    style: OverlayStyle,
-    on_close: impl Fn(&MouseDownEvent, &mut Window, &mut App) + Clone + 'static,
-    on_hover: impl Fn(usize, &mut Window, &mut App) + Clone + 'static,
-    on_action: impl Fn(BookAction, &str, &[String], &mut Window, &mut App) + Clone + 'static,
-) -> AnyElement {
-    let mut list = div()
-        .min_w(px(200.))
-        .max_w(px(320.))
-        .w_auto()
-        .flex()
-        .flex_col()
-        .p_1()
-        .rounded(px(style.rounding_lg))
-        .bg(style.surface_bg)
-        .when(style.border_px > 0.0, |this| {
-            this.border(px(style.border_px))
-                .border_color(style.colors.accent)
-        })
-        .shadow_lg()
-        .text_sm()
-        .text_color(style.colors.foreground)
-        .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-            cx.stop_propagation()
-        })
-        .on_mouse_down(MouseButton::Right, |_: &MouseDownEvent, _, cx| {
-            cx.stop_propagation()
-        });
-
-    for (ix, entry) in menu.entries.iter().enumerate() {
-        list = match entry {
-            Entry::Separator => list,
-            Entry::Item(item) => list.child(render_book_menu_item(
-                menu,
-                ix,
-                item,
-                style.colors,
-                style.radius_px,
-                on_hover.clone(),
-                on_action.clone(),
-            )),
-        };
-    }
-
-    #[cfg(test)]
-    let list = list.debug_selector(|| "book-menu".into());
-
-    let on_close_right = on_close.clone();
-    deferred(
-        div()
-            .id("book-menu-scrim")
-            .occlude()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .on_mouse_down(MouseButton::Left, on_close)
-            .on_mouse_down(MouseButton::Right, on_close_right)
-            .child(
-                anchored()
-                    .position(menu.position)
-                    .anchor(Anchor::TopLeft)
-                    .snap_to_window_with_margin(px(8.))
-                    .child(list),
-            ),
-    )
-    .with_priority(1)
-    .into_any_element()
-}
-
-fn render_book_menu_item(
-    menu: &BookMenu,
-    ix: usize,
-    item: &Item,
-    colors: UiColors,
-    rounding_md: f32,
-    on_hover: impl Fn(usize, &mut Window, &mut App) + 'static,
-    on_action: impl Fn(BookAction, &str, &[String], &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let icon = match item.action {
-        BookAction::Open => IconName::BookOpen,
-        BookAction::StartOver | BookAction::ResetProgress => IconName::RotateCcw,
-        BookAction::MarkRead => IconName::CircleCheck,
-        BookAction::MarkUnread => IconName::CircleX,
-        BookAction::RevealFile => IconName::FolderOpen,
-        BookAction::Properties => IconName::Info,
-        BookAction::SetSeries => IconName::Library,
-        BookAction::Remove | BookAction::RemoveSelected => IconName::Trash,
-        BookAction::ClearSelection => IconName::X,
-    };
-    let is_selected = menu.selected == Some(ix);
-    let item_color = if !item.enabled {
-        colors.muted
-    } else if is_selected {
-        colors.accent_foreground
-    } else if item.danger {
-        colors.danger
-    } else {
-        colors.foreground
-    };
-    let base = div()
-        .id(SharedString::from(format!("menu-item-{ix}")))
-        .h(px(28.))
-        .px_3()
-        .flex()
-        .items_center()
-        .gap_2()
-        .rounded(px(rounding_md))
-        .child(
-            div()
-                .w(px(20.))
-                .h(px(20.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(Icon::new(icon).size_4().text_color(item_color)),
-        )
-        .child(item.label.clone());
-
-    if !item.enabled {
-        return base
-            .text_color(colors.muted)
-            .opacity(0.6)
-            .into_any_element();
-    }
-
-    let action = item.action;
-    let book_id = menu.book_id.clone();
-    let target_ids = menu.target_ids.clone();
-    base.text_color(if is_selected {
-        colors.accent_foreground
-    } else if item.danger {
-        colors.danger
-    } else {
-        colors.foreground
-    })
-    .cursor_pointer()
-    .when(is_selected, |row| row.bg(colors.accent))
-    .when(!is_selected, |row| {
-        row.hover(|style| style.bg(colors.surface_hover))
-    })
-    .on_mouse_move(move |_, window, cx| on_hover(ix, window, cx))
-    .on_click(move |_, window, cx| {
-        on_action(action, &book_id, &target_ids, window, cx);
-    })
-    .into_any_element()
-}
-
-pub fn render_library_menu(
-    menu: &LibraryMenu,
-    group_series: bool,
-    style: OverlayStyle,
-    on_close: impl Fn(&MouseDownEvent, &mut Window, &mut App) + Clone + 'static,
-    on_hover: impl Fn(usize, &mut Window, &mut App) + Clone + 'static,
-    on_action: impl Fn(usize, &mut Window, &mut App) + Clone + 'static,
-) -> AnyElement {
-    let entries = [
-        (
-            IconName::FilePlus,
-            "Add files",
-            "Import CBZ, CBR and ZIP comics",
-        ),
-        (
-            IconName::FolderPlus,
-            "Add folder",
-            "Import a folder of images",
-        ),
-        (
-            IconName::Settings,
-            "Settings",
-            "Themes and reader preferences",
-        ),
-        (
-            IconName::Folder,
-            if group_series {
-                "Show individual volumes"
-            } else {
-                "Group into folders"
-            },
-            if group_series {
-                "Display books ungrouped"
-            } else {
-                "Group volumes by folder"
-            },
-        ),
-        (IconName::LogOut, "Quit", "Close yomu"),
-    ];
-    let mut list = div()
-        .min_w(px(240.))
-        .max_w(px(360.))
-        .w_auto()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .p_2()
-        .rounded(px(style.rounding_lg))
-        .bg(style.surface_bg)
-        .when(style.border_px > 0.0, |this| {
-            this.border(px(style.border_px))
-                .border_color(style.colors.accent)
-        })
-        .shadow_lg()
-        .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-            cx.stop_propagation()
-        })
-        .on_mouse_down(MouseButton::Right, |_: &MouseDownEvent, _, cx| {
-            cx.stop_propagation()
-        });
-
-    for (index, (icon, label, description)) in entries.into_iter().enumerate() {
-        let selected = menu.selected == index;
-        let on_hover_item = on_hover.clone();
-        let on_action_item = on_action.clone();
-        list = list.child(
-            div()
-                .id(SharedString::from(format!("library-menu-{index}")))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_3()
-                .px_3()
-                .py_2()
-                .rounded(px(style.radius_px))
-                .cursor_pointer()
-                .when(selected, |row| row.bg(style.colors.accent))
-                .when(!selected, |row| {
-                    row.hover(|s| s.bg(style.colors.surface_hover))
-                })
-                .child(Icon::new(icon).size_4().text_color(if selected {
-                    style.colors.accent_foreground
-                } else {
-                    style.colors.foreground
-                }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(if selected {
-                                    style.colors.accent_foreground
-                                } else {
-                                    style.colors.foreground
-                                })
-                                .child(label),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(if selected {
-                                    style.colors.accent_foreground
-                                } else {
-                                    style.colors.muted
-                                })
-                                .truncate()
-                                .child(description),
-                        ),
-                )
-                .on_mouse_move(move |_, window, cx| on_hover_item(index, window, cx))
-                .on_click(move |_, window, cx| on_action_item(index, window, cx)),
-        );
-    }
-
-    let on_close_right = on_close.clone();
-    deferred(
-        div()
-            .id("library-menu-scrim")
-            .occlude()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .on_mouse_down(MouseButton::Left, on_close)
-            .on_mouse_down(MouseButton::Right, on_close_right)
-            .child(
-                div()
-                    .absolute()
-                    .top(px(52.))
-                    .right(px(18.))
-                    .child(animate_popup(
-                        "library-menu-popup",
-                        style.animations_enabled,
-                        list,
-                    )),
-            ),
-    )
-    .with_priority(2)
-    .into_any_element()
 }
 
 /// Suggestions for the reader's vim `:` command box:

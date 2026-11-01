@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, ClickEvent, ElementId, FontWeight, InteractiveElement, MouseButton, MouseDownEvent,
-    ObjectFit, Pixels, SharedString, Styled, Window, div, img, px, relative,
+    AnyElement, ClickEvent, Context, ElementId, FontWeight, InteractiveElement, ObjectFit, Pixels,
+    SharedString, Styled, Window, div, img, px, relative,
 };
 
 use crate::library::{Book, SortBy, SortDirection};
@@ -170,7 +171,7 @@ pub struct BookCardProps<'a> {
 pub fn render_book_card(
     props: BookCardProps,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
-    on_right_click: impl Fn(&MouseDownEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
     let book = props.book;
     let card_w = props.card_w;
@@ -218,11 +219,8 @@ pub fn render_book_card(
         .overflow_hidden()
         .cursor_pointer()
         .hover(|s| s.border_color(colors.accent).shadow_md())
-        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-            cx.stop_propagation();
-            on_right_click(event, window, cx);
-        })
         .on_click(on_click)
+        .context_menu(context_menu)
         .child(
             div()
                 .id(ElementId::from(SharedString::from(format!(
@@ -302,7 +300,7 @@ pub fn render_book_list_row(
     is_selected: bool,
     colors: UiColors,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
-    on_right_click: impl Fn(&MouseDownEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
     let progress = book.progress();
     let total = book.page_count;
@@ -352,11 +350,8 @@ pub fn render_book_list_row(
             })
             .border_color(colors.accent)
         })
-        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-            cx.stop_propagation();
-            on_right_click(event, window, cx);
-        })
         .on_click(on_click)
+        .context_menu(context_menu)
         .child(
             div()
                 .flex()
@@ -518,7 +513,7 @@ pub fn render_folder_card(
     border_px: f32,
     colors: UiColors,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
-    on_right_click: impl Fn(&MouseDownEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
     let inner_radius = (radius - px(border_px)).max(px(0.));
 
@@ -536,11 +531,8 @@ pub fn render_folder_card(
         .overflow_hidden()
         .cursor_pointer()
         .hover(|s| s.border_color(colors.accent).shadow_md())
-        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-            cx.stop_propagation();
-            on_right_click(event, window, cx);
-        })
         .on_click(on_click)
+        .context_menu(context_menu)
         .child(
             div()
                 .relative()
@@ -598,7 +590,7 @@ pub fn render_folder_list_row(
     border_px: f32,
     colors: UiColors,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
-    on_right_click: impl Fn(&MouseDownEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
     div()
         .id(SharedString::from(format!("folder-{}", group_key)))
@@ -619,11 +611,8 @@ pub fn render_folder_list_row(
             s.bg(with_alpha(colors.surface, 0.8))
                 .border_color(colors.accent)
         })
-        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-            cx.stop_propagation();
-            on_right_click(event, window, cx);
-        })
         .on_click(on_click)
+        .context_menu(context_menu)
         .child(
             div()
                 .flex()

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use gpui_kit::{AnyElement, Context, Window, point, px};
+use gpui_kit::{AnyElement, Context, Window, px};
 
 use crate::app::state::Yomu;
 use crate::ui;
@@ -200,9 +200,10 @@ impl Yomu {
             },
             {
                 let yomu = yomu.clone();
-                move |id, pos, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.open_book_menu(id, point(px(pos.0), px(pos.1)), cx)
+                move |id, menu, _window, cx| {
+                    let yomu_menu = yomu.clone();
+                    yomu.update(cx, |this, _cx| {
+                        this.build_book_context_menu(id, menu, yomu_menu)
                     })
                 }
             },

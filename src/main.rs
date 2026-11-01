@@ -94,10 +94,6 @@ impl Yomu {
         color
     }
 
-    pub(crate) fn menu_surface(&self) -> gpui_kit::Hsla {
-        self.colors.surface
-    }
-
     /// An input just started an animation: start the frame clock now so the first frame already
     /// accounts for the input-to-frame latency.
     pub(crate) fn wake(&mut self) {

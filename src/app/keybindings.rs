@@ -5,7 +5,6 @@
 use gpui_kit::{Context, KeyDownEvent, Window};
 
 use yomu::layout::{self, Arrive, FitMode, Viewport};
-use yomu::menu::{self, Entry};
 use yomu::vim::{self, Action, Amount, Dir};
 
 use crate::app::state::Yomu;
@@ -83,65 +82,7 @@ impl Yomu {
         if self.is_quitting {
             return;
         }
-        if matches!(token, "enter" | "space")
-            && let Some(Overlay::LibraryMenu(menu)) = self.overlay.as_ref()
-        {
-            let selected = menu.selected;
-            self.run_library_menu_action(selected, window, cx);
-            return;
-        }
         match self.overlay.as_mut() {
-            Some(Overlay::Menu(menu)) => match token {
-                "escape" => self.close_overlay(cx),
-                "down" | "j" | "tab" | "C-n" => {
-                    menu.selected = menu::step(&menu.entries, menu.selected, true);
-                    cx.notify();
-                }
-                "up" | "k" | "S-tab" | "C-p" => {
-                    menu.selected = menu::step(&menu.entries, menu.selected, false);
-                    cx.notify();
-                }
-                "home" => {
-                    menu.selected = menu::step(&menu.entries, None, true);
-                    cx.notify();
-                }
-                "end" => {
-                    menu.selected = menu::step(&menu.entries, None, false);
-                    cx.notify();
-                }
-                "enter" | "space" => {
-                    let picked = menu.selected.and_then(|ix| match &menu.entries[ix] {
-                        Entry::Item(item) if item.enabled => Some(item.action),
-                        _ => None,
-                    });
-                    let id = menu.book_id.clone();
-                    let target_ids = menu.target_ids.clone();
-                    if let Some(action) = picked {
-                        self.run_book_action(action, &id, &target_ids, window, cx);
-                    }
-                }
-                _ => {}
-            },
-            Some(Overlay::LibraryMenu(menu)) => match token {
-                "escape" => self.close_overlay(cx),
-                "down" | "j" | "tab" | "C-n" => {
-                    menu.selected = (menu.selected + 1) % 5;
-                    cx.notify();
-                }
-                "up" | "k" | "S-tab" | "C-p" => {
-                    menu.selected = (menu.selected + 4) % 5;
-                    cx.notify();
-                }
-                "home" => {
-                    menu.selected = 0;
-                    cx.notify();
-                }
-                "end" => {
-                    menu.selected = 4;
-                    cx.notify();
-                }
-                _ => {}
-            },
             Some(Overlay::Confirm(_)) => match token {
                 "enter" | "y" => self.confirm_accept(window, cx),
                 "escape" | "n" | "q" => self.close_overlay(cx),

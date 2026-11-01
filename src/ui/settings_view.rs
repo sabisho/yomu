@@ -11,12 +11,13 @@ use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHe
 use gpui_kit::component::{Disableable, Icon, Side, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, Pixels,
+    Anchor, AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, Pixels,
     ScrollHandle, SharedString, Styled, Window, div, px,
 };
 
 use super::components::{
-    macos_sidebar_bg, open_shortcut_str, settings_shortcut_str, with_alpha, zoom_shortcut_str,
+    CONTROL_HEIGHT_TOOLBAR, macos_sidebar_bg, open_shortcut_str, settings_shortcut_str, with_alpha,
+    zoom_shortcut_str,
 };
 use super::overlays::SettingsTab;
 use super::theme::{UiColors, is_standalone_scheme};
@@ -374,15 +375,15 @@ pub fn macos_dropdown_button<T: Clone + PartialEq + 'static>(
     on_select: std::rc::Rc<dyn Fn(T, &mut Window, &mut App)>,
 ) -> AnyElement {
     Button::new(id)
-        .small()
+        .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
         .outline()
         .dropdown_caret(true)
         .rounded(ButtonRounded::Size(px(6.)))
         .label(label.to_string())
-        .dropdown_menu(move |mut menu, _, _| {
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
             menu = menu
                 .check_side(Side::Left)
-                .min_w(px(180.))
+                .min_w(px(160.))
                 .max_h(px(280.))
                 .scrollable(true);
             for (opt_label, val, checked) in &options {
