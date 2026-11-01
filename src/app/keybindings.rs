@@ -362,11 +362,52 @@ impl Yomu {
                     reader.show_help = true;
                     cx.notify();
                 }
-                "right" | "space" => {
+                "space" => {
                     self.turn_by(true, 1, Arrive::Start, cx);
                 }
-                "left" | "S-space" => {
+                "S-space" => {
                     self.turn_by(false, 1, Arrive::Start, cx);
+                }
+                "right" => {
+                    let is_rtl = self
+                        .reader
+                        .as_ref()
+                        .map(|r| r.reading_direction.is_rtl())
+                        .unwrap_or_else(|| self.library.settings().reading_direction.is_rtl());
+                    self.turn_by(!is_rtl, 1, Arrive::Start, cx);
+                }
+                "left" => {
+                    let is_rtl = self
+                        .reader
+                        .as_ref()
+                        .map(|r| r.reading_direction.is_rtl())
+                        .unwrap_or_else(|| self.library.settings().reading_direction.is_rtl());
+                    self.turn_by(is_rtl, 1, Arrive::Start, cx);
+                }
+                "d" => {
+                    let next = self
+                        .reader
+                        .as_ref()
+                        .map(|r| r.page_layout.toggle())
+                        .unwrap_or_else(|| self.library.settings().page_layout.toggle());
+                    self.set_page_layout(next, cx);
+                }
+                "s" => {
+                    if let Some(reader) = self.reader.as_ref() {
+                        let cur = reader.current_spread_override();
+                        let next = match cur {
+                            yomu::library::PageSpreadOverride::Auto => {
+                                yomu::library::PageSpreadOverride::ForceSpread
+                            }
+                            yomu::library::PageSpreadOverride::ForceSpread => {
+                                yomu::library::PageSpreadOverride::ForceSingle
+                            }
+                            yomu::library::PageSpreadOverride::ForceSingle => {
+                                yomu::library::PageSpreadOverride::Auto
+                            }
+                        };
+                        self.set_page_spread_override(next, cx);
+                    }
                 }
                 "down" => {
                     self.scroll(Dir::Down, Amount::Line, 1, vp, cx);

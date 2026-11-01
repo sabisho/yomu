@@ -15,7 +15,7 @@ use gpui_kit::{Context, RenderImage, TouchPhase, Window};
 use image::Frame;
 use yomu::{
     archive, imaging,
-    layout::{self, Arrive, FitMode, Viewport},
+    layout::{self, Arrive, FitMode, PageLayout, ReadingDirection, Viewport},
     pagecache,
     util::now_secs,
     vim::{Amount, Dir},
@@ -98,17 +98,93 @@ impl Yomu {
                 reader.total = pages.len();
                 reader.page = reader.page.min(pages.len() - 1);
                 let (page, total) = (reader.page, pages.len());
-                reader.pages = Some(Arc::new(pages));
-                reader.orig_sizes = vec![None; total];
+                let mut orig_sizes = vec![None; total];
+                if let Some(book) = self.library.get(&book_id) {
+                    for (ix, name) in pages.iter().enumerate() {
+                        if let Some(&dims) = book.page_dimensions.get(name) {
+                            orig_sizes[ix] = Some(dims);
+                        }
+                    }
+                    reader.spread_overrides = book.spread_overrides.clone();
+                }
+                reader.orig_sizes = orig_sizes;
+                reader.pages = Some(Arc::new(pages.clone()));
+                reader.rebuild_spread_plan();
+
+                let unprobed: Vec<(usize, String)> = reader
+                    .orig_sizes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, size)| size.is_none())
+                    .map(|(ix, _)| (ix, pages[ix].clone()))
+                    .collect();
+                let path = reader.path.clone();
+                let kind = reader.kind;
+
                 if let Some(book) = self.library.get_mut(&book_id) {
                     book.page_count = total;
                     book.current_page = page;
                 }
                 self.save_library(cx);
+
+                if !unprobed.is_empty() {
+                    let probe_book_id = book_id.clone();
+                    let task = cx.background_executor().spawn(async move {
+                        let mut probed = Vec::new();
+                        for (ix, name) in unprobed {
+                            if let Ok(dims) = archive::probe_page_dimensions(&path, kind, &name) {
+                                probed.push((ix, name, dims));
+                            }
+                        }
+                        probed
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let probed = task.await;
+                        this.update(cx, |this, cx| {
+                            this.pages_probed(probe_book_id, probed, cx);
+                        })
+                        .ok();
+                    })
+                    .detach();
+                }
             }
             Err(err) => reader.error = Some(format!("{err:#}")),
         }
         cx.notify();
+    }
+
+    pub(crate) fn pages_probed(
+        &mut self,
+        book_id: String,
+        probed: Vec<(usize, String, (u32, u32))>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_quitting || probed.is_empty() {
+            return;
+        }
+        let Some(reader) = self.reader.as_mut() else {
+            return;
+        };
+        if reader.book_id != book_id {
+            return;
+        }
+        let mut changed = false;
+        for (ix, name, dims) in probed {
+            if let Some(slot) = reader.orig_sizes.get_mut(ix)
+                && slot.is_none()
+            {
+                *slot = Some(dims);
+                changed = true;
+            }
+            if let Some(book) = self.library.get_mut(&book_id) {
+                book.page_dimensions.insert(name, dims);
+            }
+        }
+        if changed {
+            reader.rebuild_spread_plan();
+            self.save_library_debounced(cx);
+            cx.notify();
+        }
     }
 
     pub(crate) fn close_book(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -150,7 +226,11 @@ impl Yomu {
             return;
         }
         // The reading position changes immediately; the slide is only a visual that catches up.
-        reader.begin_transition(target > reader.page, animate && !reader.continuous);
+        let same_spread = reader.is_double_page_active()
+            && reader.current_spread_index() == reader.spread_index_for_page(target);
+        if !same_spread {
+            reader.begin_transition(target > reader.page, animate && !reader.continuous);
+        }
         reader.page = target;
         reader.arrive = Some(arrive);
         reader.drag = None;
@@ -183,10 +263,26 @@ impl Yomu {
         arrive: Arrive,
         cx: &mut Context<Self>,
     ) {
-        let Some(page) = self.reader.as_ref().map(|r| r.page) else {
+        let Some(reader) = self.reader.as_ref() else {
             return;
         };
-        let target = if forward {
+        let page = reader.page;
+        let target = if reader.is_double_page_active() {
+            let current_s = reader.current_spread_index();
+            let total_s = reader.total_spreads();
+            let target_s = if forward {
+                current_s
+                    .saturating_add(count)
+                    .min(total_s.saturating_sub(1))
+            } else {
+                current_s.saturating_sub(count)
+            };
+            if let Some(pages) = reader.pages_for_spread(target_s) {
+                pages.primary
+            } else {
+                page
+            }
+        } else if forward {
             page.saturating_add(count)
         } else {
             page.saturating_sub(count)
@@ -194,12 +290,16 @@ impl Yomu {
         self.goto_page(target, arrive, cx);
     }
 
-    /// Screen-edge clicks: left goes back, right advances.
+    /// Screen-edge clicks: left goes back in LTR (forward in RTL), right advances in LTR (back in RTL).
     pub(crate) fn step(&mut self, side: Side, cx: &mut Context<Self>) {
-        if self.reader.is_none() {
+        let Some(reader) = self.reader.as_ref() else {
             return;
-        }
-        let forward = matches!(side, Side::Right);
+        };
+        let is_rtl = reader.reading_direction.is_rtl();
+        let forward = match side {
+            Side::Right => !is_rtl,
+            Side::Left => is_rtl,
+        };
         let arrive = if forward { Arrive::Start } else { Arrive::End };
         self.turn_by(forward, 1, arrive, cx);
     }
@@ -244,8 +344,14 @@ impl Yomu {
             (max.0, vp.width, reader.scroll_target.0)
         };
 
-        // Which way a page turn goes when the page cannot scroll: down/right is forward.
-        let turn_forward = positive;
+        let is_rtl = reader.reading_direction.is_rtl();
+        let turn_forward = if vertical {
+            positive
+        } else if is_rtl {
+            matches!(dir, Dir::Left)
+        } else {
+            matches!(dir, Dir::Right)
+        };
         let arrive = if turn_forward {
             Arrive::Start
         } else {
@@ -256,10 +362,16 @@ impl Yomu {
             self.turn_by(turn_forward, count, arrive, cx);
             return;
         }
-        let at_end = if positive {
-            current >= axis_max - EDGE_EPS
-        } else {
+        let at_end = if vertical || !is_rtl {
+            if positive {
+                current >= axis_max - EDGE_EPS
+            } else {
+                current <= EDGE_EPS
+            }
+        } else if matches!(dir, Dir::Left) {
             current <= EDGE_EPS
+        } else {
+            current >= axis_max - EDGE_EPS
         };
         if at_end && !(reader.continuous && vertical) {
             self.turn_by(turn_forward, 1, arrive, cx);
@@ -853,6 +965,16 @@ impl Yomu {
                 let high = low + vp.height;
                 let (first, last) = reader.continuous_visible_range(low, high, &vp);
                 first.saturating_sub(1)..=(last + 2).min(pages_len.saturating_sub(1))
+            } else if reader.is_double_page_active() {
+                let spread = reader.active_spread();
+                let min_p = spread
+                    .primary
+                    .min(spread.secondary.unwrap_or(spread.primary));
+                let max_p = spread
+                    .primary
+                    .max(spread.secondary.unwrap_or(spread.primary));
+                min_p.saturating_sub(pagecache::KEEP_BEHIND)
+                    ..=(max_p + pagecache::KEEP_AHEAD).min(pages_len.saturating_sub(1))
             } else {
                 reader.page.saturating_sub(pagecache::KEEP_BEHIND)
                     ..=reader.page + pagecache::KEEP_AHEAD
@@ -863,12 +985,18 @@ impl Yomu {
                 pagecache::system_memory_budget(),
                 &keep,
             ) {
+                if reader.is_double_page_active() && reader.active_spread().contains(ix) {
+                    continue;
+                }
                 if let Some(page) = reader.images.remove(&ix) {
                     // A page that is still sliding out is freed when its slide ends instead.
-                    let leaving = reader
-                        .outgoing
-                        .as_ref()
-                        .is_some_and(|outgoing| Arc::ptr_eq(&outgoing.image, &page.image));
+                    let leaving = reader.outgoing.as_ref().is_some_and(|outgoing| {
+                        Arc::ptr_eq(&outgoing.image, &page.image)
+                            || outgoing
+                                .second
+                                .as_ref()
+                                .is_some_and(|sec| Arc::ptr_eq(&sec.image, &page.image))
+                    });
                     if !leaving {
                         let _ = window.drop_image(page.image);
                     }
@@ -896,8 +1024,55 @@ impl Yomu {
 
             let wanted_indices: Vec<usize> = if reader.continuous {
                 keep.filter(|ix| *ix < pages_len).collect()
+            } else if reader.is_double_page_active() {
+                let mut order = Vec::with_capacity(12);
+                let current_s = reader.current_spread_index();
+                let total_s = reader.total_spreads();
+
+                // 1. Current spread pages
+                if let Some(pages) = reader.pages_for_spread(current_s) {
+                    order.push(pages.primary);
+                    if let Some(sec) = pages.secondary {
+                        order.push(sec);
+                    }
+                }
+                // 2. Next spread pages (ahead)
+                if current_s + 1 < total_s
+                    && let Some(pages) = reader.pages_for_spread(current_s + 1)
+                {
+                    order.push(pages.primary);
+                    if let Some(sec) = pages.secondary {
+                        order.push(sec);
+                    }
+                }
+                // 3. Previous spread pages (behind)
+                if current_s > 0
+                    && let Some(pages) = reader.pages_for_spread(current_s - 1)
+                {
+                    order.push(pages.primary);
+                    if let Some(sec) = pages.secondary {
+                        order.push(sec);
+                    }
+                }
+                // 4. Spread + 2
+                if current_s + 2 < total_s
+                    && let Some(pages) = reader.pages_for_spread(current_s + 2)
+                {
+                    order.push(pages.primary);
+                    if let Some(sec) = pages.secondary {
+                        order.push(sec);
+                    }
+                }
+                order
             } else {
                 pagecache::prefetch_order(reader.page, pages_len)
+            };
+            let is_current_spread = |ix: usize| {
+                if reader.is_double_page_active() {
+                    reader.active_spread().contains(ix)
+                } else {
+                    ix == reader.page
+                }
             };
             let wanted = wanted_indices
                 .into_iter()
@@ -906,7 +1081,7 @@ impl Yomu {
                         let width = vp.width * reader.zoom * vp.scale;
                         let (w, h) = reader.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
                         layout::tier_for(width.max(width * h as f32 / w.max(1) as f32))
-                    } else if ix == reader.page {
+                    } else if is_current_spread(ix) {
                         current_tier
                     } else {
                         neighbour_tier
@@ -1046,8 +1221,18 @@ impl Yomu {
                     reader.off.1 = (reader.off.1 + shift).max(0.0);
                     reader.scroll_target.1 = (reader.scroll_target.1 + shift).max(0.0);
                 }
+                let old_class = reader.classify_page(ix);
                 if let Some(size) = reader.orig_sizes.get_mut(ix) {
                     *size = Some(orig);
+                }
+                if let Some(pages) = reader.pages.as_ref()
+                    && let Some(name) = pages.get(ix)
+                    && let Some(book) = self.library.get_mut(&book_id)
+                {
+                    book.page_dimensions.insert(name.clone(), orig);
+                }
+                if reader.classify_page(ix) != old_class {
+                    reader.rebuild_spread_plan();
                 }
                 if let Some(old) = reader.images.insert(
                     ix,
@@ -1065,6 +1250,95 @@ impl Yomu {
                 reader.failed.insert(ix, format!("{err:#}"));
             }
         }
+        cx.notify();
+    }
+
+    pub fn set_page_layout(&mut self, layout: PageLayout, cx: &mut Context<Self>) {
+        if self.library.settings().page_layout == layout {
+            return;
+        }
+        self.library.settings_mut().page_layout = layout;
+        if let Some(reader) = self.reader.as_mut() {
+            reader.page_layout = layout;
+            reader.rebuild_spread_plan();
+            reader.cancel_transition();
+            reader.arrive = Some(Arrive::Start);
+        }
+        self.save_library_debounced(cx);
+        self.wake();
+        cx.notify();
+    }
+
+    pub fn set_reading_direction(&mut self, dir: ReadingDirection, cx: &mut Context<Self>) {
+        if self.library.settings().reading_direction == dir {
+            return;
+        }
+        self.library.settings_mut().reading_direction = dir;
+        if let Some(reader) = self.reader.as_mut() {
+            reader.reading_direction = dir;
+            reader.cancel_transition();
+            reader.arrive = Some(Arrive::Start);
+        }
+        self.save_library_debounced(cx);
+        self.wake();
+        cx.notify();
+    }
+
+    pub fn set_first_page_is_cover(&mut self, first_page_is_cover: bool, cx: &mut Context<Self>) {
+        if self.library.settings().first_page_is_cover == first_page_is_cover {
+            return;
+        }
+        self.library.settings_mut().first_page_is_cover = first_page_is_cover;
+        if let Some(reader) = self.reader.as_mut() {
+            reader.first_page_is_cover = first_page_is_cover;
+            reader.rebuild_spread_plan();
+            reader.cancel_transition();
+            reader.arrive = Some(Arrive::Start);
+        }
+        self.save_library_debounced(cx);
+        self.wake();
+        cx.notify();
+    }
+
+    pub fn set_spread_ratio_threshold(&mut self, threshold: f32, cx: &mut Context<Self>) {
+        let threshold = threshold.clamp(1.0, 3.0);
+        if (self.library.settings().spread_ratio_threshold - threshold).abs() < 1e-4 {
+            return;
+        }
+        self.library.settings_mut().spread_ratio_threshold = threshold;
+        if let Some(reader) = self.reader.as_mut() {
+            reader.spread_ratio_threshold = threshold;
+            reader.rebuild_spread_plan();
+        }
+        self.save_library_debounced(cx);
+        self.wake();
+        cx.notify();
+    }
+
+    pub fn set_page_spread_override(
+        &mut self,
+        override_mode: yomu::library::PageSpreadOverride,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(reader) = self.reader.as_mut() else {
+            return;
+        };
+        let page = reader.page;
+        reader.set_spread_override(page, override_mode);
+        reader.cancel_transition();
+        let book_id = reader.book_id.clone();
+        if let Some(pages) = reader.pages.as_ref()
+            && let Some(name) = pages.get(page)
+            && let Some(book) = self.library.get_mut(&book_id)
+        {
+            if override_mode == yomu::library::PageSpreadOverride::Auto {
+                book.spread_overrides.remove(name);
+            } else {
+                book.spread_overrides.insert(name.clone(), override_mode);
+            }
+        }
+        self.save_library_debounced(cx);
+        self.wake();
         cx.notify();
     }
 }

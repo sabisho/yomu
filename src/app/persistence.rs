@@ -275,6 +275,8 @@ mod tests {
                 added_at: 0,
                 last_read: None,
                 marks: std::collections::BTreeMap::new(),
+                spread_overrides: std::collections::BTreeMap::new(),
+                page_dimensions: std::collections::BTreeMap::new(),
             };
             this.library.add(book);
         });
@@ -523,6 +525,8 @@ mod tests {
                 added_at: 0,
                 last_read: None,
                 marks: std::collections::BTreeMap::new(),
+                spread_overrides: std::collections::BTreeMap::new(),
+                page_dimensions: std::collections::BTreeMap::new(),
             };
             this.library.add(book);
         });
@@ -549,6 +553,8 @@ mod tests {
             added_at: 0,
             last_read: None,
             marks: std::collections::BTreeMap::new(),
+            spread_overrides: std::collections::BTreeMap::new(),
+            page_dimensions: std::collections::BTreeMap::new(),
         });
 
         {
@@ -799,6 +805,8 @@ mod tests {
                 added_at: 0,
                 last_read: None,
                 marks: std::collections::BTreeMap::new(),
+                spread_overrides: std::collections::BTreeMap::new(),
+                page_dimensions: std::collections::BTreeMap::new(),
             };
             this.library.add(book);
             this.save_library_debounced(cx);
@@ -838,6 +846,8 @@ mod tests {
                     added_at: 0,
                     last_read: None,
                     marks: std::collections::BTreeMap::new(),
+                    spread_overrides: std::collections::BTreeMap::new(),
+                    page_dimensions: std::collections::BTreeMap::new(),
                 };
                 this.library.add(book);
                 this.save_library_debounced(cx);

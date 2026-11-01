@@ -14,17 +14,55 @@ use ui::reader::Page;
 use yomu::archive::SourceKind;
 use yomu::imaging;
 use yomu::layout::Viewport;
-use yomu::library::{Book, DataDirs, Library};
+use yomu::library::{Book, DataDirs, Library, PageSpreadOverride};
 use yomu::menu::{BookAction, Entry};
 use yomu::motion::{KineticScroll, PageTransition};
 use yomu::pagecache;
 use yomu::vim::{Action, Amount, Dir};
 
 fn png_bytes() -> Vec<u8> {
-    let image = image::RgbaImage::from_pixel(60, 90, image::Rgba([90, 40, 160, 255]));
+    sized_png_bytes(60, 90)
+}
+
+fn sized_png_bytes(w: u32, h: u32) -> Vec<u8> {
+    let image = image::RgbaImage::from_pixel(w, h, image::Rgba([90, 40, 160, 255]));
     let mut out = Cursor::new(Vec::new());
     image.write_to(&mut out, image::ImageFormat::Png).unwrap();
     out.into_inner()
+}
+
+fn fixture_mixed(tag: &str, dims: &[(u32, u32)]) -> Fixture {
+    static FIXTURE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = FIXTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("yomu-ui-{tag}-{}-{seq}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let dirs = DataDirs::at(root.join("data")).unwrap();
+
+    let path = root.join("mixed.cbz");
+    let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    for (ix, &(w, h)) in dims.iter().enumerate() {
+        zip.start_file(format!("page_{:03}.png", ix + 1), options)
+            .unwrap();
+        zip.write_all(&sized_png_bytes(w, h)).unwrap();
+    }
+    zip.finish().unwrap();
+
+    let files = vec![path];
+    let report = library::import_paths(&files, &dirs, &HashSet::new());
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let mut library = Library::default();
+    for book in report.added {
+        library.add(book);
+    }
+    library.save(&dirs).unwrap();
+
+    Fixture {
+        ids: library.books().iter().map(|b| b.id.clone()).collect(),
+        files,
+        dirs,
+    }
 }
 
 struct Fixture {
@@ -1400,6 +1438,8 @@ fn test_reader(pages: usize, settings: &Settings) -> Reader {
         added_at: 0,
         last_read: None,
         marks: Default::default(),
+        spread_overrides: Default::default(),
+        page_dimensions: Default::default(),
     };
     let mut reader = Reader::new(&book, settings);
     reader.pages = Some(Arc::new((0..pages).map(|i| format!("{i}.png")).collect()));
@@ -4450,4 +4490,742 @@ fn test_continue_reading_ordering_unaffected_by_sort(cx: &mut TestAppContext) {
         view.read_with(cx, |this, _| this.library.get(&id1).unwrap().last_read),
         Some(500)
     );
+}
+
+#[gpui_kit::test]
+fn test_dual_page_spread_navigation_and_cover(cx: &mut TestAppContext) {
+    let fx = fixture("spread_nav");
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Initial state: single page
+    view.update(cx, |this, cx| {
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_reading_direction(ReadingDirection::LeftToRight, cx);
+        this.set_first_page_is_cover(true, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(reader.is_double_page_active());
+        assert_eq!(reader.current_spread_index(), 0);
+        let spread = reader.active_spread();
+        assert_eq!(spread.primary, 0);
+        assert_eq!(spread.secondary, None);
+    });
+
+    // Advance to next spread -> spread 1 [1, 2]
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 1);
+        let spread = reader.active_spread();
+        assert_eq!(spread.primary, 1);
+        assert_eq!(spread.secondary, Some(2));
+        assert_eq!(reader.page, 1);
+    });
+
+    // Advance to next spread -> spread 2 [3, 4]
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 2);
+        let spread = reader.active_spread();
+        assert_eq!(spread.primary, 3);
+        assert_eq!(spread.secondary, Some(4));
+        assert_eq!(reader.page, 3);
+    });
+
+    // Retreat to spread 1 -> [1, 2]
+    view.update(cx, |this, cx| {
+        this.turn_by(false, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 1);
+        assert_eq!(reader.page, 1);
+    });
+
+    // Retreat to spread 0 -> [0]
+    view.update(cx, |this, cx| {
+        this.turn_by(false, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 0);
+        assert_eq!(reader.page, 0);
+    });
+}
+
+#[gpui_kit::test]
+fn test_dual_page_spread_rtl_navigation_and_pairing(cx: &mut TestAppContext) {
+    let fx = fixture("spread_rtl");
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    view.update(cx, |this, cx| {
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_reading_direction(ReadingDirection::RightToLeft, cx);
+        this.set_first_page_is_cover(false, cx);
+    });
+    cx.run_until_parked();
+
+    // Without cover, spread 0 is [0, 1]
+    // In RTL: primary (0) is on right, secondary (1) is on left
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        let spread = reader.active_spread();
+        assert_eq!(spread.primary, 0);
+        assert_eq!(spread.secondary, Some(1));
+        let vis = reader.active_visual_spread();
+        assert_eq!(vis.right_page, Some(0));
+        assert_eq!(vis.left_page, Some(1));
+    });
+
+    // In RTL, left step advances forward
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Left, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 1);
+        let spread = reader.active_spread();
+        assert_eq!(spread.primary, 2);
+        assert_eq!(spread.secondary, Some(3));
+    });
+
+    // In RTL, right step goes backward
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Right, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 0);
+        assert_eq!(reader.page, 0);
+    });
+}
+
+#[gpui_kit::test]
+fn test_switching_layout_preserves_reading_position(cx: &mut TestAppContext) {
+    let fx = fixture("spread_switch");
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Jump to page 3 in single page mode
+    view.update(cx, |this, cx| {
+        this.goto_page(3, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(page(&view, cx), 3);
+
+    // Switch to Double page mode
+    view.update(cx, |this, cx| {
+        this.set_page_layout(PageLayout::Double, cx);
+    });
+    cx.run_until_parked();
+
+    // Logical page 3 remains active, within spread 2 [3, 4]
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 3);
+        assert_eq!(reader.current_spread_index(), 2);
+    });
+
+    // Switch back to Single page mode
+    view.update(cx, |this, cx| {
+        this.set_page_layout(PageLayout::Single, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(page(&view, cx), 3);
+}
+
+#[gpui_kit::test]
+fn test_continuous_mode_unaffected_by_double_page_setting(cx: &mut TestAppContext) {
+    let fx = fixture("continuous_double");
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Enable continuous mode and double page layout
+    view.update(cx, |this, cx| {
+        this.set_continuous(Some(true), cx);
+        this.set_page_layout(PageLayout::Double, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(reader.continuous);
+        // Continuous mode overrides dual spread presentation
+        assert!(!reader.is_double_page_active());
+    });
+}
+
+#[gpui_kit::test]
+fn test_mixed_source_spread_detection_and_navigation(cx: &mut TestAppContext) {
+    // 0: Portrait (600x900)
+    // 1: Portrait (600x900)
+    // 2: Double Spread (1800x900, ratio 2.0 >= 1.25)
+    // 3: Portrait (600x900)
+    // 4: Portrait (600x900)
+    let dims = [(600, 900), (600, 900), (1800, 900), (600, 900), (600, 900)];
+    let fx = fixture_mixed("mixed_nav", &dims);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Switch to Double page mode with cover isolation
+    view.update(cx, |this, cx| {
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_first_page_is_cover(true, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        // Spread 0: [0] (cover)
+        // Spread 1: [1] (single page, cannot pair with page 2 because page 2 is a single-image spread)
+        // Spread 2: [2] (single-image spread alone)
+        // Spread 3: [3, 4] (paired normal pages)
+        assert_eq!(reader.total_spreads(), 4);
+        assert_eq!(reader.current_spread_index(), 0);
+        let s0 = reader.active_spread();
+        assert_eq!(s0.primary, 0);
+        assert_eq!(s0.secondary, None);
+    });
+
+    // Advance to next spread
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 1);
+        assert_eq!(reader.page, 1);
+        let s1 = reader.active_spread();
+        assert_eq!(s1.primary, 1);
+        assert_eq!(s1.secondary, None);
+    });
+
+    // Advance to next spread: single-image spread at page 2
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 2);
+        assert_eq!(reader.page, 2);
+        let s2 = reader.active_spread();
+        assert_eq!(s2.primary, 2);
+        assert_eq!(s2.secondary, None);
+        assert!(s2.is_single_image_spread);
+    });
+
+    // Advance to next spread: paired pages [3, 4]
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 3);
+        assert_eq!(reader.page, 3);
+        let s3 = reader.active_spread();
+        assert_eq!(s3.primary, 3);
+        assert_eq!(s3.secondary, Some(4));
+        assert!(!s3.is_single_image_spread);
+    });
+
+    // Retreat to spread 2 (single-image spread)
+    view.update(cx, |this, cx| {
+        this.turn_by(false, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 2);
+        assert_eq!(reader.page, 2);
+    });
+}
+
+#[gpui_kit::test]
+fn test_mixed_source_manual_override_precedence_and_persistence(cx: &mut TestAppContext) {
+    let dims = [(600, 900), (600, 900), (600, 900), (600, 900)];
+    let fx = fixture_mixed("mixed_override", &dims);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    view.update(cx, |this, cx| {
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_first_page_is_cover(false, cx);
+    });
+    cx.run_until_parked();
+
+    // Default: all 4 are single portrait pages -> Spreads: [0, 1], [2, 3] (total: 2)
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.total_spreads(), 2);
+    });
+
+    // Force page 1 to be a spread via manual override
+    view.update(cx, |this, cx| {
+        this.goto_page(1, Arrive::Start, cx);
+        this.set_page_spread_override(PageSpreadOverride::ForceSpread, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(
+            reader.current_spread_override(),
+            PageSpreadOverride::ForceSpread
+        );
+        // Page 0 cannot pair with Page 1 (spread).
+        // Spread 0: [0], Spread 1: [1] (spread), Spread 2: [2, 3] -> Total: 3
+        assert_eq!(reader.total_spreads(), 3);
+        assert_eq!(
+            reader.pages_for_spread(0),
+            Some(layout::SpreadPages::new(0, None))
+        );
+        assert_eq!(
+            reader.pages_for_spread(1),
+            Some(layout::SpreadPages::single_image_spread(1))
+        );
+        assert_eq!(
+            reader.pages_for_spread(2),
+            Some(layout::SpreadPages::new(2, Some(3)))
+        );
+    });
+
+    // Close the book and reopen: manual overrides persist
+    cx.update(|window, cx| {
+        view.update(cx, |this, cx| {
+            this.close_book(window, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    open_book_by_index(&fx, &view, cx, 0);
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.total_spreads(), 3);
+        assert_eq!(
+            reader.spread_overrides.get("page_002.png"),
+            Some(&PageSpreadOverride::ForceSpread)
+        );
+    });
+
+    // Clear override back to Auto
+    view.update(cx, |this, cx| {
+        this.goto_page(1, Arrive::Start, cx);
+        this.set_page_spread_override(PageSpreadOverride::Auto, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_override(), PageSpreadOverride::Auto);
+        assert_eq!(reader.total_spreads(), 2);
+    });
+}
+
+#[gpui_kit::test]
+fn test_mixed_source_rtl_placement_and_turns(cx: &mut TestAppContext) {
+    let dims = [
+        (600, 900),
+        (1800, 900), // Single-image spread at index 1
+        (600, 900),
+        (600, 900),
+    ];
+    let fx = fixture_mixed("mixed_rtl", &dims);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    view.update(cx, |this, cx| {
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_reading_direction(ReadingDirection::RightToLeft, cx);
+        this.set_first_page_is_cover(false, cx);
+    });
+    cx.run_until_parked();
+
+    // Spread 0: [0] (alone because 1 is a spread) -> left=0, right=None
+    // Spread 1: [1] (single-image spread) -> left=1, right=None
+    // Spread 2: [2, 3] (paired) -> in RTL: right=2, left=3
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.total_spreads(), 3);
+        let s0_vis = reader.active_visual_spread();
+        assert_eq!(s0_vis.left_page, Some(0));
+        assert_eq!(s0_vis.right_page, None);
+    });
+
+    // In RTL, left step advances to spread 1 (page 1)
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Left, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 1);
+        let s1_vis = reader.active_visual_spread();
+        assert_eq!(s1_vis.left_page, Some(1));
+        assert_eq!(s1_vis.right_page, None);
+    });
+
+    // Advance to spread 2 ([2, 3])
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Left, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 2);
+        let s2_vis = reader.active_visual_spread();
+        assert_eq!(s2_vis.right_page, Some(2));
+        assert_eq!(s2_vis.left_page, Some(3));
+    });
+}
+
+#[gpui_kit::test]
+fn test_mixed_source_keybinding_toggle(cx: &mut TestAppContext) {
+    let dims = [(600, 900), (600, 900)];
+    let fx = fixture_mixed("mixed_key", &dims);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Initial override is Auto
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_override(), PageSpreadOverride::Auto);
+    });
+
+    // Press "s" -> ForceSpread
+    cx.simulate_keystrokes("s");
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(
+            reader.current_spread_override(),
+            PageSpreadOverride::ForceSpread
+        );
+    });
+
+    // Press "s" again -> ForceSingle
+    cx.simulate_keystrokes("s");
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(
+            reader.current_spread_override(),
+            PageSpreadOverride::ForceSingle
+        );
+    });
+
+    // Press "s" again -> Auto
+    cx.simulate_keystrokes("s");
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_override(), PageSpreadOverride::Auto);
+    });
+}
+
+#[gpui_kit::test]
+fn test_narrow_viewport_two_image_spread_navigation_ltr(cx: &mut TestAppContext) {
+    let dims = [(600, 900), (600, 900), (600, 900), (600, 900)];
+    let fx = fixture_mixed("narrow_ltr", &dims);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    view.update_in(cx, |this, window, cx| {
+        window.resize(gpui_kit::size(gpui_kit::px(1200.0), gpui_kit::px(800.0)));
+        window.bounds_changed(cx);
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_reading_direction(ReadingDirection::LeftToRight, cx);
+        this.set_first_page_is_cover(true, cx);
+    });
+    cx.run_until_parked();
+
+    // Verify wide viewport presentation
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(reader.is_double_page_active());
+        assert_eq!(reader.current_spread_index(), 0);
+        assert_eq!(reader.page, 0);
+        assert_eq!(reader.current_page_str().as_ref(), "1 / 4");
+    });
+
+    // Advance to Spread 1: [1, 2] in wide viewport
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 1);
+        assert_eq!(reader.page, 1);
+        assert_eq!(reader.current_page_str().as_ref(), "2–3 / 4");
+    });
+
+    // Fall back to narrow viewport by resizing window to portrait 400x800
+    view.update_in(cx, |_this, window, cx| {
+        window.resize(gpui_kit::size(gpui_kit::px(400.0), gpui_kit::px(800.0)));
+        window.bounds_changed(cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(!reader.is_double_page_active());
+        assert_eq!(reader.page_layout, PageLayout::Double);
+        assert_eq!(reader.page, 1);
+        assert_eq!(reader.current_page_str().as_ref(), "2 / 4");
+    });
+
+    // Turn forward in narrow viewport: advances to page 2 (secondary page of the spread)
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 2);
+        assert_eq!(reader.current_page_str().as_ref(), "3 / 4");
+    });
+
+    // Turn forward in narrow viewport: advances to page 3
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 3);
+        assert_eq!(reader.current_page_str().as_ref(), "4 / 4");
+    });
+
+    // Turn backward in narrow viewport: retreats to page 2 (secondary page)
+    view.update(cx, |this, cx| {
+        this.turn_by(false, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 2);
+        assert_eq!(reader.current_page_str().as_ref(), "3 / 4");
+    });
+
+    // Resize back to wide viewport (1200x800) while on page 2: maps to Spread 1 [1, 2]
+    view.update_in(cx, |_this, window, cx| {
+        window.resize(gpui_kit::size(gpui_kit::px(1200.0), gpui_kit::px(800.0)));
+        window.bounds_changed(cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(reader.is_double_page_active());
+        assert_eq!(reader.current_spread_index(), 1);
+        assert_eq!(reader.current_page_str().as_ref(), "2–3 / 4");
+        let vis = reader.active_visual_spread();
+        assert_eq!(vis.left_page, Some(1));
+        assert_eq!(vis.right_page, Some(2));
+    });
+
+    // Turn forward in wide viewport: advances to Spread 2 [3]
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 2);
+        assert_eq!(reader.page, 3);
+        assert_eq!(reader.current_page_str().as_ref(), "4 / 4");
+    });
+}
+
+#[gpui_kit::test]
+fn test_narrow_viewport_two_image_spread_navigation_rtl(cx: &mut TestAppContext) {
+    let dims = [(600, 900), (600, 900), (600, 900), (600, 900)];
+    let fx = fixture_mixed("narrow_rtl", &dims);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // Start in narrow viewport
+    view.update_in(cx, |this, window, cx| {
+        window.resize(gpui_kit::size(gpui_kit::px(450.0), gpui_kit::px(850.0)));
+        window.bounds_changed(cx);
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_reading_direction(ReadingDirection::RightToLeft, cx);
+        this.set_first_page_is_cover(true, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(!reader.is_double_page_active());
+        assert_eq!(reader.page, 0);
+        assert_eq!(reader.current_page_str().as_ref(), "1 / 4");
+    });
+
+    // In RTL, left step advances to page 1 (primary page of Spread 1: right side in RTL, read first)
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Left, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 1);
+        assert_eq!(reader.current_page_str().as_ref(), "2 / 4");
+    });
+
+    // In RTL, next left step advances to page 2 (secondary page of Spread 1: left side in RTL, read second)
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Left, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 2);
+        assert_eq!(reader.current_page_str().as_ref(), "3 / 4");
+    });
+
+    // Left step advances to page 3
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Left, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 3);
+        assert_eq!(reader.current_page_str().as_ref(), "4 / 4");
+    });
+
+    // Right step in RTL retreats to page 2 (secondary page)
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Right, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 2);
+        assert_eq!(reader.current_page_str().as_ref(), "3 / 4");
+    });
+
+    // While on page 2, widen the viewport: restores dual-page spread with page 1 (right) and page 2 (left)
+    view.update_in(cx, |_this, window, cx| {
+        window.resize(gpui_kit::size(gpui_kit::px(1200.0), gpui_kit::px(800.0)));
+        window.bounds_changed(cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(reader.is_double_page_active());
+        assert_eq!(reader.current_spread_index(), 1);
+        assert_eq!(reader.current_page_str().as_ref(), "2–3 / 4");
+        let vis = reader.active_visual_spread();
+        assert_eq!(vis.right_page, Some(1));
+        assert_eq!(vis.left_page, Some(2));
+    });
+
+    // Left step in wide RTL advances to Spread 2 [3]
+    view.update(cx, |this, cx| {
+        this.step(crate::app::state::Side::Left, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.current_spread_index(), 2);
+        assert_eq!(reader.page, 3);
+        assert_eq!(reader.current_page_str().as_ref(), "4 / 4");
+    });
+}
+
+#[gpui_kit::test]
+fn test_narrow_viewport_single_image_spread_not_duplicated(cx: &mut TestAppContext) {
+    let dims = [
+        (600, 900),
+        (1800, 900), // Single-image wide spread at page 1
+        (600, 900),
+        (600, 900),
+    ];
+    let fx = fixture_mixed("narrow_single_spread", &dims);
+    let (view, cx) = launch(&fx, cx);
+    open_book_by_index(&fx, &view, cx, 0);
+
+    // In narrow viewport
+    view.update_in(cx, |this, window, cx| {
+        window.resize(gpui_kit::size(gpui_kit::px(400.0), gpui_kit::px(800.0)));
+        window.bounds_changed(cx);
+        this.set_page_layout(PageLayout::Double, cx);
+        this.set_first_page_is_cover(true, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert!(!reader.is_double_page_active());
+        assert_eq!(reader.page, 0);
+        assert_eq!(reader.current_page_str().as_ref(), "1 / 4");
+    });
+
+    // Turn to page 1 (single-image spread)
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 1);
+        assert_eq!(reader.current_page_str().as_ref(), "2 / 4");
+    });
+
+    // Turn to page 2 (normal portrait page - single image spread was not duplicated)
+    view.update(cx, |this, cx| {
+        this.turn_by(true, 1, Arrive::Start, cx);
+    });
+    cx.run_until_parked();
+
+    view.update(cx, |this, _| {
+        let reader = this.reader.as_ref().unwrap();
+        assert_eq!(reader.page, 2);
+        assert_eq!(reader.current_page_str().as_ref(), "3 / 4");
+    });
 }

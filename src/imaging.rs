@@ -23,6 +23,31 @@ pub const COVER_MAX_H: u32 = 600;
 /// Refuse absurd dimensions before allocating (decompression bombs).
 const MAX_PIXELS: u64 = 120_000_000;
 
+/// Inspects the header of an image buffer to retrieve (width, height) without decoding pixels.
+pub fn probe_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
+    if bytes.is_empty() {
+        bail!("empty image buffer");
+    }
+    if let Ok(reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()
+        && let Ok((w, h)) = reader.into_dimensions()
+        && w > 0
+        && h > 0
+        && u64::from(w) * u64::from(h) <= MAX_PIXELS
+    {
+        return Ok((w, h));
+    }
+    let mut decoder = JpegDecoder::new(Cursor::new(bytes));
+    if decoder.decode_headers().is_ok()
+        && let Some((w, h)) = decoder.dimensions()
+    {
+        let (w, h) = (w as u32, h as u32);
+        if w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_PIXELS {
+            return Ok((w, h));
+        }
+    }
+    bail!("could not determine image dimensions from header");
+}
+
 fn decode(bytes: &[u8]) -> Result<DynamicImage> {
     if let Ok(reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()
         && let Ok((w, h)) = reader.into_dimensions()
@@ -448,5 +473,16 @@ mod tests {
             resized_pixels[2]
         );
         assert_eq!(resized_pixels[3], 255);
+    }
+
+    #[test]
+    fn test_probe_dimensions() {
+        let bytes = rgb_bytes(120, 80, image::Rgb([255, 0, 0]));
+        let dims = probe_dimensions(&bytes).unwrap();
+        assert_eq!(dims, (120, 80));
+
+        // Invalid / empty bytes
+        assert!(probe_dimensions(&[]).is_err());
+        assert!(probe_dimensions(&[1, 2, 3, 4]).is_err());
     }
 }

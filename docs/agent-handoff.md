@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in Rust 2024 usi
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **266 active tests** passing (119 core library unit tests in `src/lib.rs`, 147 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 269 total).
+- **Test Baseline:** **289 active tests** passing (131 core library unit tests in `src/lib.rs`, 158 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 292 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `cargo check` and `cargo clippy --all-targets -- -D warnings`, fully formatted under `cargo fmt`.
 
 ---
@@ -121,5 +121,27 @@ Refer to [ROADMAP.md](../ROADMAP.md) for prioritized upcoming work:
      - Full test suite passing (255 active tests: 112 lib, 143 bin).
    - Implement $O(1)$ lookup indexing for `Library` with standard library collections.
    - Eliminate deep library cloning on background autosave.
-4. **Phase 4: Dual-Page Spread Reading Mode:**
-   - Side-by-side portrait page display with landscape spread auto-fallback.
+    - **Phase 4.1 (Completed):** Implemented persistent library sorting for All Manga and Downloads:
+      - Modes: Title (A–Z / Z–A natural sort), Date Added (Newest / Oldest with backward-compatible mtime backfill), Last Read (recency), Reading Progress (Highest / Lowest), and Default import order.
+      - Toolbar dropdown menu with checkmarks, section separators, and contextual direction labels.
+      - Settings persistence with lenient fallback and full preservation of underlying library order.
+      - Full test suite passing (266 active tests: 119 lib, 147 bin).
+    - **Phase 4.2 (Completed):** Implemented native dual-page spread reading mode:
+      - Defined `PageLayout::Single` and `PageLayout::Double` with responsive portrait fallback (`is_dual_spread_effective`).
+      - Defined `ReadingDirection::RightToLeft` (Manga) and `ReadingDirection::LeftToRight` (Western comics) with directional arrow, click zone, and slide travel inversion.
+      - Added `first_page_is_cover` toggle to isolate page 0 before pairs begin.
+      - Implemented common-height spread scaling preserving individual page aspect ratios and `SPREAD_GAP = 2.0`.
+      - Spread-aware navigation (`turn_by` advances/retreats by spread), prefetching (prioritizes visible spread pages at `current_tier`), and eviction keep-window protection.
+      - Header layout dropdown button (`reader-layout-toggle`) and Settings Reader tab controls.
+      - Full test suite passing (276 active tests: 125 lib, 151 bin).
+    - **Phase 4.2.1 (Completed):** Implemented mixed-source spread support:
+      - Supported 3 page types in a single archive: normal portrait page, two-image spread, and single-image spread.
+      - Automatic detection of extra-wide single-image spreads using aspect ratio threshold (`DEFAULT_SPREAD_RATIO_THRESHOLD = 1.25`, configurable in Settings) and context awareness (portrait vs landscape comic detection).
+      - Lightweight dimension probing without full decompression via `imaging::probe_dimensions` and `archive::probe_page_dimensions`.
+      - Manual spread classification overrides per page (`Auto`, `ForceSingle`, `ForceSpread`) persisted in `Book.spread_overrides` using stable archive entry identifiers, with persistent dimension cache in `Book.page_dimensions`.
+      - Spread planning with precomputed `SpreadPlan` cached on `Reader` ensuring $O(1)$ lookups and zero per-frame allocations during reading.
+      - Single-image spreads occupy an entire spread alone and are never paired with adjacent pages; normal pages pair into two-image spreads; and isolated normal pages remain alone. Zero pages skipped, duplicated, or re-ordered.
+      - Reader header layout dropdown integration with current page override menu, Settings Reader tab ratio threshold control, and keybinding `'s'` to cycle overrides in reader mode.
+      - Full test suite passing (**289 active tests**: 131 lib, 158 bin).
+4. **Phase 4.3: Restrained UI Motion Transitions:**
+   - Subtle, interruptible desktop motion that strictly adheres to `disable_animations`.

@@ -56,6 +56,38 @@ impl Yomu {
             },
             {
                 let yomu = yomu.clone();
+                move |layout, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_page_layout(layout, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |dir, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_reading_direction(dir, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |cover, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_first_page_is_cover(cover, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |threshold, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.set_spread_ratio_threshold(threshold, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
                 move |checked, _, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_continuous(Some(checked), cx);

@@ -2,7 +2,7 @@
 
 use std::{
     cell::Cell,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     rc::Rc,
     sync::Arc,
@@ -24,8 +24,11 @@ use gpui_kit::{
 };
 use yomu::{
     archive::SourceKind,
-    layout::{self, Arrive, FitMode, Viewport},
-    library::{Book, Settings},
+    layout::{
+        self, Arrive, FitMode, PageClassification, PageLayout, ReadingDirection, SpreadPages,
+        SpreadPlan, Viewport, VisualSpread,
+    },
+    library::{Book, PageSpreadOverride, Settings},
     motion::{self, KineticScroll, PageTransition},
     vim::Vim,
 };
@@ -53,11 +56,21 @@ pub struct Page {
     pub bytes: u64,
 }
 
-/// The page that is sliding out during a page turn, frozen as it was when the turn began.
+/// Secondary page for dual-page spreads that is sliding out during a page turn.
+#[derive(Clone)]
+pub struct OutgoingSecond {
+    pub image: Arc<RenderImage>,
+    pub display: (f32, f32),
+    pub origin: (f32, f32),
+}
+
+/// The page (or spread) that is sliding out during a page turn, frozen as it was when the turn began.
+#[derive(Clone)]
 pub struct Outgoing {
     pub image: Arc<RenderImage>,
     pub display: (f32, f32),
     pub origin: (f32, f32),
+    pub second: Option<OutgoingSecond>,
 }
 
 #[derive(Clone, Copy)]
@@ -165,15 +178,28 @@ pub fn reader_progress_bar(fraction: f32, accent: Hsla) -> Div {
 }
 
 /// Autohiding top navigation and header overlay for the reader canvas.
+#[allow(clippy::too_many_arguments)]
 pub fn reader_header(
     book_title: SharedString,
     current_page_str: SharedString,
     fit_mode: FitMode,
+    page_layout: PageLayout,
+    reading_direction: ReadingDirection,
+    first_page_is_cover: bool,
+    current_spread_override: PageSpreadOverride,
     colors: UiColors,
     on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_set_fit: impl Fn(FitMode, &mut Window, &mut App) + 'static,
+    on_set_layout: impl Fn(PageLayout, &mut Window, &mut App) + 'static,
+    on_set_direction: impl Fn(ReadingDirection, &mut Window, &mut App) + 'static,
+    on_toggle_cover: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_set_spread_override: impl Fn(PageSpreadOverride, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     let on_set_fit = Rc::new(on_set_fit);
+    let on_set_layout = Rc::new(on_set_layout);
+    let on_set_direction = Rc::new(on_set_direction);
+    let on_toggle_cover = Rc::new(on_toggle_cover);
+    let on_set_spread_override = Rc::new(on_set_spread_override);
     div()
         .id("reader-top-hover-area")
         .group("reader-top")
@@ -237,6 +263,80 @@ pub fn reader_header(
                         .items_center()
                         .gap_2()
                         .child(
+                            Button::new("reader-layout-toggle")
+                                .ghost()
+                                .small()
+                                .dropdown_caret(true)
+                                .rounded(ButtonRounded::Medium)
+                                .tooltip("Page layout & reading direction")
+                                .label(page_layout.label())
+                                .dropdown_menu({
+                                    let on_set_layout = on_set_layout.clone();
+                                    let on_set_direction = on_set_direction.clone();
+                                    let on_toggle_cover = on_toggle_cover.clone();
+                                    move |mut menu, _, _| {
+                                        menu = menu.check_side(MenuSide::Left).min_w(px(180.));
+                                        for &layout in &PageLayout::ALL {
+                                            let on_set_layout = on_set_layout.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(layout.label())
+                                                    .checked(layout == page_layout)
+                                                    .on_click(move |_, window, cx| {
+                                                        on_set_layout(layout, window, cx);
+                                                    }),
+                                            );
+                                        }
+                                        menu = menu.item(PopupMenuItem::separator());
+                                        for &dir in &ReadingDirection::ALL {
+                                            let on_set_direction = on_set_direction.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(dir.label())
+                                                    .checked(dir == reading_direction)
+                                                    .on_click(move |_, window, cx| {
+                                                        on_set_direction(dir, window, cx);
+                                                    }),
+                                            );
+                                        }
+                                        menu = menu.item(PopupMenuItem::separator());
+                                        let on_toggle_cover = on_toggle_cover.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new("First Page as Cover")
+                                                .checked(first_page_is_cover)
+                                                .on_click(move |_, window, cx| {
+                                                    on_toggle_cover(
+                                                        !first_page_is_cover,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                        );
+                                        menu = menu.item(PopupMenuItem::separator());
+                                        for &ov in &PageSpreadOverride::ALL {
+                                            let on_set_spread_override =
+                                                on_set_spread_override.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(match ov {
+                                                    PageSpreadOverride::Auto => {
+                                                        "Page: Auto Detection"
+                                                    }
+                                                    PageSpreadOverride::ForceSingle => {
+                                                        "Page: Force Single"
+                                                    }
+                                                    PageSpreadOverride::ForceSpread => {
+                                                        "Page: Force Spread"
+                                                    }
+                                                })
+                                                .checked(ov == current_spread_override)
+                                                .on_click(move |_, window, cx| {
+                                                    on_set_spread_override(ov, window, cx);
+                                                }),
+                                            );
+                                        }
+                                        menu
+                                    }
+                                }),
+                        )
+                        .child(
                             Button::new("reader-fit-toggle")
                                 .ghost()
                                 .small()
@@ -285,9 +385,21 @@ pub fn reader_header(
 pub fn lateral_turners(
     colors: UiColors,
     radius: Pixels,
-    on_prev: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_next: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    is_rtl: bool,
+    on_left: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_right: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> (Stateful<Div>, Stateful<Div>) {
+    let left_tooltip = if is_rtl {
+        "Next page (Left or J)"
+    } else {
+        "Previous page (Left or K)"
+    };
+    let right_tooltip = if is_rtl {
+        "Previous page (Right or K)"
+    } else {
+        "Next page (Right or J)"
+    };
+
     let left_chevron = div()
         .id("reader-prev-hover-area")
         .group("reader-prev")
@@ -318,9 +430,9 @@ pub fn lateral_turners(
                 .justify_center()
                 .cursor_pointer()
                 .hover(|s| s.bg(with_alpha(colors.accent, 0.2)))
-                .tooltip(|window, cx| Tooltip::new("Previous page (Left or K)").build(window, cx))
+                .tooltip(move |window, cx| Tooltip::new(left_tooltip).build(window, cx))
                 .on_click(move |event, window, cx| {
-                    on_prev(event, window, cx);
+                    on_left(event, window, cx);
                 })
                 .child(
                     Icon::new(IconName::ChevronLeft)
@@ -360,9 +472,9 @@ pub fn lateral_turners(
                 .justify_center()
                 .cursor_pointer()
                 .hover(|s| s.bg(with_alpha(colors.accent, 0.2)))
-                .tooltip(|window, cx| Tooltip::new("Next page (Right or J)").build(window, cx))
+                .tooltip(move |window, cx| Tooltip::new(right_tooltip).build(window, cx))
                 .on_click(move |event, window, cx| {
-                    on_next(event, window, cx);
+                    on_right(event, window, cx);
                 })
                 .child(
                     Icon::new(IconName::ChevronRight)
@@ -393,6 +505,10 @@ pub fn render_reader(
     props: ReaderProps<'_>,
     on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_set_fit: impl Fn(FitMode, &mut Window, &mut App) + 'static,
+    on_set_layout: impl Fn(PageLayout, &mut Window, &mut App) + 'static,
+    on_set_direction: impl Fn(ReadingDirection, &mut Window, &mut App) + 'static,
+    on_toggle_cover: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_set_spread_override: impl Fn(PageSpreadOverride, &mut Window, &mut App) + 'static,
     on_turn_prev: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_turn_next: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_mouse_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -468,8 +584,79 @@ pub fn render_reader(
                 outgoing.origin.1,
                 outgoing.display,
             ));
+            if let Some(second) = &outgoing.second {
+                content.push(page_layer(
+                    &second.image,
+                    second.origin.0 + shift_out,
+                    second.origin.1,
+                    second.display,
+                ));
+            }
         }
-        if let Some(page) = reader.current() {
+        if reader.is_double_page_active() {
+            let vis = reader.active_visual_spread();
+            if let (Some(left_idx), Some(right_idx)) = (vis.left_page, vis.right_page) {
+                let left_page = reader.images.get(&left_idx);
+                let right_page = reader.images.get(&right_idx);
+                if let (Some(left), Some(right)) = (left_page, right_page) {
+                    let (left_display, right_display) = layout::spread_display_sizes(
+                        reader.fit,
+                        reader.zoom,
+                        Reader::orig_of(left),
+                        Reader::orig_of(right),
+                        layout::SPREAD_GAP,
+                        &vp,
+                    );
+                    let (left_pos, right_pos) = layout::spread_origins(
+                        reader.off,
+                        left_display,
+                        right_display,
+                        layout::SPREAD_GAP,
+                        &vp,
+                    );
+                    content.push(page_layer(
+                        &left.image,
+                        left_pos.0 + shift_in,
+                        left_pos.1,
+                        left_display,
+                    ));
+                    content.push(page_layer(
+                        &right.image,
+                        right_pos.0 + shift_in,
+                        right_pos.1,
+                        right_display,
+                    ));
+                } else if reader.outgoing.is_none() {
+                    let failed_left = reader.failed.get(&left_idx);
+                    let failed_right = reader.failed.get(&right_idx);
+                    if let Some(err) = failed_left.or(failed_right) {
+                        content.push(centered(
+                            format!("Couldn't decode page: {err}"),
+                            props.colors,
+                        ));
+                    } else if reader.pages.is_none() {
+                        content.push(centered("Opening…", props.colors));
+                    }
+                }
+            } else {
+                let single_idx = vis.left_page.or(vis.right_page).unwrap_or(reader.page);
+                if let Some(page) = reader.images.get(&single_idx) {
+                    let display =
+                        layout::display_size(reader.fit, reader.zoom, Reader::orig_of(page), &vp);
+                    let (left, top) = layout::origin(reader.off, display, &vp);
+                    content.push(page_layer(&page.image, left + shift_in, top, display));
+                } else if reader.outgoing.is_none() {
+                    if let Some(error) = reader.failed.get(&single_idx) {
+                        content.push(centered(
+                            format!("Couldn't decode page {}: {error}", single_idx + 1),
+                            props.colors,
+                        ));
+                    } else if reader.pages.is_none() {
+                        content.push(centered("Opening…", props.colors));
+                    }
+                }
+            }
+        } else if let Some(page) = reader.current() {
             let display = layout::display_size(reader.fit, reader.zoom, Reader::orig_of(page), &vp);
             let (left, top) = layout::origin(reader.off, display, &vp);
             content.push(page_layer(&page.image, left + shift_in, top, display));
@@ -482,7 +669,6 @@ pub fn render_reader(
             } else if reader.pages.is_none() {
                 content.push(centered("Opening…", props.colors));
             }
-            // otherwise: blank for the moment it takes the first page to decode
         }
     }
 
@@ -502,6 +688,8 @@ pub fn render_reader(
                     "webcomics"
                 } else if reader.continuous {
                     "continuous"
+                } else if reader.is_double_page_active() {
+                    "double page"
                 } else {
                     "single page"
                 }
@@ -533,18 +721,48 @@ pub fn render_reader(
         })
     };
 
-    let current_page_str = SharedString::from(format!("{} / {}", reader.page + 1, reader.total));
+    let current_page_str = reader.current_page_str();
     let top_bar = reader_header(
         props.book_title,
         current_page_str,
         reader.fit,
+        reader.page_layout,
+        reader.reading_direction,
+        reader.first_page_is_cover,
+        reader.current_spread_override(),
         props.colors,
         on_back,
         on_set_fit,
+        on_set_layout,
+        on_set_direction,
+        on_toggle_cover,
+        on_set_spread_override,
     );
 
+    let is_rtl = reader.reading_direction.is_rtl();
+    let on_turn_prev = Rc::new(on_turn_prev);
+    let on_turn_next = Rc::new(on_turn_next);
+    let (left_cb, right_cb) = if is_rtl {
+        let l = on_turn_next.clone();
+        let r = on_turn_prev.clone();
+        (
+            Box::new(move |e: &ClickEvent, w: &mut Window, cx: &mut App| l(e, w, cx))
+                as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
+            Box::new(move |e: &ClickEvent, w: &mut Window, cx: &mut App| r(e, w, cx))
+                as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
+        )
+    } else {
+        let l = on_turn_prev.clone();
+        let r = on_turn_next.clone();
+        (
+            Box::new(move |e: &ClickEvent, w: &mut Window, cx: &mut App| l(e, w, cx))
+                as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
+            Box::new(move |e: &ClickEvent, w: &mut Window, cx: &mut App| r(e, w, cx))
+                as Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
+        )
+    };
     let (left_chevron, right_chevron) =
-        lateral_turners(props.colors, props.radius, on_turn_prev, on_turn_next);
+        lateral_turners(props.colors, props.radius, is_rtl, left_cb, right_cb);
 
     div()
         .size_full()
@@ -609,6 +827,19 @@ pub struct Reader {
     pub arrive: Option<Arrive>,
     pub viewport: Viewport,
 
+    /// Page layout mode: single page or double page spread.
+    pub page_layout: PageLayout,
+    /// Reading progression direction: right-to-left (manga) or left-to-right (western comics).
+    pub reading_direction: ReadingDirection,
+    /// In dual-page mode, display the first page as an isolated single cover spread.
+    pub first_page_is_cover: bool,
+    /// Cached visual spread plan mapping logical pages to visual spreads.
+    pub spread_plan: SpreadPlan,
+    /// Manual overrides for double-page spread classification: archive entry name -> override.
+    pub spread_overrides: BTreeMap<String, PageSpreadOverride>,
+    /// Configurable aspect ratio threshold to automatically classify an image as a double spread.
+    pub spread_ratio_threshold: f32,
+
     /// The slide between pages, if one is running. At most one exists (no queue); a page turn
     /// that arrives mid-slide replaces it. Purely visual: `page` and the saved progress already
     /// point at the new page the moment you turn.
@@ -647,7 +878,13 @@ impl Reader {
         } else {
             1.0
         };
-        Self {
+        let spread_plan = SpreadPlan::new(
+            book.page_count,
+            settings.page_layout,
+            settings.first_page_is_cover,
+            |_| PageClassification::Single,
+        );
+        let mut reader = Self {
             book_id: book.id.clone(),
             book_title: SharedString::from(book.title.clone()),
             path: book.path.clone(),
@@ -662,6 +899,12 @@ impl Reader {
             scroll_target: (0.0, 0.0),
             arrive: Some(Arrive::Start),
             viewport: Viewport::EMPTY,
+            page_layout: settings.page_layout,
+            reading_direction: settings.reading_direction,
+            first_page_is_cover: settings.first_page_is_cover,
+            spread_plan,
+            spread_overrides: book.spread_overrides.clone(),
+            spread_ratio_threshold: settings.spread_ratio_threshold,
             transition: None,
             outgoing: None,
             transition_viewport: Viewport::EMPTY,
@@ -681,11 +924,172 @@ impl Reader {
             back_page: None,
             show_info: false,
             show_help: false,
-        }
+        };
+        reader.rebuild_spread_plan();
+        reader
     }
 
     pub fn current(&self) -> Option<&Page> {
         self.images.get(&self.page)
+    }
+
+    /// Whether dual-page spread mode is actively presenting on the current viewport.
+    pub fn is_double_page_active(&self) -> bool {
+        !self.continuous
+            && self.page_layout.is_double()
+            && layout::is_dual_spread_effective(&self.viewport)
+    }
+
+    /// Formatted page counter string (e.g. "2 / 10" in single-page/fallback or "2–3 / 10" in double-page spread).
+    pub fn current_page_str(&self) -> SharedString {
+        if self.is_double_page_active() {
+            let spread = self.active_spread();
+            match spread.secondary {
+                Some(sec) => {
+                    let min_p = spread.primary.min(sec) + 1;
+                    let max_p = spread.primary.max(sec) + 1;
+                    SharedString::from(format!("{}–{} / {}", min_p, max_p, self.total))
+                }
+                None => SharedString::from(format!("{} / {}", spread.primary + 1, self.total)),
+            }
+        } else {
+            SharedString::from(format!("{} / {}", self.page + 1, self.total))
+        }
+    }
+
+    /// Total number of visual spreads under current layout and page classifications.
+    pub fn total_spreads(&self) -> usize {
+        self.spread_plan.total_spreads()
+    }
+
+    /// Index of the current spread containing the reader's current page.
+    pub fn current_spread_index(&self) -> usize {
+        self.spread_plan.spread_index_for_page(self.page)
+    }
+
+    /// Computes the spread index for any given page.
+    pub fn spread_index_for_page(&self, page: usize) -> usize {
+        self.spread_plan.spread_index_for_page(page)
+    }
+
+    /// Logical pages for a given spread index.
+    pub fn pages_for_spread(&self, spread_index: usize) -> Option<SpreadPages> {
+        self.spread_plan.pages_for_spread(spread_index)
+    }
+
+    /// Logical pages in the currently active spread.
+    pub fn active_spread(&self) -> SpreadPages {
+        self.spread_plan
+            .pages_for_spread(self.current_spread_index())
+            .unwrap_or(SpreadPages::new(self.page, None))
+    }
+
+    /// Rebuilds the cached spread plan based on current layout, cover isolation, manual overrides,
+    /// and detected image aspect ratios.
+    pub fn rebuild_spread_plan(&mut self) {
+        let threshold = self.spread_ratio_threshold;
+        let orig_sizes = &self.orig_sizes;
+        let overrides = &self.spread_overrides;
+        let pages = self.pages.as_ref();
+
+        let mut portrait = 0;
+        let mut landscape = 0;
+        for orig in orig_sizes.iter().flatten() {
+            if orig.1 > orig.0 {
+                portrait += 1;
+            } else if orig.0 > orig.1 {
+                landscape += 1;
+            }
+        }
+        let typical_portrait = landscape < 3 || portrait >= landscape;
+
+        self.spread_plan = SpreadPlan::new(
+            self.total,
+            self.page_layout,
+            self.first_page_is_cover,
+            |ix| {
+                if let Some(pages) = pages
+                    && let Some(name) = pages.get(ix)
+                    && let Some(manual) = overrides.get(name)
+                {
+                    match manual {
+                        PageSpreadOverride::ForceSingle => return PageClassification::Single,
+                        PageSpreadOverride::ForceSpread => return PageClassification::Spread,
+                        PageSpreadOverride::Auto => {}
+                    }
+                }
+                if let Some(Some(orig)) = orig_sizes.get(ix) {
+                    layout::classify_image_aspect_ratio(orig.0, orig.1, threshold, typical_portrait)
+                } else {
+                    PageClassification::Single
+                }
+            },
+        );
+    }
+
+    /// Classifies an individual page based on manual overrides or detected aspect ratio.
+    pub fn classify_page(&self, ix: usize) -> PageClassification {
+        if let Some(pages) = self.pages.as_ref()
+            && let Some(name) = pages.get(ix)
+            && let Some(manual) = self.spread_overrides.get(name)
+        {
+            match manual {
+                PageSpreadOverride::ForceSingle => return PageClassification::Single,
+                PageSpreadOverride::ForceSpread => return PageClassification::Spread,
+                PageSpreadOverride::Auto => {}
+            }
+        }
+        if let Some(Some(orig)) = self.orig_sizes.get(ix) {
+            let mut portrait = 0;
+            let mut landscape = 0;
+            for s in self.orig_sizes.iter().flatten() {
+                if s.1 > s.0 {
+                    portrait += 1;
+                } else if s.0 > s.1 {
+                    landscape += 1;
+                }
+            }
+            let typical_portrait = landscape < 3 || portrait >= landscape;
+            layout::classify_image_aspect_ratio(
+                orig.0,
+                orig.1,
+                self.spread_ratio_threshold,
+                typical_portrait,
+            )
+        } else {
+            PageClassification::Single
+        }
+    }
+
+    /// Active manual override for the reader's current page.
+    pub fn current_spread_override(&self) -> PageSpreadOverride {
+        if let Some(pages) = self.pages.as_ref()
+            && let Some(name) = pages.get(self.page)
+            && let Some(manual) = self.spread_overrides.get(name)
+        {
+            *manual
+        } else {
+            PageSpreadOverride::Auto
+        }
+    }
+
+    /// Sets or clears a manual spread override for a page and updates the spread plan.
+    pub fn set_spread_override(&mut self, page_index: usize, override_mode: PageSpreadOverride) {
+        if let Some(pages) = self.pages.as_ref()
+            && let Some(name) = pages.get(page_index)
+        {
+            if override_mode == PageSpreadOverride::Auto {
+                self.spread_overrides.remove(name);
+            } else {
+                self.spread_overrides.insert(name.clone(), override_mode);
+            }
+            self.rebuild_spread_plan();
+        }
+    }
+
+    /// Visual placement (left and right) for the active spread according to reading direction.
+    pub fn active_visual_spread(&self) -> VisualSpread {
+        layout::visual_spread(self.active_spread(), self.reading_direction)
     }
 
     #[cfg(test)]
@@ -837,6 +1241,45 @@ impl Reader {
             let current_h = page_w * h as f32 / w.max(1) as f32;
             return Some((width, current_h));
         }
+        if self.is_double_page_active() {
+            let vis = self.active_visual_spread();
+            if let (Some(left_idx), Some(right_idx)) = (vis.left_page, vis.right_page) {
+                let left_page = self.images.get(&left_idx)?;
+                let right_page = self.images.get(&right_idx)?;
+                let (left_display, right_display) = layout::spread_display_sizes(
+                    self.fit,
+                    self.zoom,
+                    Self::orig_of(left_page),
+                    Self::orig_of(right_page),
+                    layout::SPREAD_GAP,
+                    vp,
+                );
+                let spread_size = (
+                    left_display.0 + layout::SPREAD_GAP + right_display.0,
+                    left_display.1.max(right_display.1),
+                );
+                let max =
+                    layout::spread_max_offset(left_display, right_display, layout::SPREAD_GAP, vp);
+                if let Some(arrive) = self.arrive.take() {
+                    self.set_scroll(layout::arrival_offset(arrive, max));
+                }
+                self.off = layout::clamp_offset(self.off, spread_size, vp);
+                self.scroll_target = layout::clamp_offset(self.scroll_target, spread_size, vp);
+                return Some(spread_size);
+            } else {
+                let single_idx = vis.left_page.or(vis.right_page).unwrap_or(self.page);
+                let page = self.images.get(&single_idx)?;
+                let orig = Self::orig_of(page);
+                let display = layout::display_size(self.fit, self.zoom, orig, vp);
+                let max = layout::max_offset(display, vp);
+                if let Some(arrive) = self.arrive.take() {
+                    self.set_scroll(layout::arrival_offset(arrive, max));
+                }
+                self.off = layout::clamp_offset(self.off, display, vp);
+                self.scroll_target = layout::clamp_offset(self.scroll_target, display, vp);
+                return Some(display);
+            }
+        }
         let orig = Self::orig_of(self.current()?);
         let display = layout::display_size(self.fit, self.zoom, orig, vp);
         let max = layout::max_offset(display, vp);
@@ -870,6 +1313,9 @@ impl Reader {
         self.transition = None;
         if let Some(outgoing) = self.outgoing.take() {
             self.release(outgoing.image);
+            if let Some(sec) = outgoing.second {
+                self.release(sec.image);
+            }
         }
     }
 
@@ -882,17 +1328,83 @@ impl Reader {
     /// outgoing page from exactly where it is, so rapid turns stay smooth and cannot fall behind.
     pub fn begin_transition(&mut self, forward: bool, enabled: bool) {
         let vp = self.viewport;
+        if !enabled || vp.width < 1.0 || vp.height < 1.0 {
+            self.cancel_transition();
+            return;
+        }
+
+        let travel = if self.reading_direction.is_rtl() {
+            -motion::travel(forward)
+        } else {
+            motion::travel(forward)
+        };
+
+        if self.is_double_page_active() {
+            let vis = self.active_visual_spread();
+            if let (Some(left_idx), Some(right_idx)) = (vis.left_page, vis.right_page) {
+                let left_data = self
+                    .images
+                    .get(&left_idx)
+                    .map(|p| (p.image.clone(), Self::orig_of(p)));
+                let right_data = self
+                    .images
+                    .get(&right_idx)
+                    .map(|p| (p.image.clone(), Self::orig_of(p)));
+                let Some(((left_img, left_orig), (right_img, right_orig))) =
+                    left_data.zip(right_data)
+                else {
+                    self.cancel_transition();
+                    return;
+                };
+                let (left_display, right_display) = layout::spread_display_sizes(
+                    self.fit,
+                    self.zoom,
+                    left_orig,
+                    right_orig,
+                    layout::SPREAD_GAP,
+                    &vp,
+                );
+                let (left_pos, right_pos) = layout::spread_origins(
+                    self.off,
+                    left_display,
+                    right_display,
+                    layout::SPREAD_GAP,
+                    &vp,
+                );
+                let next = match self.transition {
+                    Some(running) => running.interrupted_by(travel),
+                    None => PageTransition::starting(travel),
+                };
+                if let Some(previous) = self.outgoing.take() {
+                    self.release(previous.image);
+                    if let Some(sec) = previous.second {
+                        self.release(sec.image);
+                    }
+                }
+                self.outgoing = Some(Outgoing {
+                    image: left_img,
+                    display: left_display,
+                    origin: left_pos,
+                    second: Some(OutgoingSecond {
+                        image: right_img,
+                        display: right_display,
+                        origin: right_pos,
+                    }),
+                });
+                self.transition = Some(next);
+                self.transition_viewport = vp;
+                return;
+            }
+        }
+
         let on_screen = self
             .current()
             .map(|page| (page.image.clone(), Self::orig_of(page)));
-        let Some((image, orig)) =
-            on_screen.filter(|_| enabled && vp.width >= 1.0 && vp.height >= 1.0)
-        else {
+        let Some((image, orig)) = on_screen else {
             self.cancel_transition();
             return;
         };
 
-        let travel = motion::travel(forward);
         let display = layout::display_size(self.fit, self.zoom, orig, &vp);
         let origin = layout::origin(self.off, display, &vp);
         let next = match self.transition {
@@ -901,11 +1413,15 @@ impl Reader {
         };
         if let Some(previous) = self.outgoing.take() {
             self.release(previous.image);
+            if let Some(sec) = previous.second {
+                self.release(sec.image);
+            }
         }
         self.outgoing = Some(Outgoing {
             image,
             display,
             origin,
+            second: None,
         });
         self.transition = Some(next);
         self.transition_viewport = vp;
@@ -933,12 +1449,26 @@ impl Reader {
         if let Some(mut transition) = self.transition {
             // The clock only runs once the new page can be shown, so a slow decode keeps the old
             // page on screen instead of showing a blank.
-            if self.current().is_some() {
+            let ready = if self.is_double_page_active() {
+                let vis = self.active_visual_spread();
+                if let (Some(l), Some(r)) = (vis.left_page, vis.right_page) {
+                    self.images.contains_key(&l) && self.images.contains_key(&r)
+                } else {
+                    let single = vis.left_page.or(vis.right_page).unwrap_or(self.page);
+                    self.images.contains_key(&single)
+                }
+            } else {
+                self.current().is_some()
+            };
+            if ready {
                 transition.advance(dt);
                 if transition.is_done() {
                     self.transition = None;
                     if let Some(outgoing) = self.outgoing.take() {
                         self.release(outgoing.image);
+                        if let Some(sec) = outgoing.second {
+                            self.release(sec.image);
+                        }
                     }
                 } else {
                     self.transition = Some(transition);
@@ -999,7 +1529,12 @@ impl Reader {
     /// Every texture this reader still owns, for freeing when the book closes.
     pub fn into_images(self) -> Vec<Arc<RenderImage>> {
         let mut images: Vec<_> = self.images.into_values().map(|page| page.image).collect();
-        images.extend(self.outgoing.map(|outgoing| outgoing.image));
+        if let Some(outgoing) = self.outgoing {
+            images.push(outgoing.image);
+            if let Some(sec) = outgoing.second {
+                images.push(sec.image);
+            }
+        }
         images.extend(self.released);
         images
     }
@@ -1025,6 +1560,8 @@ mod tests {
             added_at: 1,
             last_read: None,
             marks: BTreeMap::new(),
+            spread_overrides: BTreeMap::new(),
+            page_dimensions: BTreeMap::new(),
         };
         let settings = Settings {
             continuous: true,

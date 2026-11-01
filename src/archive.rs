@@ -308,6 +308,42 @@ pub fn read_page(path: &Path, kind: SourceKind, name: &str) -> Result<Vec<u8>> {
     }
 }
 
+/// Inspects the header of a single page in an archive or folder to extract (width, height)
+/// without decompressing or decoding full image pixel data.
+pub fn probe_page_dimensions(path: &Path, kind: SourceKind, name: &str) -> Result<(u32, u32)> {
+    match kind {
+        SourceKind::Folder => {
+            let full = path.join(name);
+            let file = File::open(&full).with_context(|| format!("opening {}", full.display()))?;
+            let mut buf = Vec::with_capacity(64 * 1024);
+            file.take(64 * 1024).read_to_end(&mut buf)?;
+            crate::imaging::probe_dimensions(&buf)
+        }
+        SourceKind::Archive => {
+            let format = detect_archive_format(path);
+            match format {
+                ArchiveFormat::Zip => {
+                    let mut archive = checkout_archive(path)?;
+                    let res = (|| -> Result<(u32, u32)> {
+                        let entry = archive
+                            .by_name(name)
+                            .with_context(|| format!("page {name} missing from archive"))?;
+                        let mut buf = Vec::with_capacity(64 * 1024);
+                        entry.take(64 * 1024).read_to_end(&mut buf)?;
+                        crate::imaging::probe_dimensions(&buf)
+                    })();
+                    checkin_archive(path.to_path_buf(), archive);
+                    res
+                }
+                ArchiveFormat::Rar => {
+                    let bytes = read_rar_page(path, name)?;
+                    crate::imaging::probe_dimensions(&bytes)
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

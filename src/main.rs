@@ -31,7 +31,7 @@ use gpui_kit::{
 #[cfg(test)]
 use yomu::layout;
 use yomu::{
-    layout::{Arrive, FitMode},
+    layout::{Arrive, FitMode, PageLayout, ReadingDirection},
     library::{self, BorderSize, CornerRounding, Settings, ThemeModePreference, ThumbnailSize},
     motion,
 };
@@ -935,6 +935,30 @@ impl Yomu {
             yomu_fit.update(cx, |this, cx| this.set_fit(mode, cx));
         };
 
+        let yomu_layout = yomu.clone();
+        let on_set_layout = move |layout: PageLayout, _: &mut Window, cx: &mut App| {
+            yomu_layout.update(cx, |this, cx| this.set_page_layout(layout, cx));
+        };
+
+        let yomu_direction = yomu.clone();
+        let on_set_direction = move |dir: ReadingDirection, _: &mut Window, cx: &mut App| {
+            yomu_direction.update(cx, |this, cx| this.set_reading_direction(dir, cx));
+        };
+
+        let yomu_cover = yomu.clone();
+        let on_toggle_cover = move |cover: bool, _: &mut Window, cx: &mut App| {
+            yomu_cover.update(cx, |this, cx| this.set_first_page_is_cover(cover, cx));
+        };
+
+        let yomu_override = yomu.clone();
+        let on_set_spread_override = move |override_mode: yomu::library::PageSpreadOverride,
+                                           _: &mut Window,
+                                           cx: &mut App| {
+            yomu_override.update(cx, |this, cx| {
+                this.set_page_spread_override(override_mode, cx)
+            });
+        };
+
         let yomu_prev = yomu.clone();
         let on_turn_prev = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
             yomu_prev.update(cx, |this, cx| {
@@ -1009,6 +1033,10 @@ impl Yomu {
             props,
             on_back,
             on_set_fit,
+            on_set_layout,
+            on_set_direction,
+            on_toggle_cover,
+            on_set_spread_override,
             on_turn_prev,
             on_turn_next,
             on_mouse_down,

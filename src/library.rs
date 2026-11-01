@@ -20,6 +20,38 @@ use crate::{
     util::{fnv1a, natural_cmp, now_secs},
 };
 
+pub use crate::layout::{
+    DEFAULT_SPREAD_RATIO_THRESHOLD, PageClassification, PageLayout, ReadingDirection,
+};
+
+/// User manual override for double-page spread classification on an individual image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PageSpreadOverride {
+    /// Follow automatic detection based on image aspect ratio and context.
+    #[default]
+    Auto,
+    /// Force this image to be a single-page image.
+    ForceSingle,
+    /// Force this image to be a double-page spread.
+    ForceSpread,
+}
+
+impl PageSpreadOverride {
+    pub const ALL: [PageSpreadOverride; 3] = [
+        PageSpreadOverride::Auto,
+        PageSpreadOverride::ForceSingle,
+        PageSpreadOverride::ForceSpread,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PageSpreadOverride::Auto => "Auto",
+            PageSpreadOverride::ForceSingle => "Force Single Page",
+            PageSpreadOverride::ForceSpread => "Force Double Spread",
+        }
+    }
+}
+
 const MAX_SCAN_DEPTH: usize = 6;
 
 /// Where yomu keeps its data (`$XDG_DATA_HOME/yomu`, or `$YOMU_DATA_DIR` if set).
@@ -205,6 +237,12 @@ pub struct Book {
     /// Vim-style marks: letter to zero-based page index.
     #[serde(default)]
     pub marks: BTreeMap<String, usize>,
+    /// Manual overrides for double-page spread classification: archive entry name -> override.
+    #[serde(default)]
+    pub spread_overrides: BTreeMap<String, PageSpreadOverride>,
+    /// Cached dimensions for archive entries: archive entry name -> (width, height).
+    #[serde(default)]
+    pub page_dimensions: BTreeMap<String, (u32, u32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,6 +508,11 @@ fn default_color_scheme() -> String {
     "Catppuccin".to_string()
 }
 
+#[allow(dead_code)]
+fn default_true() -> bool {
+    true
+}
+
 /// Library sort modes for All Manga and Downloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SortBy {
@@ -675,6 +718,22 @@ pub struct Settings {
     /// Opacity of the window background, `OPACITY_MIN..=OPACITY_MAX`. Raised widget surfaces use
     /// a small opacity lift to stay distinct; page images, covers, and text remain opaque.
     pub opacity: f32,
+    /// Reader page display layout: single page or dual-page spread.
+    #[serde(default)]
+    pub page_layout: PageLayout,
+    /// Reading progression direction: right-to-left (manga) or left-to-right (western comics).
+    #[serde(default)]
+    pub reading_direction: ReadingDirection,
+    /// In dual-page mode, display the first page as an isolated single cover spread.
+    #[serde(default = "default_true")]
+    pub first_page_is_cover: bool,
+    /// Aspect ratio threshold (width / height) to automatically detect double-page spreads.
+    #[serde(default = "default_spread_ratio_threshold")]
+    pub spread_ratio_threshold: f32,
+}
+
+pub fn default_spread_ratio_threshold() -> f32 {
+    DEFAULT_SPREAD_RATIO_THRESHOLD
 }
 
 impl Default for Settings {
@@ -699,6 +758,10 @@ impl Default for Settings {
             sort_by: SortBy::Default,
             sort_direction: SortDirection::Ascending,
             opacity: OPACITY_MAX,
+            page_layout: PageLayout::Single,
+            reading_direction: ReadingDirection::LeftToRight,
+            first_page_is_cover: true,
+            spread_ratio_threshold: DEFAULT_SPREAD_RATIO_THRESHOLD,
         }
     }
 }
@@ -813,6 +876,35 @@ impl Settings {
         }
         if let Some(opacity) = object.get("opacity").and_then(|v| v.as_f64()) {
             settings.set_opacity(opacity as f32);
+        }
+        if let Some(page_layout) = object
+            .get("page_layout")
+            .and_then(|v| serde_json::from_value::<PageLayout>(v.clone()).ok())
+        {
+            settings.page_layout = page_layout;
+        }
+        if let Some(reading_direction) = object
+            .get("reading_direction")
+            .and_then(|v| serde_json::from_value::<ReadingDirection>(v.clone()).ok())
+        {
+            settings.reading_direction = reading_direction;
+        } else if let Some(rtl) = object.get("rtl").and_then(|v| v.as_bool()) {
+            settings.reading_direction = if rtl {
+                ReadingDirection::RightToLeft
+            } else {
+                ReadingDirection::LeftToRight
+            };
+        }
+        if let Some(first_page_is_cover) =
+            object.get("first_page_is_cover").and_then(|v| v.as_bool())
+        {
+            settings.first_page_is_cover = first_page_is_cover;
+        }
+        if let Some(spread_ratio_threshold) = object
+            .get("spread_ratio_threshold")
+            .and_then(|v| v.as_f64())
+        {
+            settings.spread_ratio_threshold = (spread_ratio_threshold as f32).clamp(1.0, 3.0);
         }
         settings
     }
@@ -1338,6 +1430,8 @@ fn build_book(
         added_at: now_secs(),
         last_read: None,
         marks: BTreeMap::new(),
+        spread_overrides: BTreeMap::new(),
+        page_dimensions: BTreeMap::new(),
     })
 }
 
@@ -1470,6 +1564,8 @@ mod tests {
             added_at: 1,
             last_read: None,
             marks: BTreeMap::new(),
+            spread_overrides: BTreeMap::new(),
+            page_dimensions: BTreeMap::new(),
         };
         assert_eq!(book.progress(), 0.0);
         book.opened = true;
@@ -1519,6 +1615,8 @@ mod tests {
             added_at: 1,
             last_read: None,
             marks: BTreeMap::new(),
+            spread_overrides: BTreeMap::new(),
+            page_dimensions: BTreeMap::new(),
         }
     }
 
@@ -1605,6 +1703,108 @@ mod tests {
         assert_eq!(
             *Library::load(&dirs).unwrap().settings(),
             Settings::default()
+        );
+    }
+
+    #[test]
+    fn layout_and_direction_settings_persistence_and_fallback() {
+        let tmp = temp_dir("layout_settings");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+
+        // 1. Explicit modern values
+        let json = r#"{"books":[],"settings":{"page_layout":"Double","reading_direction":"LeftToRight","first_page_is_cover":false}}"#;
+        fs::write(dirs.library_file(), json).unwrap();
+        let loaded = Library::load(&dirs).unwrap();
+        assert_eq!(loaded.settings().page_layout, PageLayout::Double);
+        assert_eq!(
+            loaded.settings().reading_direction,
+            ReadingDirection::LeftToRight
+        );
+        assert!(!loaded.settings().first_page_is_cover);
+
+        // 2. Legacy "rtl": true / false fallback
+        let json_legacy_rtl = r#"{"books":[],"settings":{"rtl":false}}"#;
+        fs::write(dirs.library_file(), json_legacy_rtl).unwrap();
+        let loaded_legacy = Library::load(&dirs).unwrap();
+        assert_eq!(
+            loaded_legacy.settings().reading_direction,
+            ReadingDirection::LeftToRight
+        );
+
+        let json_legacy_rtl_true = r#"{"books":[],"settings":{"rtl":true}}"#;
+        fs::write(dirs.library_file(), json_legacy_rtl_true).unwrap();
+        let loaded_legacy_true = Library::load(&dirs).unwrap();
+        assert_eq!(
+            loaded_legacy_true.settings().reading_direction,
+            ReadingDirection::RightToLeft
+        );
+
+        // 3. Round-trip through JSON
+        let settings = Settings {
+            page_layout: PageLayout::Double,
+            reading_direction: ReadingDirection::LeftToRight,
+            first_page_is_cover: false,
+            spread_ratio_threshold: 1.35,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&settings).unwrap();
+        let parsed = Settings::from_value(&value);
+        assert_eq!(parsed.page_layout, PageLayout::Double);
+        assert_eq!(parsed.reading_direction, ReadingDirection::LeftToRight);
+        assert!(!parsed.first_page_is_cover);
+        assert_eq!(parsed.spread_ratio_threshold, 1.35);
+    }
+
+    #[test]
+    fn book_spread_overrides_and_dimensions_persistence() {
+        let tmp = temp_dir("book_spreads");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let mut lib = Library::default();
+
+        let mut book = Book {
+            id: "book-1".into(),
+            title: "Test Book".into(),
+            series: None,
+            path: tmp.join("test.cbz"),
+            kind: SourceKind::Archive,
+            page_count: 5,
+            current_page: 0,
+            opened: true,
+            added_at: 100,
+            last_read: None,
+            marks: BTreeMap::new(),
+            spread_overrides: BTreeMap::new(),
+            page_dimensions: BTreeMap::new(),
+        };
+        book.spread_overrides
+            .insert("page_02.jpg".into(), PageSpreadOverride::ForceSpread);
+        book.spread_overrides
+            .insert("page_03.jpg".into(), PageSpreadOverride::ForceSingle);
+        book.page_dimensions
+            .insert("page_01.jpg".into(), (1000, 1500));
+        book.page_dimensions
+            .insert("page_02.jpg".into(), (2000, 1500));
+
+        lib.add(book);
+        lib.save(&dirs).unwrap();
+
+        let loaded = Library::load(&dirs).unwrap();
+        let loaded_book = loaded.get("book-1").unwrap();
+        assert_eq!(
+            loaded_book.spread_overrides.get("page_02.jpg"),
+            Some(&PageSpreadOverride::ForceSpread)
+        );
+        assert_eq!(
+            loaded_book.spread_overrides.get("page_03.jpg"),
+            Some(&PageSpreadOverride::ForceSingle)
+        );
+        assert_eq!(
+            loaded_book.page_dimensions.get("page_01.jpg"),
+            Some(&(1000, 1500))
+        );
+        assert_eq!(
+            loaded_book.page_dimensions.get("page_02.jpg"),
+            Some(&(2000, 1500))
         );
     }
 

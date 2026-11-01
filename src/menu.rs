@@ -337,6 +337,8 @@ mod tests {
             added_at: 1_700_000_000,
             last_read: None,
             marks: BTreeMap::new(),
+            spread_overrides: BTreeMap::new(),
+            page_dimensions: BTreeMap::new(),
         };
         match status {
             ReadStatus::Unread => {}

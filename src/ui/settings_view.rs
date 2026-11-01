@@ -20,7 +20,10 @@ use super::components::{
 };
 use super::overlays::SettingsTab;
 use super::theme::{UiColors, is_standalone_scheme};
-use crate::library::{BorderSize, CornerRounding, Settings, ThemeModePreference, ThumbnailSize};
+use crate::library::{
+    BorderSize, CornerRounding, PageLayout, ReadingDirection, Settings, ThemeModePreference,
+    ThumbnailSize,
+};
 
 pub struct SettingsViewProps<'a> {
     pub scroll_handle: &'a ScrollHandle,
@@ -39,6 +42,10 @@ pub fn render_settings_view(
     props: SettingsViewProps,
     on_select_tab: impl Fn(SettingsTab, &mut Window, &mut App) + 'static,
     on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_set_page_layout: impl Fn(PageLayout, &mut Window, &mut App) + 'static,
+    on_set_reading_direction: impl Fn(ReadingDirection, &mut Window, &mut App) + 'static,
+    on_toggle_first_page_is_cover: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_set_spread_ratio_threshold: impl Fn(f32, &mut Window, &mut App) + 'static,
     on_toggle_continuous: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_webcomics: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
@@ -56,6 +63,8 @@ pub fn render_settings_view(
 ) -> AnyElement {
     let on_select_tab = std::rc::Rc::new(on_select_tab);
     let on_close = std::rc::Rc::new(on_close);
+    let on_set_page_layout = std::rc::Rc::new(on_set_page_layout);
+    let on_set_reading_direction = std::rc::Rc::new(on_set_reading_direction);
     let on_set_theme_mode = std::rc::Rc::new(on_set_theme_mode);
     let on_set_color_scheme = std::rc::Rc::new(on_set_color_scheme);
     let on_set_thumbnail_size = std::rc::Rc::new(on_set_thumbnail_size);
@@ -270,6 +279,10 @@ pub fn render_settings_view(
                             props.settings,
                             props.system_reduced_motion,
                             colors,
+                            on_set_page_layout,
+                            on_set_reading_direction,
+                            on_toggle_first_page_is_cover,
+                            on_set_spread_ratio_threshold,
                             on_toggle_continuous,
                             on_toggle_webcomics,
                             on_toggle_disable_animations,
@@ -648,13 +661,107 @@ fn render_tab_reader(
     settings: &Settings,
     system_reduced_motion: bool,
     colors: UiColors,
+    on_set_page_layout: std::rc::Rc<dyn Fn(PageLayout, &mut Window, &mut App)>,
+    on_set_reading_direction: std::rc::Rc<dyn Fn(ReadingDirection, &mut Window, &mut App)>,
+    on_toggle_first_page_is_cover: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_set_spread_ratio_threshold: impl Fn(f32, &mut Window, &mut App) + 'static,
     on_toggle_continuous: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_webcomics: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_disable_animations: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_remember_zoom: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_vim_mode: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> Div {
+    let on_set_spread_ratio = std::rc::Rc::new(on_set_spread_ratio_threshold);
     div().flex().flex_col().gap_4().child(
+        settings_card(colors)
+            .child(
+                settings_row(
+                    "Reading Layout",
+                    "Choose between single-page display and dual-page side-by-side spreads.",
+                    colors,
+                )
+                .child(macos_dropdown_button(
+                    "layout-dropdown-settings",
+                    settings.page_layout.label(),
+                    PageLayout::ALL
+                        .into_iter()
+                        .map(|l| (l.label().to_string(), l, l == settings.page_layout))
+                        .collect(),
+                    on_set_page_layout,
+                )),
+            )
+            .child(settings_divider(colors))
+            .child(
+                settings_row(
+                    "Reading Direction",
+                    "Right-to-left for standard manga; left-to-right for western comics.",
+                    colors,
+                )
+                .child(macos_dropdown_button(
+                    "direction-dropdown-settings",
+                    settings.reading_direction.label(),
+                    ReadingDirection::ALL
+                        .into_iter()
+                        .map(|d| (d.label().to_string(), d, d == settings.reading_direction))
+                        .collect(),
+                    on_set_reading_direction,
+                )),
+            )
+            .child(settings_divider(colors))
+            .child(
+                settings_row(
+                    "First Page as Cover",
+                    "Display the first page as an isolated single cover spread before pairing begins.",
+                    colors,
+                )
+                .child(
+                    div().cursor_pointer().child(
+                        Switch::new("first-page-cover-switch")
+                            .accessibility_label("First page as cover")
+                            .small()
+                            .checked(settings.first_page_is_cover)
+                            .on_click(move |val, window, cx| {
+                                on_toggle_first_page_is_cover(*val, window, cx)
+                            }),
+                    ),
+                ),
+            )
+            .child(settings_divider(colors))
+            .child(
+                settings_row(
+                    "Spread Detection Ratio",
+                    "Aspect ratio threshold (W/H) to automatically detect single-image spreads.",
+                    colors,
+                )
+                .child({
+                    let ratio_label = if (settings.spread_ratio_threshold - 1.25f32).abs() < 1e-3 {
+                        "1.25 (Default)".to_string()
+                    } else {
+                        format!("{:.2}", settings.spread_ratio_threshold)
+                    };
+                    macos_dropdown_button(
+                        "spread-ratio-dropdown-settings",
+                        &ratio_label,
+                        [1.15f32, 1.20f32, 1.25f32, 1.30f32, 1.40f32]
+                            .into_iter()
+                            .map(|r| {
+                                (
+                                    if (r - 1.25f32).abs() < 1e-3 {
+                                        format!("{r:.2} (Default)")
+                                    } else {
+                                        format!("{r:.2}")
+                                    },
+                                    r,
+                                    (r - settings.spread_ratio_threshold).abs() < 1e-3,
+                                )
+                            })
+                            .collect(),
+                        on_set_spread_ratio,
+                    )
+                }),
+            ),
+    )
+    .child(
         settings_card(colors)
             .child(
                 settings_row(

@@ -135,19 +135,28 @@ This document outlines prioritized future work, planned features, and tracked te
 
 ## 📖 Phase 5: Feature Expansion
 
-### 14. Dual-Page Spread Reading Mode
-- **Goal:** Display two portrait pages side-by-side to replicate physical manga reading.
-- **Behavior:**
-  - Automatic single-page fallback for wide landscape pages (spread covers).
-  - Respect reading direction (Right-to-Left pairs right page first; Left-to-Right pairs left page first).
-  - Toggle via reader key `d` and `:spread [on|off]` command, with persistence in `Settings`.
+### 14. Dual-Page Spread Reading Mode & Mixed-Source Support (Completed)
+- **Goal:** Display two portrait pages side-by-side to replicate physical manga and western comic reading, with intelligent support for mixed-source archives containing single-image double-page spreads.
+- **Status:** Completed (Phases 4.2 & 4.2.1).
+  - Implemented `PageLayout::Single` and `PageLayout::Double` with responsive portrait fallback (`is_dual_spread_effective`).
+  - Implemented `ReadingDirection::RightToLeft` (Manga) and `ReadingDirection::LeftToRight` (Western comics) with directional arrow, click zone, and slide travel inversion.
+  - Added `first_page_is_cover` toggle to isolate page 0 before pairs begin.
+  - Automatic detection of extra-wide single-image spreads based on aspect ratio threshold (`DEFAULT_SPREAD_RATIO_THRESHOLD = 1.25`, configurable in Settings) and comic context (portrait vs landscape comic detection).
+  - Header inspection without full decompression via `imaging::probe_dimensions` and `archive::probe_page_dimensions`.
+  - Manual spread classification overrides per page (`Auto`, `ForceSingle`, `ForceSpread`) persisted in `Book.spread_overrides` using stable archive entry identifiers.
+  - Precomputed `SpreadPlan` cached on `Reader` providing $O(1)$ spread lookups without per-frame allocations.
+  - Single-image spreads occupy a complete visual spread alone and are never paired with adjacent pages; two normal pages form a spread; isolated normal pages remain alone.
+  - Spread-aware navigation, prefetching, and eviction keep-window protection.
+  - Autohiding header layout dropdown toggle and Settings Reader tab controls.
+  - Keybinding `d` toggles double-page spread mode; keybinding `s` cycles current page spread override.
 
-### 15. Library Sorting Options
+### 15. Library Sorting Options (Completed)
 - **Goal:** Allow users to sort library cards and list rows beyond the default import order.
-- **Criteria:**
-  - Sort by: Title (alphabetical/natural), Last Read (recency), Date Added (import timestamp), Page Count, Reading Progress.
-  - Direction: Ascending / Descending toggle.
-  - Persist active sort preference in `library.json` without altering source file order.
+- **Status:** Completed.
+  - Modes: Title (A–Z / Z–A natural sort), Date Added (Newest / Oldest with backward-compatible mtime backfill), Last Read (Recently Read / Least Recently Read), Reading Progress (Highest / Lowest), and Default import order.
+  - Direction: Ascending / Descending toggle with contextual labels.
+  - Toolbar dropdown menu with checkmarks and section separators.
+  - Settings persistence with lenient fallback and full preservation of underlying library order.
 
 ### 16. CB7 / 7z Archive Support
 - **Goal:** Support `.cb7` and `.7z` comic archives alongside CBZ, CBR, ZIP, and RAR.
