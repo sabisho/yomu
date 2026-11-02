@@ -61,6 +61,7 @@ pub enum SettingsTab {
     Reader,
     Shortcuts,
     Advanced,
+    About,
 }
 
 impl SettingsTab {
@@ -72,6 +73,7 @@ impl SettingsTab {
             2 => Self::Reader,
             3 => Self::Shortcuts,
             4 => Self::Advanced,
+            5 => Self::About,
             _ => Self::General,
         }
     }
@@ -84,6 +86,7 @@ impl SettingsTab {
             Self::Reader => 2,
             Self::Shortcuts => 3,
             Self::Advanced => 4,
+            Self::About => 5,
         }
     }
 
@@ -94,6 +97,7 @@ impl SettingsTab {
             Self::Reader => "Reader",
             Self::Shortcuts => "Shortcuts",
             Self::Advanced => "Advanced",
+            Self::About => "About",
         }
     }
 }

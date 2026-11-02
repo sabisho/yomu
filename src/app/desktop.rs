@@ -3,7 +3,10 @@
 #![forbid(unsafe_code)]
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+use gpui_kit::RenderImage;
+use image::Frame;
 
 /// Embedded application logo (PNG format).
 pub const LOGO_PNG: &[u8] = include_bytes!("../../assets/logo.png");
@@ -30,6 +33,20 @@ pub fn app_icon() -> Option<Arc<image::RgbaImage>> {
     let img = image::load_from_memory(LOGO_PNG).ok()?.to_rgba8();
     let resized = image::imageops::resize(&img, 128, 128, image::imageops::FilterType::Lanczos3);
     Some(Arc::new(resized))
+}
+
+static APP_LOGO_RENDER_IMAGE: OnceLock<Arc<RenderImage>> = OnceLock::new();
+
+/// Returns the cached RenderImage for the embedded application logo.
+pub fn app_logo_image() -> Arc<RenderImage> {
+    APP_LOGO_RENDER_IMAGE
+        .get_or_init(|| {
+            let img = image::load_from_memory(LOGO_PNG)
+                .expect("embedded logo.png must be valid")
+                .to_rgba8();
+            Arc::new(RenderImage::new(vec![Frame::new(img)]))
+        })
+        .clone()
 }
 
 /// Installs desktop entry and application icons to the specified data directory (typically `$XDG_DATA_HOME`).
@@ -161,5 +178,12 @@ mod tests {
         let img = icon.unwrap();
         assert_eq!(img.width(), 128);
         assert_eq!(img.height(), 128);
+    }
+
+    #[test]
+    fn test_app_logo_image_loads_and_is_cached() {
+        let img1 = app_logo_image();
+        let img2 = app_logo_image();
+        assert_eq!(img1, img2);
     }
 }

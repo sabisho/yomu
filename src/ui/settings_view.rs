@@ -17,7 +17,7 @@ use gpui_kit::component::{Icon, Side, Sizable, Size, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Anchor, AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, Pixels,
-    ScrollHandle, SharedString, Styled, Window, div, px,
+    ScrollHandle, SharedString, Styled, Window, div, img, px,
 };
 
 use super::components::{
@@ -78,12 +78,12 @@ pub fn render_settings_view(
         (SettingsTab::Reader, IconName::BookOpen),
         (SettingsTab::Shortcuts, IconName::Keyboard),
         (SettingsTab::Advanced, IconName::Database),
+        (SettingsTab::About, IconName::Info),
     ];
 
     div()
         .size_full()
         .rounded(props.radius)
-        .overflow_hidden()
         .flex()
         .flex_row()
         .items_stretch()
@@ -91,6 +91,11 @@ pub fn render_settings_view(
         // Left Native Settings Navigation Sidebar
         .child(
             Sidebar::new("settings-sidebar")
+                .rounded_l(props.radius)
+                .border_l_1()
+                .border_t_1()
+                .border_b_1()
+                .border_color(colors.border)
                 .side(Side::Left)
                 .w(px(200.))
                 .h_full()
@@ -169,6 +174,7 @@ pub fn render_settings_view(
                             on_reset_settings,
                             on_reset_all_data,
                         ),
+                        SettingsTab::About => render_tab_about(colors),
                     };
 
                     let duration = std::time::Duration::from_millis(140);
@@ -823,5 +829,171 @@ fn render_tab_advanced(
                             .on_click(on_reset_all_data),
                     ),
                 ),
+        )
+}
+
+fn tech_col(label: &'static str, value: impl Into<SharedString>, colors: UiColors) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(
+            Label::new(label)
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(colors.muted),
+        )
+        .child(
+            Label::new(value)
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors.foreground),
+        )
+}
+
+fn about_action_row(label: &'static str, action: impl IntoElement, colors: UiColors) -> Div {
+    div()
+        .w_full()
+        .min_h(px(32.))
+        .px_4()
+        .py_1()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .child(
+            Label::new(label)
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(colors.muted),
+        )
+        .child(action)
+}
+
+fn render_tab_about(colors: UiColors) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        // 1. Application Identity
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .child(
+                    div()
+                        .size(px(48.))
+                        .rounded(px(10.))
+                        .overflow_hidden()
+                        .child(
+                            img(crate::app::desktop::app_logo_image())
+                                .size_full()
+                                .object_fit(gpui_kit::ObjectFit::Contain),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Label::new("Yomu")
+                                .text_base()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(colors.foreground),
+                        )
+                        .child(Tag::secondary().child(format!("v{}", env!("CARGO_PKG_VERSION")))),
+                )
+                .child(
+                    Label::new("Manga & Comic Reader")
+                        .text_xs()
+                        .text_color(colors.muted),
+                ),
+        )
+        // 2. Subtle Divider
+        .child(settings_divider(colors))
+        // 3, 4 & 5. Compact Technology Information, Developer Links & License
+        .child(
+            settings_card(colors)
+                .child(
+                    div()
+                        .w_full()
+                        .min_h(px(28.))
+                        .px_4()
+                        .py_1()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_4()
+                        .child(tech_col("Programming Language", "Rust", colors))
+                        .child(Separator::vertical().color(colors.border))
+                        .child(tech_col("UI Framework", "GPUI", colors)),
+                )
+                .child(settings_divider(colors))
+                .child(
+                    div()
+                        .w_full()
+                        .min_h(px(28.))
+                        .px_4()
+                        .py_1()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_4()
+                        .child(tech_col("Component Toolkit", "GPUI Kit", colors))
+                        .child(Separator::vertical().color(colors.border))
+                        .child(tech_col(
+                            "Application Type",
+                            "Native Desktop Application",
+                            colors,
+                        )),
+                )
+                .child(settings_divider(colors))
+                .child(about_action_row(
+                    "Developer",
+                    Button::new("about-author-link-btn")
+                        .secondary()
+                        .outline()
+                        .icon(IconName::Github)
+                        .label("sabisho")
+                        .small()
+                        .rounded(ButtonRounded::Size(px(6.)))
+                        .tooltip("Open GitHub profile")
+                        .on_click(|_, _, cx| {
+                            cx.open_url("https://github.com/sabisho");
+                        }),
+                    colors,
+                ))
+                .child(settings_divider(colors))
+                .child(about_action_row(
+                    "Repository",
+                    Button::new("about-repo-link-btn")
+                        .secondary()
+                        .outline()
+                        .icon(IconName::ExternalLink)
+                        .label("sabisho/yomu")
+                        .small()
+                        .rounded(ButtonRounded::Size(px(6.)))
+                        .tooltip("Open GitHub repository")
+                        .on_click(|_, _, cx| {
+                            cx.open_url("https://github.com/sabisho/yomu");
+                        }),
+                    colors,
+                ))
+                .child(settings_divider(colors))
+                .child(about_action_row(
+                    "License",
+                    Tag::secondary().child("MIT License"),
+                    colors,
+                )),
         )
 }

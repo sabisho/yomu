@@ -3,7 +3,9 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenuItem};
+use gpui_kit::component::sidebar::{
+    Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
+};
 use gpui_kit::component::{Collapsible, Icon, Side, h_flex, v_flex};
 use gpui_kit::gpui::Anchor;
 use gpui_kit::prelude::*;
@@ -111,37 +113,47 @@ pub fn render_sidebar(
             SidebarGroup::new("LIBRARY")
                 .collapsed(props.collapsed)
                 .child(
-                    SidebarMenuItem::new("Continue Reading")
-                        .icon(Icon::new(IconName::BookOpen).size(px(16.)))
-                        .active(props.current_section == SidebarSection::ContinueReading)
-                        .on_click({
-                            let on_select = on_select.clone();
-                            move |_, window, cx| {
-                                on_select(SidebarSection::ContinueReading, window, cx)
-                            }
-                        })
-                        .when(props.continue_reading_count > 0, |this| {
-                            let count = props.continue_reading_count;
-                            let is_active =
-                                props.current_section == SidebarSection::ContinueReading;
-                            let radius = props.radius;
-                            this.suffix(move |_, _| stat_badge(count, is_active, colors, radius))
-                        }),
-                )
-                .child(
-                    SidebarMenuItem::new("All Manga")
-                        .icon(Icon::new(IconName::LayoutGrid).size(px(16.)))
-                        .active(props.current_section == SidebarSection::AllManga)
-                        .on_click({
-                            let on_select = on_select.clone();
-                            move |_, window, cx| on_select(SidebarSection::AllManga, window, cx)
-                        })
-                        .when(props.all_manga_count > 0, |this| {
-                            let count = props.all_manga_count;
-                            let is_active = props.current_section == SidebarSection::AllManga;
-                            let radius = props.radius;
-                            this.suffix(move |_, _| stat_badge(count, is_active, colors, radius))
-                        }),
+                    SidebarMenu::new()
+                        .child(
+                            SidebarMenuItem::new("Continue Reading")
+                                .icon(Icon::new(IconName::BookOpen).size(px(16.)))
+                                .active(props.current_section == SidebarSection::ContinueReading)
+                                .on_click({
+                                    let on_select = on_select.clone();
+                                    move |_, window, cx| {
+                                        on_select(SidebarSection::ContinueReading, window, cx)
+                                    }
+                                })
+                                .when(props.continue_reading_count > 0, |this| {
+                                    let count = props.continue_reading_count;
+                                    let is_active =
+                                        props.current_section == SidebarSection::ContinueReading;
+                                    let radius = props.radius;
+                                    this.suffix(move |_, _| {
+                                        stat_badge(count, is_active, colors, radius)
+                                    })
+                                }),
+                        )
+                        .child(
+                            SidebarMenuItem::new("All Manga")
+                                .icon(Icon::new(IconName::LayoutGrid).size(px(16.)))
+                                .active(props.current_section == SidebarSection::AllManga)
+                                .on_click({
+                                    let on_select = on_select.clone();
+                                    move |_, window, cx| {
+                                        on_select(SidebarSection::AllManga, window, cx)
+                                    }
+                                })
+                                .when(props.all_manga_count > 0, |this| {
+                                    let count = props.all_manga_count;
+                                    let is_active =
+                                        props.current_section == SidebarSection::AllManga;
+                                    let radius = props.radius;
+                                    this.suffix(move |_, _| {
+                                        stat_badge(count, is_active, colors, radius)
+                                    })
+                                }),
+                        ),
                 ),
         )
         .footer({

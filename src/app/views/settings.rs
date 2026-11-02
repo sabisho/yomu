@@ -1,5 +1,6 @@
 //! Settings dialog view presentation adapter and preferences wiring.
 
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Window, div, px};
 
@@ -24,7 +25,7 @@ impl Yomu {
             cache_size_str: format_size(cache_bytes),
             vim_mode: self.is_vim_enabled(),
             colors: self.colors,
-            radius: px(self.radius_xl_px()),
+            radius: cx.theme().radius_lg,
         };
 
         let view = ui::settings_view::render_settings_view(

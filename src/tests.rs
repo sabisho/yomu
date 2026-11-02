@@ -5875,6 +5875,7 @@ fn regression_phase5_settings_native_sidebar_navigation_and_tabs(cx: &mut TestAp
         ui::overlays::SettingsTab::Shortcuts,
         ui::overlays::SettingsTab::Advanced,
         ui::overlays::SettingsTab::General,
+        ui::overlays::SettingsTab::About,
     ];
 
     for tab in tabs {
@@ -5895,6 +5896,47 @@ fn regression_phase5_settings_native_sidebar_navigation_and_tabs(cx: &mut TestAp
     view.read_with(cx, |this, _| {
         assert!(this.overlay.is_none());
     });
+}
+
+#[gpui_kit::test]
+fn test_settings_about_tab_metadata_and_rendering(cx: &mut TestAppContext) {
+    let fx = fixture("settings-about-tab");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Verify tab metadata invariants
+    assert_eq!(ui::overlays::SettingsTab::About.label(), "About");
+    assert_eq!(ui::overlays::SettingsTab::About.to_index(), 5);
+    assert_eq!(
+        ui::overlays::SettingsTab::from_index(5),
+        ui::overlays::SettingsTab::About
+    );
+
+    // 2. Open settings and select the About tab
+    cx.simulate_keystrokes("ctrl-,");
+    assert_eq!(overlay_kind(&view, cx), "settings");
+
+    view.update_in(cx, |this, window, cx| {
+        this.settings_tab = ui::overlays::SettingsTab::About;
+        let content = this.render_settings_content(window, cx);
+        drop(content);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.settings_tab, ui::overlays::SettingsTab::About);
+    });
+
+    // 3. Verify application logo render image is available
+    let logo = app::desktop::app_logo_image();
+    assert_eq!(logo, app::desktop::app_logo_image());
+
+    // 4. Verify version constant is dynamically available
+    assert!(!env!("CARGO_PKG_VERSION").is_empty());
+
+    // 5. Dismiss dialog
+    cx.simulate_keystrokes("escape");
+    assert_eq!(overlay_kind(&view, cx), "none");
 }
 
 #[gpui_kit::test]
