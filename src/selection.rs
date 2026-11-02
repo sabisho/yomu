@@ -65,6 +65,12 @@ impl Selection {
         self.anchor = order.first().cloned();
     }
 
+    /// Whether every item in the given order is selected.
+    /// Returns false if `order` is empty.
+    pub fn is_all_selected(&self, order: &[String]) -> bool {
+        !order.is_empty() && order.iter().all(|id| self.ids.contains(id))
+    }
+
     /// Select everything between the anchor and `id` (inclusive). Without an anchor (or if the
     /// anchor is gone) this just selects `id`. `extend` keeps the existing selection and adds the
     /// range; otherwise the range replaces it. The anchor stays put, like in a file manager.
@@ -236,5 +242,41 @@ mod tests {
             selection.is_empty(),
             "a range to a book that does not exist selects nothing"
         );
+    }
+
+    #[test]
+    fn is_all_selected_reflects_actual_scope() {
+        let items = order(); // ["a", "b", "c", "d", "e"]
+        let mut selection = Selection::new();
+
+        // Empty selection: false
+        assert!(!selection.is_all_selected(&items));
+        assert!(!selection.is_all_selected(&[]));
+
+        // Partial selection: false
+        selection.toggle("a");
+        selection.toggle("b");
+        assert!(!selection.is_all_selected(&items));
+
+        // Full selection: true
+        selection.select_all(&items);
+        assert!(selection.is_all_selected(&items));
+
+        // Deselect one: false
+        selection.toggle("c");
+        assert!(!selection.is_all_selected(&items));
+
+        // Subscope matching selected items: true
+        let sub = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+        ];
+        assert!(selection.is_all_selected(&sub));
+
+        // Clear: false
+        selection.clear();
+        assert!(!selection.is_all_selected(&items));
     }
 }

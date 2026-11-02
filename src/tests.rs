@@ -156,6 +156,14 @@ fn launch<'a>(
         gpui_kit::component::Root::new(yomu, window, cx)
     });
     let yomu = yomu_cell.borrow().as_ref().unwrap().clone();
+    yomu.update(cx, |this, cx| {
+        this.navigate_to(ui::sidebar::MainView::AllManga, cx);
+        this.nav_history = vec![NavDestination::Section(
+            ui::sidebar::SidebarSection::AllManga,
+        )];
+        this.nav_history_idx = 0;
+    });
+    cx.run_until_parked();
     (yomu, cx)
 }
 
@@ -179,7 +187,6 @@ fn overlay_kind(view: &Entity<Yomu>, cx: &mut VisualTestContext) -> &'static str
         Some(Overlay::Confirm(_)) => "confirm",
         Some(Overlay::Properties(_)) => "properties",
         Some(Overlay::Series(_)) => "series",
-        Some(Overlay::Collection(_)) => "collection",
         Some(Overlay::Settings) => "settings",
     })
 }
@@ -3140,21 +3147,29 @@ fn test_contextual_toolbar_mode_transitions(cx: &mut TestAppContext) {
     let (view, cx) = launch(&fx, cx);
 
     // 1. Browsing mode: no selection
-    assert!(cx.debug_bounds("add-files").is_some());
+    assert!(cx.debug_bounds("view-mode-toggle").is_some());
+    assert!(cx.debug_bounds("toolbar-sort").is_some());
+    assert!(cx.debug_bounds("add-files").is_some()); // sidebar import button
     assert!(cx.debug_bounds("select-all").is_none());
+    assert!(cx.debug_bounds("unselect-all").is_none());
     assert!(cx.debug_bounds("select-remove").is_none());
     assert!(cx.debug_bounds("select-cancel").is_none());
 
-    // 2. Transition to selection mode: select card 0
+    // 2. Transition to partial selection mode: select card 0
     ctrl_click(cx, 0);
     cx.run_until_parked();
 
-    // Browsing controls are replaced by selection actions in the single top toolbar
+    // Toolbar browsing controls are replaced by selection actions
     assert!(
-        cx.debug_bounds("add-files").is_none(),
-        "import button is replaced in selection mode"
+        cx.debug_bounds("view-mode-toggle").is_none(),
+        "view mode toggle is replaced in selection mode"
+    );
+    assert!(
+        cx.debug_bounds("toolbar-sort").is_none(),
+        "sort button is replaced in selection mode"
     );
     assert!(cx.debug_bounds("select-all").is_some());
+    assert!(cx.debug_bounds("unselect-all").is_none());
     assert!(cx.debug_bounds("select-remove").is_some());
     let cancel = cx
         .debug_bounds("select-cancel")
@@ -3166,11 +3181,42 @@ fn test_contextual_toolbar_mode_transitions(cx: &mut TestAppContext) {
 
     assert!(selected(&view, cx).is_empty());
     assert!(
-        cx.debug_bounds("add-files").is_some(),
-        "import button restored in browsing mode"
+        cx.debug_bounds("view-mode-toggle").is_some(),
+        "view mode toggle restored in browsing mode"
+    );
+    assert!(
+        cx.debug_bounds("toolbar-sort").is_some(),
+        "sort button restored in browsing mode"
     );
     assert!(cx.debug_bounds("select-all").is_none());
+    assert!(cx.debug_bounds("unselect-all").is_none());
     assert!(cx.debug_bounds("select-remove").is_none());
+
+    // 4. Test Select All -> Unselect All transition
+    ctrl_click(cx, 0);
+    cx.run_until_parked();
+    let select_all = cx
+        .debug_bounds("select-all")
+        .expect("Select all offered during partial selection");
+    assert!(cx.debug_bounds("unselect-all").is_none());
+
+    // Click Select all -> full selection
+    click(cx, select_all.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert_eq!(selected(&view, cx), fx.ids);
+    assert!(
+        cx.debug_bounds("unselect-all").is_some(),
+        "Unselect all offered during full selection"
+    );
+    assert!(cx.debug_bounds("select-all").is_none());
+
+    // Click Unselect all -> clears selection
+    let unselect_all = cx.debug_bounds("unselect-all").unwrap();
+    click(cx, unselect_all.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert!(selected(&view, cx).is_empty());
+    assert!(cx.debug_bounds("view-mode-toggle").is_some());
+    assert!(cx.debug_bounds("unselect-all").is_none());
 }
 
 #[gpui_kit::test]
@@ -3702,76 +3748,87 @@ fn prefetch_cancellation_race_condition_does_not_clobber_new_task(cx: &mut TestA
 }
 
 #[gpui_kit::test]
-fn test_downloads_count_cached_and_invalidated_on_mutations(cx: &mut TestAppContext) {
-    let fx = fixture("downloads-count");
-    let (view, cx) = launch(&fx, cx);
-    cx.run_until_parked();
+fn test_fixed_library_card_dimensions_and_responsive_columns(_cx: &mut TestAppContext) {
+    let thumb_size = yomu::library::ThumbnailSize::Medium;
+    let expected_card_w = thumb_size.card_width();
+    let expected_cover_h = thumb_size.card_height();
 
-    // 1. Initial cached downloads count equals 3 (all 3 fixture files exist on disk)
-    let initial = view.read_with(cx, |this, _| this.downloads_count);
-    assert_eq!(initial, 3, "initially all 3 books exist on disk");
-
-    // 2. Delete one file from disk externally and trigger a refresh (e.g. entering Downloads section)
-    let _ = std::fs::remove_file(&fx.files[2]);
-    view.update(cx, |this, cx| {
-        this.refresh_downloads_count(cx);
-    });
-    cx.run_until_parked();
-
-    let after_disk_delete = view.read_with(cx, |this, _| this.downloads_count);
+    // 1. Narrow window (e.g. 700px) with expanded sidebar (240px)
+    let grid_narrow = ui::components::compute_responsive_grid(700.0, true, thumb_size);
     assert_eq!(
-        after_disk_delete, 2,
-        "count must reflect deleted file after refresh"
+        grid_narrow.card_w, expected_card_w,
+        "card width must be fixed"
+    );
+    assert_eq!(
+        grid_narrow.cover_h, expected_cover_h,
+        "cover height must be fixed"
     );
 
-    // 3. Remove a book from the library via UI action
-    let id_to_remove = fx.ids[0].clone();
-    view.update(cx, |this, cx| {
-        this.remove_book(&id_to_remove, cx);
-    });
-    cx.run_until_parked();
-
-    let after_ui_remove = view.read_with(cx, |this, _| this.downloads_count);
+    // 2. Medium window (e.g. 1200px)
+    let grid_med = ui::components::compute_responsive_grid(1200.0, true, thumb_size);
+    assert_eq!(grid_med.card_w, expected_card_w, "card width must be fixed");
     assert_eq!(
-        after_ui_remove, 1,
-        "count must decrement after book removal"
+        grid_med.cover_h, expected_cover_h,
+        "cover height must be fixed"
+    );
+    assert!(
+        grid_med.cols >= grid_narrow.cols,
+        "columns must increase with width"
     );
 
-    // 4. Clear all data
-    view.update(cx, |this, cx| {
-        this.clear_all_data(cx);
-    });
-    cx.run_until_parked();
-
-    let after_clear = view.read_with(cx, |this, _| this.downloads_count);
+    // 3. Wide window (e.g. 1920px) with collapsed sidebar (48px)
+    let grid_wide = ui::components::compute_responsive_grid(1920.0, false, thumb_size);
     assert_eq!(
-        after_clear, 0,
-        "count must be 0 after clearing library data"
+        grid_wide.card_w, expected_card_w,
+        "card width must be fixed"
+    );
+    assert_eq!(
+        grid_wide.cover_h, expected_cover_h,
+        "cover height must be fixed"
+    );
+    assert!(
+        grid_wide.cols > grid_med.cols,
+        "columns must adapt to available space"
+    );
+
+    // 4. Centering padding is balanced and positive
+    assert!(
+        grid_wide.pad_x >= 16.0,
+        "grid padding must be at least min margin"
+    );
+    assert!(
+        grid_med.pad_x >= 16.0,
+        "grid padding must be at least min margin"
     );
 }
 
 #[gpui_kit::test]
-fn test_downloads_count_stale_async_protection(cx: &mut TestAppContext) {
-    let fx = fixture("downloads-stale");
-    let (view, cx) = launch(&fx, cx);
-    cx.run_until_parked();
-
-    assert_eq!(view.read_with(cx, |this, _| this.downloads_count), 3);
-
-    // Simulate a background refresh task that was superseded by a newer sequence
-    view.update(cx, |this, cx| {
-        this.refresh_downloads_count(cx);
-        // Artificially advance the sequence before the background task completes
-        this.downloads_seq += 5;
-        this.downloads_count = 42;
+fn test_default_startup_view_is_continue_reading(cx: &mut TestAppContext) {
+    let fx = fixture("startup-continue-reading");
+    let dirs = fx.dirs.clone();
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+    });
+    let initial_view_cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let initial_section_cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let iv = initial_view_cell.clone();
+    let is = initial_section_cell.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let yomu = cx.new(|cx| Yomu::with_dirs(dirs, window, cx));
+        *iv.borrow_mut() = Some(yomu.read(cx).active_view.clone());
+        *is.borrow_mut() = Some(yomu.read(cx).active_section);
+        gpui_kit::component::Root::new(yomu, window, cx)
     });
     cx.run_until_parked();
 
-    // The stale in-flight task (which computed 3) must NOT clobber the newer state (42)
-    let final_count = view.read_with(cx, |this, _| this.downloads_count);
+    // The application must launch with Continue Reading as the initially selected view and section
     assert_eq!(
-        final_count, 42,
-        "stale async result must not overwrite newer sequence"
+        *initial_view_cell.borrow(),
+        Some(ui::sidebar::MainView::ContinueReading)
+    );
+    assert_eq!(
+        *initial_section_cell.borrow(),
+        Some(ui::sidebar::SidebarSection::ContinueReading)
     );
 }
 
@@ -5733,11 +5790,8 @@ fn regression_phase5_main_sidebar_navigation_and_counts(cx: &mut TestAppContext)
 
     // Switch through all sidebar sections
     for section in [
-        ui::sidebar::SidebarSection::AllManga,
-        ui::sidebar::SidebarSection::Collections,
-        ui::sidebar::SidebarSection::History,
-        ui::sidebar::SidebarSection::Downloads,
         ui::sidebar::SidebarSection::ContinueReading,
+        ui::sidebar::SidebarSection::AllManga,
     ] {
         view.update_in(cx, |this, _, cx| {
             this.active_section = section;
@@ -5818,7 +5872,6 @@ fn regression_phase5_settings_native_sidebar_navigation_and_tabs(cx: &mut TestAp
     let tabs = [
         ui::overlays::SettingsTab::Appearance,
         ui::overlays::SettingsTab::Reader,
-        ui::overlays::SettingsTab::Library,
         ui::overlays::SettingsTab::Shortcuts,
         ui::overlays::SettingsTab::Advanced,
         ui::overlays::SettingsTab::General,
@@ -5856,56 +5909,13 @@ fn regression_phase6_cards_lists_and_empty_states(cx: &mut TestAppContext) {
         drop(empty_view);
     });
 
-    // 2. Test empty history view renders without panic
-    view.update_in(cx, |this, _, _| {
-        let scroll = gpui_kit::ScrollHandle::new();
-        let props = ui::history_view::HistoryProps {
-            scroll_handle: &scroll,
-            history_books: &[],
-            dirs: &this.dirs,
-            colors: this.colors,
-            radius: gpui_kit::px(4.0),
-            border_px: 1.0,
-            radius_px: 4.0,
-            viewport_w: 1200.0,
-            sidebar_visible: true,
-            is_grid: true,
-            thumb_size: yomu::library::ThumbnailSize::Medium,
-        };
-        let empty_history = ui::history_view::render_history_view(props, |_, _, _| {});
-        drop(empty_history);
-    });
-
-    // 3. Test empty collections view renders without panic
-    view.update_in(cx, |this, _, _| {
-        let scroll = gpui_kit::ScrollHandle::new();
-        let props = ui::collections_view::CollectionsProps {
-            scroll_handle: &scroll,
-            favorites_count: 0,
-            reading_count: 0,
-            want_to_read_count: 0,
-            completed_count: 0,
-            custom_collections: &[],
-            colors: this.colors,
-            radius: gpui_kit::px(4.0),
-        };
-        let empty_collections = ui::collections_view::render_collections_view(
-            props,
-            |_, _, _| {},
-            |_, _, _| {},
-            |_, _, _| {},
-            |_, _, _, _| {},
-        );
-        drop(empty_collections);
-    });
-
-    // 4. Test missing manga details renders Empty element without panic
+    // 2. Test missing manga details renders Empty element without panic
     view.update_in(cx, |this, window, cx| {
         let empty_details = this.render_details_screen("nonexistent-book-id", window, cx);
         drop(empty_details);
     });
 
-    // 5. Test empty continue reading view renders Empty element without panic
+    // 3. Test empty continue reading view renders Empty element without panic
     view.update_in(cx, |this, _, _| {
         let scroll = gpui_kit::ScrollHandle::new();
         let props = ui::continue_reading::ContinueReadingProps {
@@ -5941,27 +5951,6 @@ fn regression_phase6_cards_lists_and_empty_states(cx: &mut TestAppContext) {
         this.view_mode_grid = true;
         let grid_view = this.render_all_manga_view(window, cx);
         drop(grid_view);
-    });
-
-    // 7. Test history view in list mode with books renders ListItem and Progress
-    view.update_in(cx, |this, _, _| {
-        let books = this.get_sorted_books();
-        let scroll = gpui_kit::ScrollHandle::new();
-        let props = ui::history_view::HistoryProps {
-            scroll_handle: &scroll,
-            history_books: &books,
-            dirs: &this.dirs,
-            colors: this.colors,
-            radius: gpui_kit::px(4.0),
-            border_px: 1.0,
-            radius_px: 4.0,
-            viewport_w: 1200.0,
-            sidebar_visible: true,
-            is_grid: false,
-            thumb_size: yomu::library::ThumbnailSize::Medium,
-        };
-        let hist_list = ui::history_view::render_history_view(props, |_, _, _| {});
-        drop(hist_list);
     });
 }
 
@@ -6116,30 +6105,6 @@ fn test_dialog_centering_audit_and_verification(cx: &mut TestAppContext) {
     assert_eq!(overlay_kind(&view, cx), "none");
     cx.run_until_parked();
 
-    // 5. Open Collection dialog
-    view.update_in(cx, |this, window, cx| {
-        this.open_collection_dialog(true, None, window, cx);
-    });
-    assert_eq!(overlay_kind(&view, cx), "collection");
-    cx.background_executor
-        .advance_clock(std::time::Duration::from_millis(300));
-    cx.update(|window, _| window.refresh());
-    cx.run_until_parked();
-
-    let bounds = cx
-        .debug_bounds("dialog-0")
-        .expect("Collection dialog-0 surface should be painted");
-    let center_y = bounds.center().y;
-    assert!(
-        (center_y - expected_center_y).abs() <= gpui_kit::px(1.0),
-        "Expected Collection dialog to be centered vertically around {expected_center_y:?}, got {center_y:?} (bounds: {bounds:?})"
-    );
-
-    // Dismiss collection
-    cx.simulate_keystrokes("escape");
-    assert_eq!(overlay_kind(&view, cx), "none");
-    cx.run_until_parked();
-
     // 6. Test nested dialogs: Open confirmation dialog on top of Settings dialog
     cx.simulate_keystrokes("ctrl-,");
     assert_eq!(overlay_kind(&view, cx), "settings");
@@ -6196,4 +6161,270 @@ fn test_dialog_centering_audit_and_verification(cx: &mut TestAppContext) {
     // Dismiss settings: closes everything cleanly
     cx.simulate_keystrokes("escape");
     assert_eq!(overlay_kind(&view, cx), "none");
+}
+
+#[gpui_kit::test]
+fn test_contextual_view_toggle_button(cx: &mut TestAppContext) {
+    let fx = fixture("view_toggle");
+    let (view, cx) = launch(&fx, cx);
+
+    // Initial state: Grid view is active by default
+    assert!(view.read_with(cx, |this, _| this.view_mode_grid));
+    let toggle_btn = cx
+        .debug_bounds("view-mode-toggle")
+        .expect("Contextual view mode toggle button must be present in library toolbar");
+
+    // Click toggle button -> switches to List view
+    click(cx, toggle_btn.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |this, _| this.view_mode_grid));
+    assert!(!view.read_with(cx, |this, _| this.library.settings().view_mode_grid));
+
+    // The button remains in the exact same position with identical bounds
+    let toggle_btn_after = cx
+        .debug_bounds("view-mode-toggle")
+        .expect("Toggle button remains present in List view");
+    assert_eq!(toggle_btn.size, toggle_btn_after.size);
+
+    // Click toggle button again -> switches back to Grid view
+    click(cx, toggle_btn_after.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |this, _| this.view_mode_grid));
+    assert!(view.read_with(cx, |this, _| this.library.settings().view_mode_grid));
+}
+
+#[gpui_kit::test]
+fn test_sidebar_import_and_settings_buttons_expanded_and_collapsed(cx: &mut TestAppContext) {
+    let fx = fixture("sidebar_actions");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Expanded sidebar
+    assert!(!view.read_with(cx, |this, _| this.sidebar_collapsed));
+    let import_btn = cx
+        .debug_bounds("add-files")
+        .expect("Sidebar import button must be present in expanded mode");
+    let settings_btn = cx
+        .debug_bounds("sidebar-settings-btn")
+        .expect("Sidebar settings button must be present in expanded mode");
+
+    // Both are square action buttons with matching height
+    assert_eq!(import_btn.size.height, gpui_kit::px(32.0));
+    assert_eq!(settings_btn.size.height, gpui_kit::px(32.0));
+    assert_eq!(import_btn.size.width, settings_btn.size.width);
+
+    // Import button is vertically directly above Settings
+    assert!(
+        import_btn.origin.y < settings_btn.origin.y,
+        "Import button must be positioned above Settings"
+    );
+
+    // Click Settings button opens Settings overlay
+    click(cx, settings_btn.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "settings");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "none");
+
+    // 2. Collapsed sidebar
+    view.update(cx, |this, cx| this.toggle_sidebar(cx));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |this, _| this.sidebar_collapsed));
+
+    let import_btn_col = cx
+        .debug_bounds("add-files")
+        .expect("Sidebar import button must be present in collapsed mode");
+    let settings_btn_col = cx
+        .debug_bounds("sidebar-settings-btn")
+        .expect("Sidebar settings button must be present in collapsed mode");
+
+    assert_eq!(import_btn_col.size.height, gpui_kit::px(32.0));
+    assert_eq!(settings_btn_col.size.height, gpui_kit::px(32.0));
+    assert!(import_btn_col.origin.y < settings_btn_col.origin.y);
+
+    // Click Settings button in collapsed mode opens Settings overlay
+    click(cx, settings_btn_col.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "settings");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(overlay_kind(&view, cx), "none");
+}
+
+#[gpui_kit::test]
+fn test_selection_toolbar_select_all_unselect_all_synchronization(cx: &mut TestAppContext) {
+    let fx = fixture("selection_sync");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Initial state: nothing selected
+    assert!(selected(&view, cx).is_empty());
+    assert!(cx.debug_bounds("select-all").is_none());
+    assert!(cx.debug_bounds("unselect-all").is_none());
+
+    // 2. Partial selection: select card 0
+    ctrl_click(cx, 0);
+    cx.run_until_parked();
+    assert_eq!(selected(&view, cx).len(), 1);
+    assert!(cx.debug_bounds("select-all").is_some());
+    assert!(cx.debug_bounds("unselect-all").is_none());
+
+    // 3. Full selection via selecting remaining cards one by one
+    for i in 1..fx.ids.len() {
+        ctrl_click(cx, i);
+        cx.run_until_parked();
+    }
+    assert_eq!(selected(&view, cx).len(), fx.ids.len());
+    assert!(
+        cx.debug_bounds("unselect-all").is_some(),
+        "Toolbar must show Unselect all when all selectable items are selected"
+    );
+    assert!(cx.debug_bounds("select-all").is_none());
+
+    // 4. Deselect one card: reverts back to Select all
+    ctrl_click(cx, 0);
+    cx.run_until_parked();
+    assert_eq!(selected(&view, cx).len(), fx.ids.len() - 1);
+    assert!(
+        cx.debug_bounds("select-all").is_some(),
+        "Toolbar must revert to Select all when any item is deselected"
+    );
+    assert!(cx.debug_bounds("unselect-all").is_none());
+
+    // 5. Test Ctrl+A / Cmd+A full selection
+    cx.simulate_keystrokes("ctrl-a");
+    cx.run_until_parked();
+    assert_eq!(selected(&view, cx).len(), fx.ids.len());
+    assert!(
+        cx.debug_bounds("unselect-all").is_some(),
+        "Toolbar must show Unselect all after Ctrl+A"
+    );
+    assert!(cx.debug_bounds("select-all").is_none());
+
+    // 6. Clicking Unselect all clears selection
+    let unselect_btn = cx
+        .debug_bounds("unselect-all")
+        .expect("Unselect all button present");
+    click(cx, unselect_btn.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert!(
+        selected(&view, cx).is_empty(),
+        "Clicking Unselect all must clear selection"
+    );
+    assert!(cx.debug_bounds("select-all").is_none());
+    assert!(cx.debug_bounds("unselect-all").is_none());
+    assert!(cx.debug_bounds("view-mode-toggle").is_some());
+
+    // 7. Test search query filtering synchronization
+    // Set query matching only book 0's title
+    let first_title = view.read_with(cx, |this, _| {
+        this.library.get(&fx.ids[0]).unwrap().title.clone()
+    });
+    view.update(cx, |this, cx| {
+        this.search_query = first_title;
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Select book 0: because only book 0 matches query, all visible items are selected!
+    ctrl_click(cx, 0);
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("unselect-all").is_some(),
+        "When all search-filtered items are selected, Unselect all must appear"
+    );
+    assert!(cx.debug_bounds("select-all").is_none());
+
+    // Clear search query: now book 0 is only 1 of multiple library items -> reverts to Select all
+    view.update(cx, |this, cx| {
+        this.search_query.clear();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("select-all").is_some(),
+        "Clearing search filter with partial selection must revert to Select all"
+    );
+    assert!(cx.debug_bounds("unselect-all").is_none());
+}
+
+#[gpui_kit::test]
+fn test_view_mode_consolidated_cycle_and_series_navigation(cx: &mut TestAppContext) {
+    let fx = fixture("view_cycle");
+    let (view, cx) = launch(&fx, cx);
+
+    // Initial state: Grid mode
+    assert!(view.read_with(cx, |this, _| this.view_mode_grid));
+
+    let toggle_btn = cx
+        .debug_bounds("view-mode-toggle")
+        .expect("Toggle button must be present in top-level view");
+
+    // Click 1: Switches from Grid to List View
+    click(cx, toggle_btn.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |this, _| this.view_mode_grid));
+
+    // Click 2: Switches from List View back to Grid View
+    let toggle_btn = cx
+        .debug_bounds("view-mode-toggle")
+        .expect("Toggle button remains present");
+    click(cx, toggle_btn.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |this, _| this.view_mode_grid));
+
+    // Test inside open group (series navigation)
+    view.update(cx, |this, cx| {
+        this.open_group = Some("test_series".to_string());
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Inside open group: starts in Grid mode
+    assert!(view.read_with(cx, |this, _| this.view_mode_grid));
+    let toggle_btn = cx
+        .debug_bounds("view-mode-toggle")
+        .expect("Toggle button remains present inside series navigation");
+
+    // Click switches to List mode inside series
+    click(cx, toggle_btn.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |this, _| this.view_mode_grid));
+
+    // Click switches back to Grid mode inside series
+    let toggle_btn = cx
+        .debug_bounds("view-mode-toggle")
+        .expect("Toggle button remains present");
+    click(cx, toggle_btn.center(), MouseButton::Left);
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |this, _| this.view_mode_grid));
+}
+
+#[gpui_kit::test]
+fn test_responsive_grid_distribution_no_dead_space(cx: &mut TestAppContext) {
+    let fx = fixture("grid_distribution");
+    let (_view, _cx) = launch(&fx, cx);
+
+    // Verify grid adapts width without leaving large unused space
+    for viewport_w in [1024.0, 1280.0, 1440.0, 1600.0, 1920.0] {
+        for sidebar_visible in [true, false] {
+            let grid = ui::components::compute_responsive_grid(
+                viewport_w,
+                sidebar_visible,
+                yomu::library::ThumbnailSize::Medium,
+            );
+            assert!(grid.cols >= 1);
+            assert!(grid.card_w >= 140.0);
+
+            // Total width filled by cards + gaps + padding equals the available content width
+            let sidebar_w = if sidebar_visible { 240.0 } else { 48.0 };
+            let content_w = (viewport_w - sidebar_w).max(200.0);
+            let total_filled = grid.cols as f32 * grid.card_w
+                + (grid.cols - 1) as f32 * grid.gap
+                + 2.0 * grid.pad_x;
+            assert!(
+                (total_filled - content_w).abs() < 1.0,
+                "Grid cards must evenly distribute across entire available content width without dead space"
+            );
+        }
+    }
 }

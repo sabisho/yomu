@@ -3,42 +3,44 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonGroup, ButtonRounded, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::h_flex;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Icon, Selectable, Side, Sizable, Size};
+use gpui_kit::component::{Icon, Side, Sizable, Size};
 use gpui_kit::gpui::Anchor;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Entity, FontWeight, InteractiveElement, Keystroke, Pixels, Styled,
-    Window, div, px,
+    AnyElement, App, ClickEvent, Entity, FontWeight, InteractiveElement, Keystroke, Pixels,
+    SharedString, Styled, Window, div, px,
 };
 
 use super::components::{
     CONTROL_HEIGHT_TOOLBAR, ICON_SIZE_COMPACT, SPACE_SM, TOOLBAR_HEIGHT, button_radius,
-    open_shortcut_str, toolbar_icon_button, with_alpha,
+    toolbar_icon_button, with_alpha,
 };
 use super::theme::UiColors;
 use yomu::library::{SortBy, SortDirection};
 
 pub struct MainToolbarProps<'a> {
     pub can_go_back: bool,
+    pub view_title: Option<SharedString>,
+    pub item_count: Option<SharedString>,
     pub sidebar_collapsed: bool,
     pub is_scrolled: bool,
     pub show_search: bool,
     pub search_input: Option<&'a Entity<InputState>>,
     pub show_view_switches: bool,
     pub is_grid_mode: bool,
-    pub show_grouping: bool,
-    pub is_group_series: bool,
     pub show_sort: bool,
     pub sort_by: SortBy,
     pub sort_direction: SortDirection,
-    pub show_import: bool,
     pub is_client_decorated: bool,
     pub selection_count: usize,
+    pub is_all_selected: bool,
     pub on_select_all: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    pub on_unselect_all: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     pub on_remove_selected: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     pub on_cancel_selection: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     pub colors: UiColors,
@@ -50,18 +52,11 @@ pub fn render_main_toolbar(
     on_toggle_sidebar: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_toggle_grid: impl Fn(bool, &mut Window, &mut App) + 'static,
-    on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_change_sort: impl Fn(SortBy, SortDirection, &mut Window, &mut App) + 'static,
-    on_import_files: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_import_folder: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_close_window: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
 ) -> AnyElement {
     let on_toggle_grid = std::rc::Rc::new(on_toggle_grid);
-    let on_toggle_grid_false = on_toggle_grid.clone();
-    let on_toggle_group_series = std::rc::Rc::new(on_toggle_group_series);
     let on_change_sort = std::rc::Rc::new(on_change_sort);
-    let on_import_files = std::rc::Rc::new(on_import_files);
-    let on_import_folder = std::rc::Rc::new(on_import_folder);
     let colors = props.colors;
     let button_radius = button_radius(props.radius, CONTROL_HEIGHT_TOOLBAR);
 
@@ -82,7 +77,7 @@ pub fn render_main_toolbar(
         } else {
             colors.border.opacity(0.0)
         })
-        // Left: Sidebar toggle + Back navigation (visible only when inside a group/series)
+        // Left: Sidebar toggle + Back navigation + View title / count
         .child(
             div()
                 .flex()
@@ -105,6 +100,23 @@ pub fn render_main_toolbar(
                             on_back,
                         ),
                     ))
+                })
+                .when_some(props.view_title, |this, title| {
+                    this.child(
+                        h_flex()
+                            .items_baseline()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(colors.foreground)
+                                    .child(title),
+                            )
+                            .when_some(props.item_count, |this, count| {
+                                this.child(div().text_xs().text_color(colors.muted).child(count))
+                            }),
+                    )
                 }),
         )
         // Center: Search input (adaptive, flexible, centered in available space)
@@ -159,8 +171,10 @@ pub fn render_main_toolbar(
                 .gap(SPACE_SM)
                 .when(props.selection_count > 0, |this| {
                     let on_select_all = props.on_select_all.clone();
+                    let on_unselect_all = props.on_unselect_all.clone();
                     let on_remove_selected = props.on_remove_selected.clone();
                     let on_cancel_selection = props.on_cancel_selection.clone();
+                    let is_all_selected = props.is_all_selected;
                     this.child(
                         div()
                             .text_xs()
@@ -168,20 +182,35 @@ pub fn render_main_toolbar(
                             .text_color(colors.foreground)
                             .child(format!("{} selected", props.selection_count)),
                     )
-                    .child(
+                    .child(if is_all_selected {
+                        div().debug_selector(|| "unselect-all".into()).child(
+                            Button::new("unselect-all")
+                                .ghost()
+                                .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                .rounded(ButtonRounded::Size(button_radius))
+                                .label("Unselect all")
+                                .tooltip("Clear selection")
+                                .on_click(move |e, window, cx| {
+                                    if let Some(f) = on_unselect_all.as_ref() {
+                                        f(e, window, cx);
+                                    }
+                                }),
+                        )
+                    } else {
                         div().debug_selector(|| "select-all".into()).child(
                             Button::new("select-all")
                                 .ghost()
                                 .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(button_radius))
                                 .label("Select all")
+                                .tooltip("Select all in view")
                                 .on_click(move |e, window, cx| {
                                     if let Some(f) = on_select_all.as_ref() {
                                         f(e, window, cx);
                                     }
                                 }),
-                        ),
-                    )
+                        )
+                    })
                     .child(
                         div().debug_selector(|| "select-remove".into()).child(
                             Button::new("select-remove")
@@ -213,74 +242,35 @@ pub fn render_main_toolbar(
                 })
                 .when(props.selection_count == 0, |this| {
                     this
-                        // 1. Folder Grouping switch: Folders vs Individual Volumes
-                        .when(props.show_grouping, |this| {
-                            this.child(
-                                ButtonGroup::new("toolbar-grouping-segmented")
-                                    .ghost()
-                                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
-                                    .child(
-                                        Button::new("toolbar-group-folders-toggle")
-                                            .icon(IconName::Folder)
-                                            .tooltip("Group by series folders")
-                                            .selected(props.is_group_series)
-                                            .on_click({
-                                                let on_toggle = on_toggle_group_series.clone();
-                                                move |_, window, cx| on_toggle(true, window, cx)
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("toolbar-group-volumes-toggle")
-                                            .icon(IconName::BookOpen)
-                                            .tooltip("Show individual volumes")
-                                            .selected(!props.is_group_series)
-                                            .on_click({
-                                                let on_toggle = on_toggle_group_series.clone();
-                                                move |_, window, cx| on_toggle(false, window, cx)
-                                            }),
-                                    ),
-                            )
-                        })
-                        // 2. View Mode switch: Grid vs List
+                        // 1. Contextual view toggle: switches between Grid and List view
                         .when(props.show_view_switches, |this| {
+                            let (icon, tooltip, next_is_grid) = if props.is_grid_mode {
+                                (IconName::List, "Switch to List View", false)
+                            } else {
+                                (IconName::LayoutGrid, "Switch to Grid View", true)
+                            };
+                            let on_toggle_grid = on_toggle_grid.clone();
+
                             this.child(
-                                ButtonGroup::new("toolbar-viewmode-segmented")
-                                    .ghost()
-                                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
-                                    .child(
-                                        Button::new("view-mode-grid-toggle")
-                                            .icon(IconName::LayoutGrid)
-                                            .tooltip("Grid view")
-                                            .selected(props.is_grid_mode)
-                                            .on_click({
-                                                let on_toggle_grid = on_toggle_grid.clone();
-                                                move |_, window, cx| {
-                                                    on_toggle_grid(true, window, cx)
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("view-mode-list-toggle")
-                                            .icon(IconName::List)
-                                            .tooltip("List view")
-                                            .selected(!props.is_grid_mode)
-                                            .on_click({
-                                                let on_toggle_grid_false =
-                                                    on_toggle_grid_false.clone();
-                                                move |_, window, cx| {
-                                                    on_toggle_grid_false(false, window, cx)
-                                                }
-                                            }),
-                                    ),
+                                div().debug_selector(|| "view-mode-toggle".into()).child(
+                                    Button::new("view-mode-toggle")
+                                        .ghost()
+                                        .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                        .rounded(ButtonRounded::Size(button_radius))
+                                        .icon(icon)
+                                        .tooltip(tooltip)
+                                        .accessibility_label(tooltip)
+                                        .on_click(move |_, window, cx| {
+                                            on_toggle_grid(next_is_grid, window, cx);
+                                        }),
+                                ),
                             )
                         })
-                        // 3. Sort Dropdown
+                        // 2. Sort Dropdown (neutral appearance when idle)
                         .when(props.show_sort, |this| {
                             let on_change_sort = on_change_sort.clone();
                             let current_by = props.sort_by;
                             let current_dir = props.sort_direction;
-                            let is_custom_sorted = current_by != SortBy::Default
-                                || current_dir != SortDirection::Ascending;
                             this.child(
                                 div().debug_selector(|| "toolbar-sort".into()).child(
                                     Button::new("toolbar-sort")
@@ -288,7 +278,6 @@ pub fn render_main_toolbar(
                                         .ghost()
                                         .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                         .rounded(ButtonRounded::Size(button_radius))
-                                        .selected(is_custom_sorted)
                                         .tooltip(format!(
                                             "Sort: {} ({})",
                                             current_by.label(),
@@ -337,45 +326,6 @@ pub fn render_main_toolbar(
                                                         );
                                                     }
                                                 }
-                                                menu
-                                            },
-                                        ),
-                                ),
-                            )
-                        })
-                        // 4. Import Button: unified ghost button matching 28px toolbar controls
-                        .when(props.show_import, |this| {
-                            let on_import_files = on_import_files.clone();
-                            let on_import_folder = on_import_folder.clone();
-                            this.child(
-                                div().debug_selector(|| "add-files".into()).child(
-                                    Button::new("add-files")
-                                        .icon(IconName::Plus)
-                                        .ghost()
-                                        .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
-                                        .rounded(ButtonRounded::Size(button_radius))
-                                        .tooltip(format!("Import manga ({})", open_shortcut_str()))
-                                        .dropdown_menu_with_anchor(
-                                            Anchor::TopRight,
-                                            move |mut menu, _, _| {
-                                                let on_import_files = on_import_files.clone();
-                                                let on_import_folder = on_import_folder.clone();
-                                                menu = menu
-                                                    .min_w(px(180.))
-                                                    .item(
-                                                        PopupMenuItem::new("Import Files…")
-                                                            .icon(IconName::FilePlus)
-                                                            .on_click(move |e, window, cx| {
-                                                                on_import_files(e, window, cx)
-                                                            }),
-                                                    )
-                                                    .item(
-                                                        PopupMenuItem::new("Import Folder…")
-                                                            .icon(IconName::FolderPlus)
-                                                            .on_click(move |e, window, cx| {
-                                                                on_import_folder(e, window, cx)
-                                                            }),
-                                                    );
                                                 menu
                                             },
                                         ),

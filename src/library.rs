@@ -913,8 +913,6 @@ pub struct Library {
     #[serde(default, deserialize_with = "lenient_settings")]
     settings: Settings,
     #[serde(default)]
-    pub collections: Vec<crate::collections::Collection>,
-    #[serde(default)]
     pub favorites: HashSet<String>,
 }
 
@@ -924,7 +922,6 @@ impl Default for Library {
             version: LIBRARY_VERSION,
             books: Vec::new(),
             settings: Settings::default(),
-            collections: Vec::new(),
             favorites: HashSet::new(),
         }
     }
@@ -1029,55 +1026,15 @@ impl Library {
         }
     }
 
-    pub fn collections(&self) -> &[crate::collections::Collection] {
-        &self.collections
-    }
-
-    pub fn collections_mut(&mut self) -> &mut Vec<crate::collections::Collection> {
-        &mut self.collections
-    }
-
-    pub fn add_collection(&mut self, name: &str) -> String {
-        let id = format!("col_{}", fnv1a(name.as_bytes()));
-        if !self.collections.iter().any(|c| c.id == id) {
-            self.collections
-                .push(crate::collections::Collection::new(id.clone(), name));
-        }
-        id
-    }
-
-    pub fn delete_collection(&mut self, id: &str) {
-        self.collections.retain(|c| c.id != id);
-    }
-
-    pub fn rename_collection(&mut self, id: &str, new_name: &str) {
-        if let Some(col) = self.collections.iter_mut().find(|c| c.id == id) {
-            col.name = new_name.to_string();
-        }
-    }
-
-    pub fn add_book_to_collection(&mut self, collection_id: &str, book_id: &str) {
-        if let Some(col) = self.collections.iter_mut().find(|c| c.id == collection_id) {
-            col.add(book_id);
-        }
-    }
-
-    pub fn remove_book_from_collection(&mut self, collection_id: &str, book_id: &str) {
-        if let Some(col) = self.collections.iter_mut().find(|c| c.id == collection_id) {
-            col.remove(book_id);
-        }
-    }
-
     /// Clear all cached covers for all sizes.
     pub fn clear_cover_cache(&self, dirs: &DataDirs) -> Result<()> {
         dirs.clear_covers()
     }
 
-    /// Clear all in-memory library data: books, reading history, marks, collections, favorites,
+    /// Clear all in-memory library data: books, reading history, marks, favorites,
     /// and reset settings to default.
     pub fn clear_all_data(&mut self) {
         self.books.clear();
-        self.collections.clear();
         self.favorites.clear();
         self.settings = Settings::default();
     }

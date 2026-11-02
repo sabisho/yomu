@@ -384,6 +384,7 @@ pub fn render_continue_reading_view(
                         .flex()
                         .flex_row()
                         .flex_wrap()
+                        .items_start()
                         .gap(props.recent_gap)
                         .children(props.recent_cards),
                 ),

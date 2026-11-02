@@ -21,7 +21,6 @@ pub enum ConfirmAction {
     ResetSettings,
     ClearThumbnailCache,
     ClearAllData,
-    DeleteCollection(String),
     ForceQuit,
 }
 
@@ -45,20 +44,12 @@ pub struct SeriesDialog {
     pub input: Entity<InputState>,
 }
 
-#[allow(dead_code)]
-pub struct CollectionDialog {
-    pub is_new: bool,
-    pub collection_id: Option<String>,
-    pub input: Entity<InputState>,
-}
-
 /// At most one dialog is open at a time; it sits on top of whatever view is showing.
 #[allow(dead_code)]
 pub enum Overlay {
     Confirm(ConfirmDialog),
     Properties(PropertiesDialog),
     Series(SeriesDialog),
-    Collection(CollectionDialog),
     Settings,
 }
 
@@ -68,7 +59,6 @@ pub enum SettingsTab {
     General,
     Appearance,
     Reader,
-    Library,
     Shortcuts,
     Advanced,
 }
@@ -80,9 +70,8 @@ impl SettingsTab {
             0 => Self::General,
             1 => Self::Appearance,
             2 => Self::Reader,
-            3 => Self::Library,
-            4 => Self::Shortcuts,
-            5 => Self::Advanced,
+            3 => Self::Shortcuts,
+            4 => Self::Advanced,
             _ => Self::General,
         }
     }
@@ -93,9 +82,8 @@ impl SettingsTab {
             Self::General => 0,
             Self::Appearance => 1,
             Self::Reader => 2,
-            Self::Library => 3,
-            Self::Shortcuts => 4,
-            Self::Advanced => 5,
+            Self::Shortcuts => 3,
+            Self::Advanced => 4,
         }
     }
 
@@ -104,7 +92,6 @@ impl SettingsTab {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Reader => "Reader",
-            Self::Library => "Library",
             Self::Shortcuts => "Shortcuts",
             Self::Advanced => "Advanced",
         }

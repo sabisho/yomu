@@ -13,13 +13,31 @@ use gpui_kit::component::{Icon, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, ClickEvent, Context, ElementId, FontWeight, InteractiveElement, ObjectFit, Pixels,
-    SharedString, Styled, Window, div, img, px,
+    SharedString, Styled, Window, div, img, px, relative,
 };
 
 use crate::library::{Book, SortBy, SortDirection};
 use crate::ui::components::{stat_badge, with_alpha};
 use crate::ui::theme::UiColors;
 use yomu::util::natural_cmp;
+
+/// Returns a concise uppercase archive format or source label (e.g. "CBZ", "CBR", "ZIP", "DIR").
+pub fn book_format_label(book: &Book) -> &'static str {
+    if book.kind == yomu::archive::SourceKind::Folder {
+        "DIR"
+    } else if let Some(ext) = book.path.extension().and_then(|s| s.to_str()) {
+        match ext.to_ascii_uppercase().as_str() {
+            "CBZ" => "CBZ",
+            "CBR" => "CBR",
+            "ZIP" => "ZIP",
+            "RAR" => "RAR",
+            "PDF" => "PDF",
+            _ => "ARC",
+        }
+    } else {
+        "ARC"
+    }
+}
 
 /// A grouped set of books sharing a parent directory or an explicit series name.
 pub struct LibraryGroup<'a> {
@@ -191,6 +209,7 @@ pub fn render_book_card(
     } else {
         0
     };
+    let format_label = book_format_label(book);
 
     div()
         .id(ElementId::from(SharedString::from(format!(
@@ -203,9 +222,9 @@ pub fn render_book_card(
         .flex_col()
         .rounded(radius)
         .bg(if is_selected {
-            with_alpha(colors.accent, 0.15)
+            with_alpha(colors.accent, 0.12)
         } else {
-            with_alpha(colors.surface, 0.6)
+            with_alpha(colors.surface, 0.85)
         })
         .when(border_px > 0.0 || is_selected, |s| {
             let w = if is_selected {
@@ -221,7 +240,7 @@ pub fn render_book_card(
         })
         .overflow_hidden()
         .cursor_pointer()
-        .hover(|s| s.border_color(colors.accent).shadow_md())
+        .hover(|s| s.border_color(colors.accent).shadow_md().bg(colors.surface))
         .on_click(on_click)
         .context_menu(context_menu)
         .child(
@@ -236,30 +255,104 @@ pub fn render_book_card(
                 .rounded_t(inner_radius)
                 .bg(with_alpha(colors.foreground, 0.04))
                 .overflow_hidden()
+                .flex()
+                .items_center()
+                .justify_center()
                 .child(
                     img(props.cover_path)
                         .size_full()
                         .object_fit(ObjectFit::Cover)
                         .rounded_t(inner_radius),
                 )
+                // 1. Format tag overlay (top-left of cover)
+                .child(
+                    div()
+                        .absolute()
+                        .top_2()
+                        .left_2()
+                        .px_1p5()
+                        .py(px(1.))
+                        .rounded(px(4.))
+                        .bg(with_alpha(colors.background, 0.8))
+                        .border_1()
+                        .border_color(with_alpha(colors.border, 0.6))
+                        .text_color(colors.muted)
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .child(format_label),
+                )
+                // 2. Selection indicator (top-right of cover)
+                .children(is_selected.then(|| {
+                    div()
+                        .absolute()
+                        .top_2()
+                        .right_2()
+                        .size(px(20.))
+                        .rounded(px(4.))
+                        .bg(colors.accent)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(IconName::Check)
+                                .size(px(12.))
+                                .text_color(colors.accent_foreground),
+                        )
+                }))
+                // 3. Selection tint over cover
                 .children(is_selected.then(|| {
                     div()
                         .absolute()
                         .top_0()
                         .left_0()
                         .size_full()
-                        .bg(with_alpha(colors.accent, 0.22))
+                        .bg(with_alpha(colors.accent, 0.15))
+                }))
+                // 4. In-progress bottom accent bar & page indicator pill on cover
+                .children((book.opened && total > 0).then(|| {
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div().w_full().flex().justify_end().p_1p5().child(
+                                div()
+                                    .px_1p5()
+                                    .py(px(1.))
+                                    .rounded(px(4.))
+                                    .bg(with_alpha(colors.background, 0.85))
+                                    .text_color(colors.foreground)
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(format!("{current}/{total}")),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(3.))
+                                .bg(with_alpha(colors.background, 0.5))
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(relative(progress.clamp(0.0, 1.0)))
+                                        .bg(colors.accent),
+                                ),
+                        )
                 })),
         )
         .child(
             div()
-                .p_2p5()
+                .p_3()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .child(
                     div()
-                        .text_xs()
+                        .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(colors.foreground)
                         .truncate()
@@ -267,14 +360,26 @@ pub fn render_book_card(
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(colors.muted)
-                        .truncate()
-                        .child(if book.opened {
-                            format!("Ch. {current} of {total} · {:.0}%", progress * 100.0)
-                        } else {
-                            format!("{total} pages")
-                        }),
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(div().text_xs().text_color(colors.muted).truncate().child(
+                            if let Some(series) = book.series.as_deref() {
+                                format!("{series} · {total} pages")
+                            } else if book.opened {
+                                format!("Ch. {current} of {total}")
+                            } else {
+                                format!("{total} pages")
+                            },
+                        ))
+                        .children(book.opened.then(|| {
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(colors.accent)
+                                .child(format!("{:.0}%", progress * 100.0))
+                        })),
                 )
                 .children(book.opened.then(|| {
                     div().w_full().pt_1().child(
@@ -319,17 +424,20 @@ pub fn render_book_list_row(
     .px_3p5()
     .rounded(radius)
     .selected(is_selected)
-    .when(border_px > 0.0 || is_selected, |s| {
-        let w = if is_selected {
-            border_px.max(1.5)
-        } else {
-            border_px
-        };
-        s.border(px(w)).border_color(if is_selected {
-            colors.accent
-        } else {
-            colors.border
-        })
+    .bg(if is_selected {
+        with_alpha(colors.accent, 0.12)
+    } else {
+        with_alpha(colors.surface, 0.85)
+    })
+    .border(px(if is_selected {
+        border_px.max(1.5)
+    } else {
+        border_px.max(1.0)
+    }))
+    .border_color(if is_selected {
+        colors.accent
+    } else {
+        colors.border
     })
     .on_click(on_click)
     .context_menu(context_menu)
@@ -367,8 +475,8 @@ pub fn render_book_list_row(
                                 "manga-cover-{}",
                                 book.id
                             ))))
-                            .w(px(36.))
-                            .h(px(50.))
+                            .w(px(38.))
+                            .h(px(52.))
                             .flex_none()
                             .rounded(px(f32::from(radius).min(4.)))
                             .bg(with_alpha(colors.foreground, 0.04))
@@ -377,7 +485,7 @@ pub fn render_book_list_row(
                                 img(cover_path)
                                     .size_full()
                                     .rounded(px(f32::from(radius).min(4.)))
-                                    .object_fit(ObjectFit::Cover),
+                                    .object_fit(ObjectFit::Contain),
                             ),
                     )
                     .child(
@@ -402,6 +510,7 @@ pub fn render_book_list_row(
                                     .gap_2()
                                     .text_xs()
                                     .text_color(colors.muted)
+                                    .child(Tag::secondary().small().child(book_format_label(book)))
                                     .children(
                                         book.series
                                             .as_deref()
@@ -481,15 +590,16 @@ pub fn render_folder_card(
         .flex()
         .flex_col()
         .rounded(radius)
-        .bg(with_alpha(colors.surface, 0.6))
+        .bg(with_alpha(colors.surface, 0.85))
         .when(border_px > 0.0, |s| {
             s.border(px(border_px)).border_color(colors.border)
         })
         .overflow_hidden()
         .cursor_pointer()
-        .hover(|s| s.border_color(colors.accent).shadow_md())
+        .hover(|s| s.border_color(colors.accent).shadow_md().bg(colors.surface))
         .on_click(on_click)
         .context_menu(context_menu)
+        // Cover container
         .child(
             div()
                 .relative()
@@ -498,12 +608,44 @@ pub fn render_folder_card(
                 .rounded_t(inner_radius)
                 .bg(with_alpha(colors.foreground, 0.04))
                 .overflow_hidden()
+                .flex()
+                .items_center()
+                .justify_center()
                 .child(
                     img(cover_path)
                         .size_full()
                         .rounded_t(inner_radius)
                         .object_fit(ObjectFit::Cover),
                 )
+                // Top-left folder badge
+                .child(
+                    div()
+                        .absolute()
+                        .top_2()
+                        .left_2()
+                        .px_2()
+                        .py(px(1.5))
+                        .rounded(px(4.))
+                        .bg(with_alpha(colors.background, 0.8))
+                        .border_1()
+                        .border_color(with_alpha(colors.border, 0.6))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            Icon::new(IconName::Folder)
+                                .size(px(12.))
+                                .text_color(colors.accent),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(colors.foreground)
+                                .child("SERIES"),
+                        ),
+                )
+                // Top-right volume count badge
                 .child(
                     div()
                         .absolute()
@@ -512,15 +654,16 @@ pub fn render_folder_card(
                         .child(stat_badge(count, false, colors, radius)),
                 ),
         )
+        // Metadata container below cover
         .child(
             div()
-                .p_2p5()
+                .p_3()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .child(
                     div()
-                        .text_xs()
+                        .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(colors.foreground)
                         .truncate()
@@ -556,9 +699,9 @@ pub fn render_folder_list_row(
     .h(px(64.))
     .px_3p5()
     .rounded(radius)
-    .when(border_px > 0.0, |s| {
-        s.border(px(border_px)).border_color(colors.border)
-    })
+    .bg(with_alpha(colors.surface, 0.85))
+    .border(px(border_px.max(1.0)))
+    .border_color(colors.border)
     .on_click(on_click)
     .context_menu(context_menu)
     .child(
@@ -577,8 +720,8 @@ pub fn render_folder_list_row(
                     .flex_1()
                     .child(
                         div()
-                            .w(px(36.))
-                            .h(px(50.))
+                            .w(px(38.))
+                            .h(px(52.))
                             .flex_none()
                             .rounded(px(f32::from(radius).min(4.)))
                             .bg(with_alpha(colors.foreground, 0.04))
@@ -587,7 +730,7 @@ pub fn render_folder_list_row(
                                 img(cover_path)
                                     .size_full()
                                     .rounded(px(f32::from(radius).min(4.)))
-                                    .object_fit(ObjectFit::Cover),
+                                    .object_fit(ObjectFit::Contain),
                             ),
                     )
                     .child(

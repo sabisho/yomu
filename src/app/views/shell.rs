@@ -3,7 +3,9 @@
 use std::rc::Rc;
 
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Decorations, MouseButton, ScrollEvent, Window, div, px};
+use gpui_kit::{
+    AnyElement, Context, Decorations, MouseButton, ScrollEvent, SharedString, Window, div, px,
+};
 
 use crate::app::state::Yomu;
 use crate::ui;
@@ -29,8 +31,6 @@ impl Yomu {
             .filter(|b| b.has_progress())
             .count();
         let all_manga_count = self.library.books().len();
-        let collections_count = self.library.collections.len() + 4;
-        let downloads_count = self.downloads_count;
 
         let sidebar_props = ui::sidebar::SidebarProps {
             scroll_handle: &self.sidebar_scroll,
@@ -38,8 +38,6 @@ impl Yomu {
             current_section: self.active_section,
             continue_reading_count,
             all_manga_count,
-            collections_count,
-            downloads_count,
             colors,
             radius,
         };
@@ -57,13 +55,6 @@ impl Yomu {
                             ui::sidebar::SidebarSection::AllManga => {
                                 ui::sidebar::MainView::AllManga
                             }
-                            ui::sidebar::SidebarSection::Collections => {
-                                ui::sidebar::MainView::Collections
-                            }
-                            ui::sidebar::SidebarSection::History => ui::sidebar::MainView::History,
-                            ui::sidebar::SidebarSection::Downloads => {
-                                ui::sidebar::MainView::Downloads
-                            }
                         };
                         this.navigate_to(view, cx);
                     });
@@ -77,45 +68,100 @@ impl Yomu {
                     });
                 }
             },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.import_dialog(false, cx))
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.import_dialog(true, cx))
+            },
         );
 
         // 2. Toolbar Props
         let is_client_decorated = cfg!(target_os = "linux")
             && matches!(window.window_decorations(), Decorations::Client { .. });
-        let is_library_view = matches!(
-            self.active_view,
-            ui::sidebar::MainView::AllManga
-                | ui::sidebar::MainView::History
-                | ui::sidebar::MainView::Downloads
-        );
-        let is_browsing =
-            is_library_view || matches!(self.active_view, ui::sidebar::MainView::ContinueReading);
+        let is_library_view = matches!(self.active_view, ui::sidebar::MainView::AllManga);
         let show_search = is_library_view;
         let show_view_switches = is_library_view;
-        let show_grouping = is_library_view;
         let show_sort = is_library_view;
-        let show_import = is_browsing;
+
+        let (view_title, item_count): (Option<SharedString>, Option<SharedString>) =
+            match &self.active_view {
+                ui::sidebar::MainView::AllManga => {
+                    if let Some(open_key) = &self.open_group {
+                        let groups = ui::library_view::directory_groups(self.library.books());
+                        let (title, count) =
+                            if let Some(g) = groups.into_iter().find(|g| g.key == *open_key) {
+                                (g.name, g.books.len())
+                            } else {
+                                (open_key.clone(), 0)
+                            };
+                        (
+                            Some(SharedString::from(title)),
+                            Some(SharedString::from(format!(
+                                "{} {}",
+                                count,
+                                if count == 1 { "volume" } else { "volumes" }
+                            ))),
+                        )
+                    } else {
+                        let count = all_manga_count;
+                        (
+                            Some(SharedString::from("All Manga")),
+                            Some(SharedString::from(format!(
+                                "{} {}",
+                                count,
+                                if count == 1 { "item" } else { "items" }
+                            ))),
+                        )
+                    }
+                }
+                ui::sidebar::MainView::ContinueReading => {
+                    let count = continue_reading_count;
+                    (
+                        Some(SharedString::from("Continue Reading")),
+                        Some(SharedString::from(format!("{} in progress", count))),
+                    )
+                }
+                ui::sidebar::MainView::Details(id) => {
+                    let title = self
+                        .library
+                        .get(id)
+                        .map(|b| b.title.clone())
+                        .unwrap_or_else(|| "Manga Details".to_string());
+                    (Some(SharedString::from(title)), None)
+                }
+                ui::sidebar::MainView::Settings => (Some(SharedString::from("Settings")), None),
+            };
+
+        let current_order = self.current_view_order();
+        let is_all_selected = self.selection.is_all_selected(&current_order);
 
         let search_input = self.search_input.as_ref();
         let toolbar_props = ui::toolbar::MainToolbarProps {
             can_go_back: self.open_group.is_some(),
+            view_title,
+            item_count,
             sidebar_collapsed: is_collapsed,
             is_scrolled: self.is_current_view_scrolled(),
             show_search,
             search_input,
             show_view_switches,
             is_grid_mode: self.view_mode_grid,
-            show_grouping,
-            is_group_series: self.library.settings().group_series,
             show_sort,
             sort_by: self.library.settings().sort_by,
             sort_direction: self.library.settings().sort_direction,
-            show_import,
             is_client_decorated,
             selection_count: self.selection.len(),
+            is_all_selected,
             on_select_all: Some(Rc::new({
                 let yomu = yomu.clone();
                 move |_, _, cx| yomu.update(cx, |this, cx| this.select_all(cx))
+            })),
+            on_unselect_all: Some(Rc::new({
+                let yomu = yomu.clone();
+                move |_, _, cx| yomu.update(cx, |this, cx| this.unselect_all(cx))
             })),
             on_remove_selected: Some(Rc::new({
                 let yomu = yomu.clone();
@@ -159,27 +205,11 @@ impl Yomu {
             },
             {
                 let yomu = yomu.clone();
-                move |group, _, cx| {
-                    yomu.update(cx, |this, cx| {
-                        this.toggle_group_series(group, cx);
-                    })
-                }
-            },
-            {
-                let yomu = yomu.clone();
                 move |by, dir, _, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_sort_mode(by, dir, cx);
                     })
                 }
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| yomu.update(cx, |this, cx| this.import_dialog(false, cx))
-            },
-            {
-                let yomu = yomu.clone();
-                move |_, _, cx| yomu.update(cx, |this, cx| this.import_dialog(true, cx))
             },
             {
                 let yomu = yomu.clone();
@@ -193,9 +223,6 @@ impl Yomu {
         let content: AnyElement = match &self.active_view {
             ui::sidebar::MainView::ContinueReading => self.render_continue_reading_view(window, cx),
             ui::sidebar::MainView::AllManga => self.render_all_manga_view(window, cx),
-            ui::sidebar::MainView::Collections => self.render_collections_screen(window, cx),
-            ui::sidebar::MainView::History => self.render_history_view(window, cx),
-            ui::sidebar::MainView::Downloads => self.render_downloads_view(window, cx),
             ui::sidebar::MainView::Details(book_id) => {
                 let id = book_id.clone();
                 self.render_details_screen(&id, window, cx)
@@ -206,9 +233,6 @@ impl Yomu {
         let view_key = match &self.active_view {
             ui::sidebar::MainView::ContinueReading => "continue-reading",
             ui::sidebar::MainView::AllManga => "all-manga",
-            ui::sidebar::MainView::Collections => "collections",
-            ui::sidebar::MainView::History => "history",
-            ui::sidebar::MainView::Downloads => "downloads",
             ui::sidebar::MainView::Details(_) => "details",
             ui::sidebar::MainView::Settings => "settings",
         };

@@ -5,3 +5,10 @@
 devenv.local.nix
 devenv.local.yaml
 .pre-commit-config.yaml
+
+# Verification and runtime screenshots
+/Screenshots/*
+!/Screenshots/Before-UI-Redisign.jpg
+!/Screenshots/Thumbnail-Corner-Bleeding-UI-Artifacts-01.png
+!/Screenshots/Thumbnail-Corner-Bleeding-UI-Artifacts-02.png
+!/Screenshots/macOS_redign_design_board.png

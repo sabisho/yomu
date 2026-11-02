@@ -4,7 +4,6 @@
 #![forbid(unsafe_code)]
 
 pub mod archive;
-pub mod collections;
 pub mod imaging;
 pub mod layout;
 pub mod library;

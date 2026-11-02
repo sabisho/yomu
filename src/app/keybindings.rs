@@ -34,11 +34,6 @@ impl Yomu {
                 }
             }
             Some(Overlay::Series(_)) => {}
-            Some(Overlay::Collection(_)) => {
-                if matches!(token, "escape") {
-                    self.close_overlay(cx);
-                }
-            }
             Some(Overlay::Settings) => {
                 if matches!(token, "escape" | "enter" | "q" | "C-,") {
                     self.close_overlay_window(window, cx);
@@ -91,6 +86,13 @@ impl Yomu {
                 let order = self.current_view_order();
                 self.selection.select_all(&order);
                 cx.notify();
+            }
+            "x" => {
+                let order = self.current_view_order();
+                if let Some(first) = order.first() {
+                    self.selection.toggle(first);
+                    cx.notify();
+                }
             }
             "escape" | "backspace" => {
                 if !self.selection.is_empty() {

@@ -3,7 +3,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{Selectable, Sizable, Size};
+use gpui_kit::component::{Icon, Selectable, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, ClickEvent, Div, ElementId, Pixels, Rgba, SharedString, Styled, Window, px};
 
@@ -103,9 +103,9 @@ pub const RADIUS_MD: Pixels = px(6.);
 /// Fixed corner radius tier for large containers and cards (8px).
 #[allow(dead_code)]
 pub const RADIUS_LG: Pixels = px(8.);
-/// Fixed corner radius tier for modal panels and dialogs (10px).
+/// Fixed corner radius tier for modal panels and dialogs (12px).
 #[allow(dead_code)]
-pub const RADIUS_XL: Pixels = px(10.);
+pub const RADIUS_XL: Pixels = px(12.);
 
 /// Calculates a proportional button radius based on the configured application radius,
 /// clamping to at most 25% of the button height (e.g. 7px for a 28px button, 6px for 24px)
@@ -140,10 +140,10 @@ pub fn toolbar_icon_button(
     let radius = button_radius(app_radius, CONTROL_HEIGHT_TOOLBAR);
     Button::new(id)
         .ghost()
-        .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+        .size(CONTROL_HEIGHT_TOOLBAR)
         .rounded(ButtonRounded::Size(radius))
         .tooltip(tooltip)
-        .icon(icon)
+        .icon(Icon::new(icon).size(px(16.)))
         .on_click(on_click)
 }
 
@@ -182,32 +182,23 @@ pub fn compute_responsive_grid(
     sidebar_visible: bool,
     thumb_size: ThumbnailSize,
 ) -> ResponsiveGrid {
-    let sidebar_w = if sidebar_visible { 240.0 } else { 0.0 };
+    let sidebar_w = if sidebar_visible { 240.0 } else { 48.0 };
     let content_w = (viewport_width - sidebar_w).max(200.0);
 
     let card_w = thumb_size.card_width();
     let cover_h = thumb_size.card_height();
 
-    let min_space = if content_w < 560.0 { 12.0 } else { 14.0 };
+    let min_margin = if content_w < 560.0 { 12.0 } else { 16.0 };
+    let gap = if content_w < 560.0 { 12.0 } else { 16.0 };
 
-    // Maximum number of cards that can fit with at least min_space margin on edges and between cards
-    let cols = if content_w <= card_w + min_space * 2.0 {
+    let cols = if content_w <= card_w + min_margin * 2.0 {
         1
     } else {
-        (((content_w - min_space) / (card_w + min_space)).floor() as usize).max(1)
+        (((content_w - min_margin * 2.0 + gap) / (card_w + gap)).floor() as usize).max(1)
     };
 
-    let (pad_x, gap) = if cols <= 1 {
-        let pad = ((content_w - card_w) / 2.0).max(min_space);
-        (pad, min_space)
-    } else {
-        let rem = (content_w - (cols as f32 * card_w)).max(0.0);
-        let space = rem / (cols + 1) as f32;
-        let gap = space.floor().max(min_space);
-        let pad_x =
-            ((content_w - (cols as f32 * card_w + (cols - 1) as f32 * gap)) / 2.0).max(min_space);
-        (pad_x, gap)
-    };
+    let used_w = cols as f32 * card_w + (cols - 1) as f32 * gap;
+    let pad_x = ((content_w - used_w) / 2.0).max(min_margin);
 
     ResponsiveGrid {
         cols,

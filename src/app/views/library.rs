@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::empty::{
     Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
 };
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, ClickEvent, Context, Entity, Pixels, Window, div, px};
 
@@ -278,8 +279,8 @@ impl Yomu {
         if books.is_empty() {
             let (title, desc) = if query.is_empty() {
                 (
-                    "Your library is empty",
-                    "Import comic archives or manga folders to get started.",
+                    "Your Library is Empty",
+                    "Import comic archives or manga folders to start reading.",
                 )
             } else {
                 (
@@ -306,6 +307,25 @@ impl Yomu {
                         .title(EmptyTitle::new().child(title))
                         .description(EmptyDescription::new().child(desc)),
                 )
+                .when(query.is_empty(), |this| {
+                    let yomu = yomu.clone();
+                    this.child(
+                        Button::new("empty-import-btn")
+                            .primary()
+                            .icon(IconName::Plus)
+                            .label("Import Manga")
+                            .with_size(Size::Size(ui::components::CONTROL_HEIGHT_PRIMARY))
+                            .rounded(ButtonRounded::Size(ui::components::button_radius(
+                                radius,
+                                ui::components::CONTROL_HEIGHT_PRIMARY,
+                            )))
+                            .on_click(move |_, _, cx| {
+                                yomu.update(cx, |this, cx| {
+                                    this.import_dialog(false, cx);
+                                });
+                            }),
+                    )
+                })
                 .into_any_element();
         }
 
@@ -411,6 +431,7 @@ impl Yomu {
                     .flex()
                     .flex_row()
                     .flex_wrap()
+                    .items_start()
                     .gap(px(grid.gap))
                     .children(cards)
             } else {
@@ -426,13 +447,5 @@ impl Yomu {
                     .children(cards)
             })
             .into_any_element()
-    }
-
-    pub(crate) fn render_downloads_view(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        self.render_all_manga_view(window, cx)
     }
 }

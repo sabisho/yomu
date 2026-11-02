@@ -43,6 +43,7 @@ actions!(
     yomu,
     [
         ToggleFullscreen,
+        ToggleSidebar,
         ImportFiles,
         ImportFolder,
         OpenSettings,
@@ -67,6 +68,24 @@ use ui::theme::{
     BUILT_IN_THEMES, DEFAULT_THEME_NAME, UiColors, built_in_theme, ensure_custom_theme_file,
     load_custom_themes,
 };
+
+pub(crate) struct SettingsModal {
+    yomu: Entity<Yomu>,
+}
+
+impl SettingsModal {
+    pub(crate) fn new(yomu: Entity<Yomu>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&yomu, |_, _, cx| cx.notify()).detach();
+        Self { yomu }
+    }
+}
+
+impl Render for SettingsModal {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.yomu
+            .update(cx, |this, cx| this.render_settings_content(window, cx))
+    }
+}
 
 impl Yomu {
     pub(crate) fn toggle_vim_mode(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -263,16 +282,17 @@ impl Yomu {
         yomu: Entity<Self>,
     ) {
         let yomu_for_focus = yomu.clone();
+        let modal = cx.new(|cx| SettingsModal::new(yomu.clone(), cx));
         window.open_dialog(cx, move |dialog, window, cx| {
             let focus = yomu_for_focus.read(cx).focus_handle.clone();
             window.focus(&focus, cx);
             let yomu_close = yomu.clone();
-            let view = yomu.update(cx, |this, cx| this.render_settings_content(window, cx));
             dialog
-                .title("Preferences")
+                .p_0()
                 .close_button(true)
                 .centered()
-                .w(px(860.))
+                .w(px(840.))
+                .h(px(520.))
                 .max_w(px(960.))
                 .on_close(move |_, _window, cx| {
                     yomu_close.update(cx, |this, cx| {
@@ -282,7 +302,7 @@ impl Yomu {
                         }
                     });
                 })
-                .child(view)
+                .child(modal.clone())
         });
     }
 
@@ -418,8 +438,6 @@ impl Yomu {
         self.open_group = None;
         self.group_scroll.set_offset(Point::default());
         self.library.clear_all_data();
-        self.downloads_count = 0;
-        self.downloads_seq += 1;
         self.details_cover_checked = None;
         self.details_cover_available = false;
         self.details_cover_seq += 1;
@@ -731,7 +749,6 @@ impl Yomu {
                                 if this.library.add(book) {
                                     this.save_library(cx);
                                     this.imported_count += 1;
-                                    this.downloads_count += 1;
                                 }
                                 this.importing_title = Some(title);
                                 cx.notify();
@@ -756,7 +773,6 @@ impl Yomu {
                                     this.importing_title = None;
                                 }
                                 if !this.is_quitting && !cancel_ui.load(Ordering::Relaxed) {
-                                    this.refresh_downloads_count(cx);
                                     this.show_toast(report.summary(), cx);
                                 }
                             })
@@ -805,18 +821,36 @@ impl Yomu {
             .collect()
     }
 
-    /// Book ids in the currently viewed scope (the open group, or the full library).
+    /// Book ids in the currently viewed scope (the open group, or the full library, filtered by active search query).
     pub(crate) fn current_view_order(&self) -> Vec<String> {
         let sorted = self.get_sorted_books();
+        let query = self.search_query.trim().to_lowercase();
+        let matches_query = |b: &yomu::library::Book| {
+            query.is_empty()
+                || b.title.to_lowercase().contains(&query)
+                || b.series
+                    .as_ref()
+                    .is_some_and(|s| s.to_lowercase().contains(&query))
+                || b.path.to_string_lossy().to_lowercase().contains(&query)
+        };
         if self.library.settings().group_series
             && let Some(open_key) = self.open_group.as_deref()
         {
             let groups = directory_groups(sorted.iter().copied());
             if let Some(group) = groups.into_iter().find(|g| g.key == open_key) {
-                return group.books.iter().map(|book| book.id.clone()).collect();
+                return group
+                    .books
+                    .into_iter()
+                    .filter(|b| matches_query(b))
+                    .map(|book| book.id.clone())
+                    .collect();
             }
         }
-        sorted.iter().map(|book| book.id.clone()).collect()
+        sorted
+            .into_iter()
+            .filter(|b| matches_query(b))
+            .map(|book| book.id.clone())
+            .collect()
     }
 
     pub(crate) fn prune_open_group(&mut self) {
@@ -863,6 +897,11 @@ impl Yomu {
     pub(crate) fn select_all(&mut self, cx: &mut Context<Self>) {
         let order = self.current_view_order();
         self.selection.select_all(&order);
+        cx.notify();
+    }
+
+    pub(crate) fn unselect_all(&mut self, cx: &mut Context<Self>) {
+        self.selection.clear();
         cx.notify();
     }
 
@@ -1251,6 +1290,7 @@ fn main() {
                 KeyBinding::new("ctrl-o", ImportFiles, Some("Library")),
                 KeyBinding::new("ctrl-shift-o", ImportFolder, Some("Library")),
                 KeyBinding::new("f11", ToggleFullscreen, None),
+                KeyBinding::new("ctrl-b", ToggleSidebar, None),
                 KeyBinding::new("ctrl-,", OpenSettings, None),
                 KeyBinding::new("ctrl-q", Quit, None),
             ];
@@ -1258,6 +1298,7 @@ fn main() {
                 bindings.extend([
                     KeyBinding::new("cmd-o", ImportFiles, Some("Library")),
                     KeyBinding::new("cmd-shift-o", ImportFolder, Some("Library")),
+                    KeyBinding::new("cmd-b", ToggleSidebar, None),
                     KeyBinding::new("cmd-,", OpenSettings, None),
                     KeyBinding::new("cmd-q", Quit, None),
                 ]);
@@ -1265,6 +1306,12 @@ fn main() {
             cx.bind_keys(bindings);
 
             let yomu_view: Rc<RefCell<Option<Entity<Yomu>>>> = Rc::new(RefCell::new(None));
+            let yomu_for_sidebar = yomu_view.clone();
+            cx.on_action(move |_: &ToggleSidebar, cx: &mut App| {
+                if let Some(view) = yomu_for_sidebar.borrow().as_ref() {
+                    view.update(cx, |this, cx| this.toggle_sidebar(cx));
+                }
+            });
             let yomu_for_quit = yomu_view.clone();
             cx.on_action(move |_: &Quit, cx: &mut App| {
                 if let Some(view) = yomu_for_quit.borrow().as_ref() {

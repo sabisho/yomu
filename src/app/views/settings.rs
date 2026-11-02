@@ -1,7 +1,7 @@
 //! Settings dialog view presentation adapter and preferences wiring.
 
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Window, div, px, relative};
+use gpui_kit::{AnyElement, Context, Window, div, px};
 
 use crate::app::state::Yomu;
 use crate::ui;
@@ -31,125 +31,140 @@ impl Yomu {
             props,
             {
                 let yomu = yomu.clone();
-                move |tab, _, cx| {
+                move |tab, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.settings_tab = tab;
                         cx.notify();
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |layout, _, cx| {
+                move |layout, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_page_layout(layout, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |dir, _, cx| {
+                move |dir, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_reading_direction(dir, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |cover, _, cx| {
+                move |cover, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_first_page_is_cover(cover, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |threshold, _, cx| {
+                move |threshold, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_spread_ratio_threshold(threshold, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |checked, _, cx| {
+                move |checked, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_continuous(Some(checked), cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |checked, _, cx| {
+                move |checked, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_webcomics(Some(checked), cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |checked, _, cx| {
+                move |checked, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.toggle_group_series(checked, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |checked, _, cx| {
+                move |checked, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.library.settings_mut().remember_zoom = checked;
                         this.save_library(cx);
                         cx.notify();
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |checked, _, cx| {
+                move |checked, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.toggle_vim_mode(checked, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |mode, _, cx| {
+                move |mode, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_theme_mode(mode, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |scheme, _, cx| {
+                move |scheme, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_color_scheme(&scheme, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |size, _, cx| {
+                move |size, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_thumbnail_size(size, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |rounding, _, cx| {
+                move |rounding, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_corner_rounding(rounding, cx);
                     });
+                    window.refresh();
                 }
             },
             {
                 let yomu = yomu.clone();
-                move |border, _, cx| {
+                move |border, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_border_size(border, cx);
                     });
+                    window.refresh();
                 }
             },
             {
@@ -179,12 +194,9 @@ impl Yomu {
         );
 
         div()
-            .w(px(860.))
-            .min_w(px(640.))
-            .max_w(relative(0.92))
-            .h(px(620.))
-            .min_h(px(460.))
-            .max_h(relative(0.90))
+            .w(px(840.))
+            .h(px(520.))
+            .size_full()
             .overflow_hidden()
             .child(view)
             .into_any_element()

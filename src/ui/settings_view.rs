@@ -13,7 +13,7 @@ use gpui_kit::component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{Icon, Side, Sizable, Size};
+use gpui_kit::component::{Icon, Side, Sizable, Size, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Anchor, AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, Pixels,
@@ -73,12 +73,11 @@ pub fn render_settings_view(
     let colors = props.colors;
 
     let tabs = [
-        (SettingsTab::General, IconName::Settings, "General"),
-        (SettingsTab::Appearance, IconName::Palette, "Appearance"),
-        (SettingsTab::Reader, IconName::BookOpen, "Reader"),
-        (SettingsTab::Library, IconName::Library, "Library"),
-        (SettingsTab::Shortcuts, IconName::Keyboard, "Shortcuts"),
-        (SettingsTab::Advanced, IconName::Database, "Advanced"),
+        (SettingsTab::General, IconName::Settings),
+        (SettingsTab::Appearance, IconName::Palette),
+        (SettingsTab::Reader, IconName::BookOpen),
+        (SettingsTab::Shortcuts, IconName::Keyboard),
+        (SettingsTab::Advanced, IconName::Database),
     ];
 
     div()
@@ -87,25 +86,32 @@ pub fn render_settings_view(
         .overflow_hidden()
         .flex()
         .flex_row()
+        .items_stretch()
         .bg(colors.background)
         // Left Native Settings Navigation Sidebar
         .child(
             Sidebar::new("settings-sidebar")
                 .side(Side::Left)
                 .w(px(200.))
-                .border_r_1()
+                .h_full()
                 .collapsible(false)
                 .collapsed(false)
-                .child(
-                    SidebarMenu::new().children(tabs.iter().map(|&(tab, icon, label)| {
-                        let on_select_tab = on_select_tab.clone();
-                        let is_active = props.current_tab == tab;
-                        SidebarMenuItem::new(label)
-                            .icon(icon)
-                            .active(is_active)
-                            .on_click(move |_, window, cx| on_select_tab(tab, window, cx))
-                    })),
-                ),
+                .header(
+                    h_flex().w_full().h(px(28.)).items_center().px_1().child(
+                        Label::new("Preferences")
+                            .text_base()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.foreground),
+                    ),
+                )
+                .child(SidebarMenu::new().children(tabs.iter().map(|&(tab, icon)| {
+                    let on_select_tab = on_select_tab.clone();
+                    let is_active = props.current_tab == tab;
+                    SidebarMenuItem::new(tab.label())
+                        .icon(Icon::new(icon).size(px(16.)))
+                        .active(is_active)
+                        .on_click(move |_, window, cx| on_select_tab(tab, window, cx))
+                }))),
         )
         // Right Settings Content Pane
         .child(
@@ -114,118 +120,80 @@ pub fn render_settings_view(
                 .flex_1()
                 .min_w_0()
                 .h_full()
-                .rounded_r(props.radius)
                 .overflow_y_scrollbar()
                 .track_scroll(props.scroll_handle)
                 .scroll_bounce(true)
                 .scroll_wheel(false)
-                .px_6()
-                .py_4()
+                .pl_6()
+                .pr_10()
+                .pt_4()
+                .pb_6()
                 .flex()
                 .flex_col()
                 .gap_4()
-                .child(
-                    div()
-                        .pb_1()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .text_base()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(colors.foreground)
-                                .child(props.current_tab.label()),
-                        )
-                            .child(
-                                div().text_xs().text_color(colors.muted).child(match props
-                                    .current_tab
-                                {
-                                    SettingsTab::General => {
-                                        "Configure general reading defaults and view application information."
-                                    }
-                                    SettingsTab::Appearance => {
-                                        "Customize theme colors, card cover dimensions, rounding, and borders."
-                                    }
-                                    SettingsTab::Reader => {
-                                        "Control reader transitions, layout scrolling, zoom retention, and navigation."
-                                    }
-                                    SettingsTab::Library => {
-                                        "Manage library organization, folder grouping, and cover size presets."
-                                    }
-                                    SettingsTab::Shortcuts => {
-                                        "Quick keyboard shortcut reference for navigation and reading controls."
-                                    }
-                                    SettingsTab::Advanced => {
-                                        "Manage local thumbnail cover cache and reset library data."
-                                    }
-                                }),
-                            ),
-                    )
-                    .child({
-                        let tab_content = match props.current_tab {
-                            SettingsTab::General => {
-                                render_tab_general(props.settings, colors, on_toggle_continuous)
-                            }
-                            SettingsTab::Appearance => render_tab_appearance(
-                                props.settings,
-                                &props.available_schemes,
-                                colors,
-                                on_set_theme_mode.clone(),
-                                on_set_color_scheme,
-                                on_set_corner_rounding,
-                                on_set_border_size,
-                            ),
-                            SettingsTab::Reader => render_tab_reader(
-                                props.settings,
-                                colors,
-                                on_set_page_layout,
-                                on_set_reading_direction,
-                                on_toggle_first_page_is_cover,
-                                on_set_spread_ratio_threshold,
-                                on_toggle_continuous,
-                                on_toggle_webcomics,
-                                on_toggle_remember_zoom,
-                                on_toggle_vim_mode,
-                            ),
-                            SettingsTab::Library => render_tab_library(
-                                props.settings,
-                                colors,
-                                on_toggle_group_series,
-                                on_set_thumbnail_size,
-                            ),
-                            SettingsTab::Shortcuts => {
-                                render_tab_shortcuts(colors, props.vim_mode)
-                            }
-                            SettingsTab::Advanced => render_tab_advanced(
-                                &props.cache_size_str,
-                                colors,
-                                on_clear_cache,
-                                on_reset_settings,
-                                on_reset_all_data,
-                            ),
-                        };
+                .child({
+                    let tab_content = match props.current_tab {
+                        SettingsTab::General => render_tab_general(
+                            props.settings,
+                            colors,
+                            on_toggle_continuous,
+                            on_toggle_group_series,
+                            on_set_thumbnail_size,
+                        ),
+                        SettingsTab::Appearance => render_tab_appearance(
+                            props.settings,
+                            &props.available_schemes,
+                            colors,
+                            on_set_theme_mode.clone(),
+                            on_set_color_scheme,
+                            on_set_corner_rounding,
+                            on_set_border_size,
+                        ),
+                        SettingsTab::Reader => render_tab_reader(
+                            props.settings,
+                            colors,
+                            on_set_page_layout,
+                            on_set_reading_direction,
+                            on_toggle_first_page_is_cover,
+                            on_set_spread_ratio_threshold,
+                            on_toggle_continuous,
+                            on_toggle_webcomics,
+                            on_toggle_remember_zoom,
+                            on_toggle_vim_mode,
+                        ),
+                        SettingsTab::Shortcuts => render_tab_shortcuts(colors, props.vim_mode),
+                        SettingsTab::Advanced => render_tab_advanced(
+                            &props.cache_size_str,
+                            colors,
+                            on_clear_cache,
+                            on_reset_settings,
+                            on_reset_all_data,
+                        ),
+                    };
 
-                        let duration = std::time::Duration::from_millis(140);
-                        gpui_kit::base::animation::EffectTransition::new(duration)
-                            .ease(gpui_kit::base::animation::ease_out_cubic)
-                            .fade(0.85, 1.0)
-                            .apply(tab_content, ("settings-tab-fade", props.current_tab.to_index()))
-                    }),
-            )
-            .into_any_element()
+                    let duration = std::time::Duration::from_millis(140);
+                    gpui_kit::base::animation::EffectTransition::new(duration)
+                        .ease(gpui_kit::base::animation::ease_out_cubic)
+                        .fade(0.85, 1.0)
+                        .apply(
+                            tab_content,
+                            ("settings-tab-fade", props.current_tab.to_index()),
+                        )
+                }),
+        )
+        .into_any_element()
 }
 
 fn settings_card(colors: UiColors) -> GroupBox {
     GroupBox::new()
         .outline()
-        .rounded(px(10.))
+        .rounded(px(8.))
         .bg(with_alpha(colors.surface, 0.65))
-        .border_color(with_alpha(colors.border, 0.45))
+        .border_color(colors.border)
 }
 
 fn settings_divider(colors: UiColors) -> Separator {
-    Separator::horizontal().color(with_alpha(colors.border, 0.25))
+    Separator::horizontal().color(colors.border)
 }
 
 fn settings_row(
@@ -253,7 +221,7 @@ fn settings_row(
                 .child(
                     Label::new(title)
                         .text_sm()
-                        .font_weight(FontWeight::NORMAL)
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(colors.foreground),
                 )
                 .child(Label::new(description).text_xs().text_color(colors.muted)),
@@ -296,26 +264,61 @@ fn render_tab_general(
     settings: &Settings,
     colors: UiColors,
     on_toggle_continuous: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_set_thumbnail_size: std::rc::Rc<dyn Fn(ThumbnailSize, &mut Window, &mut App)>,
 ) -> Div {
     div()
         .flex()
         .flex_col()
         .gap_4()
         .child(
-            settings_card(colors).child(
-                settings_row(
-                    "Default Reading Layout",
-                    "Toggle between single-page book turns and continuous vertical strip.",
-                    colors,
-                )
+            settings_card(colors)
                 .child(
-                    Switch::new("gen-continuous-mode-switch")
-                        .accessibility_label("Continuous vertical reading mode")
-                        .small()
-                        .checked(settings.continuous)
-                        .on_click(move |val, window, cx| on_toggle_continuous(*val, window, cx)),
+                    settings_row(
+                        "Default Reading Layout",
+                        "Toggle between single-page book turns and continuous vertical strip.",
+                        colors,
+                    )
+                    .child(
+                        Switch::new("gen-continuous-mode-switch")
+                            .accessibility_label("Continuous vertical reading mode")
+                            .small()
+                            .checked(settings.continuous)
+                            .on_click(move |val, window, cx| on_toggle_continuous(*val, window, cx)),
+                    ),
+                )
+                .child(settings_divider(colors))
+                .child(
+                    settings_row(
+                        "Folder & Series Grouping",
+                        "Group volumes sharing a common directory or series name into single cards.",
+                        colors,
+                    )
+                    .child(
+                        Switch::new("group-series-switch")
+                            .accessibility_label("Folder grouping")
+                            .small()
+                            .checked(settings.group_series)
+                            .on_click(move |val, window, cx| on_toggle_group_series(*val, window, cx)),
+                    ),
+                )
+                .child(settings_divider(colors))
+                .child(
+                    settings_row(
+                        "Thumbnail Size",
+                        "Size of book covers in the library grid view.",
+                        colors,
+                    )
+                    .child(macos_dropdown_button(
+                        "cycle-thumb-btn-lib",
+                        settings.thumbnail_size.label(),
+                        ThumbnailSize::ALL
+                            .into_iter()
+                            .map(|s| (s.label().to_string(), s, s == settings.thumbnail_size))
+                            .collect(),
+                        on_set_thumbnail_size,
+                    )),
                 ),
-            ),
         )
         .child(
             settings_card(colors).child(
@@ -403,7 +406,7 @@ fn render_tab_appearance(
         .flex()
         .flex_col()
         .gap_4()
-        // Section: Appearance Mode (System / Light / Dark)
+        // Consolidated Theme Section: Appearance Mode + Color Scheme
         .child(
             settings_card(colors)
                 .child(
@@ -435,11 +438,7 @@ fn render_tab_appearance(
                         on_set_theme_mode,
                     )),
                 )
-                .children(standalone_note),
-        )
-        // Section: Theme & Palette
-        .child(
-            settings_card(colors)
+                .child(settings_divider(colors))
                 .child(
                     settings_row(
                         "Color Scheme",
@@ -456,15 +455,7 @@ fn render_tab_appearance(
                         on_set_color_scheme,
                     )),
                 )
-                .child(settings_divider(colors))
-                .child(
-                    settings_row(
-                        "Active Variant",
-                        "Theme variant currently resolved and applied to the interface.",
-                        colors,
-                    )
-                    .child(Tag::secondary().child(settings.theme_name.clone())),
-                ),
+                .children(standalone_note),
         )
         // Section: Display Geometry
         .child(
@@ -673,48 +664,6 @@ fn render_tab_reader(
                         .checked(settings.vim_mode)
                         .on_click(move |val, window, cx| on_toggle_vim_mode(*val, window, cx)),
                 ),
-            ),
-    )
-}
-
-fn render_tab_library(
-    settings: &Settings,
-    colors: UiColors,
-    on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
-    on_set_thumbnail_size: std::rc::Rc<dyn Fn(ThumbnailSize, &mut Window, &mut App)>,
-) -> Div {
-    div().flex().flex_col().gap_4().child(
-        settings_card(colors)
-            .child(
-                settings_row(
-                    "Folder & Series Grouping",
-                    "Group volumes sharing a common directory or series name into single cards.",
-                    colors,
-                )
-                .child(
-                    Switch::new("group-series-switch")
-                        .accessibility_label("Folder grouping")
-                        .small()
-                        .checked(settings.group_series)
-                        .on_click(move |val, window, cx| on_toggle_group_series(*val, window, cx)),
-                ),
-            )
-            .child(settings_divider(colors))
-            .child(
-                settings_row(
-                    "Thumbnail Size",
-                    "Size of book covers in the library grid view.",
-                    colors,
-                )
-                .child(macos_dropdown_button(
-                    "cycle-thumb-btn-lib",
-                    settings.thumbnail_size.label(),
-                    ThumbnailSize::ALL
-                        .into_iter()
-                        .map(|s| (s.label().to_string(), s, s == settings.thumbnail_size))
-                        .collect(),
-                    on_set_thumbnail_size,
-                )),
             ),
     )
 }

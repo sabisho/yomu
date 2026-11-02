@@ -126,7 +126,6 @@ pub struct Yomu {
     pub(crate) library_scroll: ScrollHandle,
     pub(crate) group_scroll: ScrollHandle,
     pub(crate) continue_reading_scroll: ScrollHandle,
-    pub(crate) collections_scroll: ScrollHandle,
     pub(crate) details_scroll: ScrollHandle,
     pub(crate) settings_scroll: ScrollHandle,
     pub(crate) sidebar_scroll: ScrollHandle,
@@ -150,11 +149,8 @@ pub struct Yomu {
     pub(crate) nav_history: Vec<NavDestination>,
     pub(crate) nav_history_idx: usize,
     pub(crate) view_mode_grid: bool,
-    pub(crate) selected_collection_id: Option<String>,
     pub(crate) sidebar_collapsed: bool,
     pub vim_cli_override: bool,
-    pub(crate) downloads_count: usize,
-    pub(crate) downloads_seq: u64,
     pub(crate) details_cover_checked: Option<String>,
     pub(crate) details_cover_available: bool,
     pub(crate) details_cover_seq: u64,
@@ -243,7 +239,7 @@ impl Yomu {
         )
         .detach();
 
-        let mut state = Self {
+        let state = Self {
             focus_handle: cx.focus_handle(),
             dirs,
             library,
@@ -278,7 +274,6 @@ impl Yomu {
             library_scroll: ScrollHandle::new(),
             group_scroll: ScrollHandle::new(),
             continue_reading_scroll: ScrollHandle::new(),
-            collections_scroll: ScrollHandle::new(),
             details_scroll: ScrollHandle::new(),
             settings_scroll: ScrollHandle::new(),
             sidebar_scroll: ScrollHandle::new(),
@@ -292,21 +287,18 @@ impl Yomu {
             save_pending: false,
             save_pending_since: None,
             is_quitting: false,
-            active_section: ui::sidebar::SidebarSection::AllManga,
-            active_view: ui::sidebar::MainView::AllManga,
+            active_section: ui::sidebar::SidebarSection::ContinueReading,
+            active_view: ui::sidebar::MainView::ContinueReading,
             selected_book_id: None,
             details_tab_index: 0,
             details_synopsis_expanded: false,
             nav_history: vec![NavDestination::Section(
-                ui::sidebar::SidebarSection::AllManga,
+                ui::sidebar::SidebarSection::ContinueReading,
             )],
             nav_history_idx: 0,
             view_mode_grid,
-            selected_collection_id: None,
             sidebar_collapsed: false,
             vim_cli_override: false,
-            downloads_count: 0,
-            downloads_seq: 0,
             details_cover_checked: None,
             details_cover_available: true,
             details_cover_seq: 0,
@@ -315,7 +307,6 @@ impl Yomu {
             window_handle: window.window_handle(),
         };
 
-        state.refresh_downloads_count(cx);
         // Permanently ensure native animations are enabled in the GPUI runtime.
         cx.set_reduce_motion(false);
 
@@ -350,49 +341,6 @@ impl Yomu {
             result = Some(f(window, cx));
         });
         result
-    }
-
-    /// Refresh the count of downloaded (locally present on disk) books off the UI thread.
-    ///
-    /// Monotonically tracks `downloads_seq` so stale asynchronous tasks cannot overwrite
-    /// newer library state.
-    pub fn refresh_downloads_count(&mut self, cx: &mut Context<Self>) {
-        if self.is_quitting {
-            return;
-        }
-        self.downloads_seq += 1;
-        let seq = self.downloads_seq;
-        let paths: Vec<PathBuf> = self
-            .library
-            .books()
-            .iter()
-            .map(|b| b.path.clone())
-            .collect();
-        if paths.is_empty() {
-            if self.downloads_count != 0 {
-                self.downloads_count = 0;
-                cx.notify();
-            }
-            return;
-        }
-        cx.spawn(async move |this, cx| {
-            let count = cx
-                .background_executor()
-                .spawn(async move { paths.into_iter().filter(|p| p.exists()).count() })
-                .await;
-            let _ = this
-                .update(cx, |this, cx| {
-                    if this.downloads_seq == seq
-                        && !this.is_quitting
-                        && this.downloads_count != count
-                    {
-                        this.downloads_count = count;
-                        cx.notify();
-                    }
-                })
-                .ok();
-        })
-        .detach();
     }
 
     /// Check cover availability on disk for the manga details inspector off the UI thread.
@@ -501,15 +449,6 @@ impl Yomu {
             ui::sidebar::MainView::AllManga => {
                 NavDestination::Section(ui::sidebar::SidebarSection::AllManga)
             }
-            ui::sidebar::MainView::Collections => {
-                NavDestination::Section(ui::sidebar::SidebarSection::Collections)
-            }
-            ui::sidebar::MainView::History => {
-                NavDestination::Section(ui::sidebar::SidebarSection::History)
-            }
-            ui::sidebar::MainView::Downloads => {
-                NavDestination::Section(ui::sidebar::SidebarSection::Downloads)
-            }
             ui::sidebar::MainView::Details(id) => NavDestination::Details(id),
             ui::sidebar::MainView::Settings => {
                 self.library_scroll_controller.reset();
@@ -546,12 +485,6 @@ impl Yomu {
                         ui::sidebar::MainView::ContinueReading
                     }
                     ui::sidebar::SidebarSection::AllManga => ui::sidebar::MainView::AllManga,
-                    ui::sidebar::SidebarSection::Collections => ui::sidebar::MainView::Collections,
-                    ui::sidebar::SidebarSection::History => ui::sidebar::MainView::History,
-                    ui::sidebar::SidebarSection::Downloads => {
-                        self.refresh_downloads_count(cx);
-                        ui::sidebar::MainView::Downloads
-                    }
                 };
             }
             NavDestination::Group { key, .. } => {
@@ -580,9 +513,6 @@ impl Yomu {
             match self.active_view {
                 ui::sidebar::MainView::ContinueReading => self.continue_reading_scroll.clone(),
                 ui::sidebar::MainView::AllManga => self.library_scroll.clone(),
-                ui::sidebar::MainView::Collections => self.collections_scroll.clone(),
-                ui::sidebar::MainView::History => self.library_scroll.clone(),
-                ui::sidebar::MainView::Downloads => self.library_scroll.clone(),
                 ui::sidebar::MainView::Details(_) => self.details_scroll.clone(),
                 ui::sidebar::MainView::Settings => self.settings_scroll.clone(),
             }
@@ -624,9 +554,6 @@ impl Yomu {
         match &self.active_view {
             ui::sidebar::MainView::ContinueReading => "Continue Reading",
             ui::sidebar::MainView::AllManga => "All Manga",
-            ui::sidebar::MainView::Collections => "Collections",
-            ui::sidebar::MainView::History => "History",
-            ui::sidebar::MainView::Downloads => "Downloads",
             ui::sidebar::MainView::Details(_) => "Manga Details",
             ui::sidebar::MainView::Settings => "Settings",
         }
