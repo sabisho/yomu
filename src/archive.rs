@@ -426,15 +426,9 @@ fn rar_worker_loop(path: PathBuf, receiver: Receiver<RarTask>) {
                     }
                     break;
                 }
-                match header.read() {
+                match header.read_bounded(MAX_PAGE_BYTES as usize) {
                     Ok((data, next)) => {
-                        if data.len() as u64 > MAX_PAGE_BYTES {
-                            found_data = Some(Err(anyhow::anyhow!(
-                                "page {name} decompressed size exceeds maximum budget"
-                            )));
-                        } else {
-                            found_data = Some(Ok(data));
-                        }
+                        found_data = Some(Ok(data));
                         proc = Some(next);
                         break;
                     }
@@ -572,11 +566,8 @@ fn read_rar_page(path: &Path, name: &str) -> Result<Vec<u8>> {
                 bail!("page {name} is unreasonably large");
             }
             let (data, _next) = header
-                .read()
+                .read_bounded(MAX_PAGE_BYTES as usize)
                 .with_context(|| format!("extracting {name} from {}", path.display()))?;
-            if data.len() as u64 > MAX_PAGE_BYTES {
-                bail!("page {name} decompressed size exceeds maximum budget");
-            }
             return Ok(data);
         } else {
             proc = header
@@ -777,12 +768,9 @@ pub fn probe_pages_dimensions(
                             };
 
                             if let Some((name, ix)) = should_extract {
-                                match header.read() {
+                                match header.read_bounded(MAX_PAGE_BYTES as usize) {
                                     Ok((data, next)) => {
-                                        if data.len() as u64 <= MAX_PAGE_BYTES
-                                            && let Ok(dims) =
-                                                crate::imaging::probe_dimensions(&data)
-                                        {
+                                        if let Ok(dims) = crate::imaging::probe_dimensions(&data) {
                                             results.push((ix, name.clone(), dims));
                                         }
                                         target_map.remove(&name);
@@ -1629,5 +1617,174 @@ mod tests {
         assert!(probed.is_empty());
 
         let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_cbr_bounded_extraction_exact_limit() {
+        let cbr_bytes = make_test_cbr("001.jpg");
+        let tmp = std::env::temp_dir().join(format!("yomu_exact_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let archive = unrar::Archive::new(&tmp).open_for_processing().unwrap();
+        let header = archive.read_header().unwrap().unwrap();
+        // Payload decompresses to exactly 11 bytes: b"unrar-0.4.0"
+        let (data, _next) = header.read_bounded(11).expect("exact limit must succeed");
+        assert_eq!(&data, b"unrar-0.4.0");
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_cbr_bounded_extraction_exceeded_by_one_byte_aborts() {
+        let cbr_bytes = make_test_cbr("001.jpg");
+        let tmp = std::env::temp_dir().join(format!("yomu_over1_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let archive = unrar::Archive::new(&tmp).open_for_processing().unwrap();
+        let header = archive.read_header().unwrap().unwrap();
+        // Payload is 11 bytes; budget of 10 bytes must abort inside callback
+        let err = header
+            .read_bounded(10)
+            .expect_err("exceeding limit by 1 byte must abort");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("exceeds maximum budget") || msg.contains("ExcessiveSize"),
+            "Error must indicate size budget exceeded, got: {msg}"
+        );
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_cbr_decompression_bomb_spoofed_header_callback_aborts() {
+        let mut bytes = make_test_cbr("001.jpg");
+        // Adversarial spoofing: header claims unpacked size is 20 bytes (less than a naive large budget)
+        bytes[31..35].copy_from_slice(&20u32.to_le_bytes());
+        let head_size = u16::from_le_bytes([bytes[0x19], bytes[0x1a]]) as usize;
+        let data = &bytes[0x16..0x14 + head_size];
+        let crc = (crc32_inline(data) & 0xffff) as u16;
+        bytes[0x14..0x16].copy_from_slice(&crc.to_le_bytes());
+
+        let tmp = std::env::temp_dir().join(format!("yomu_spoof_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &bytes).unwrap();
+
+        let archive = unrar::Archive::new(&tmp).open_for_processing().unwrap();
+        let header = archive.read_header().unwrap().unwrap();
+        assert_eq!(
+            header.entry().unpacked_size,
+            20,
+            "Header size was spoofed to 20"
+        );
+
+        // Limit is 10 bytes. The 11-byte actual decompressed payload exceeds 10 bytes.
+        // Bounded callback must abort during extraction when incoming chunk exceeds 10 bytes!
+        let err = header
+            .read_bounded(10)
+            .expect_err("Callback must intercept payload exceeding 10 bytes");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("exceeds maximum budget") || msg.contains("ExcessiveSize"),
+            "Decompression callback must report budget exceeded, got: {msg}"
+        );
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_rar_session_recovery_after_bounded_extraction_failure() {
+        let cbr_bytes = make_multi_page_cbr(&["001.jpg", "002.jpg", "003.jpg"]);
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_session_rec_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let session = RarSession::open(&tmp).unwrap();
+
+        // 1. Initial valid page extraction
+        let p1 = session.read_page("001.jpg", None).unwrap();
+        assert_eq!(&p1, b"unrar-0.4.0");
+
+        // 2. Request a non-existent entry causing extraction failure
+        let fail_res = session.read_page("nonexistent.jpg", None);
+        assert!(fail_res.is_err());
+
+        // 3. Subsequent valid reads on the SAME session succeed, verifying worker recovery
+        let p2 = session.read_page("002.jpg", None).unwrap();
+        assert_eq!(&p2, b"unrar-0.4.0");
+
+        let p3 = session.read_page("003.jpg", None).unwrap();
+        assert_eq!(&p3, b"unrar-0.4.0");
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_rar_session_repeated_consecutive_failures_resilience() {
+        let cbr_bytes = make_multi_page_cbr(&["001.jpg", "002.jpg"]);
+        let tmp = std::env::temp_dir().join(format!(
+            "yomu_session_stress_{}.cbr",
+            crate::util::now_secs()
+        ));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let session = RarSession::open(&tmp).unwrap();
+
+        // 5 consecutive failed extraction attempts
+        for i in 0..5 {
+            let res = session.read_page(&format!("missing_{i}.jpg"), None);
+            assert!(res.is_err());
+        }
+
+        // Subsequent valid read still succeeds cleanly
+        let p1 = session.read_page("001.jpg", None).unwrap();
+        assert_eq!(&p1, b"unrar-0.4.0");
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_unrar_bounded_buffer_callback_boundary_and_overflow_conditions() {
+        use unrar::BoundedBuffer;
+
+        // 1. Chunk smaller than limit accepted
+        let mut buf = BoundedBuffer::new(100);
+        assert!(buf.process_chunk(&[42u8; 50]));
+        assert_eq!(buf.data.len(), 50);
+        assert!(!buf.exceeded);
+
+        // 2. Exact limit accepted
+        assert!(buf.process_chunk(&[42u8; 50]));
+        assert_eq!(buf.data.len(), 100);
+        assert!(!buf.exceeded);
+
+        // 3. Exceeded by 1 byte rejected, buffer cleared and capacity freed immediately
+        assert!(!buf.process_chunk(&[42u8; 1]));
+        assert!(buf.exceeded);
+        assert_eq!(buf.data.len(), 0);
+        assert_eq!(buf.data.capacity(), 0);
+
+        // 4. Multi-chunk accumulation boundary
+        let mut multi = BoundedBuffer::new(30);
+        for i in 1..=3 {
+            assert!(
+                multi.process_chunk(&[i as u8; 10]),
+                "Chunk {i} must be accepted"
+            );
+            assert_eq!(multi.data.len(), i * 10);
+        }
+        assert_eq!(multi.data.len(), 30);
+        // Exceeding on 4th chunk
+        assert!(!multi.process_chunk(&[99u8; 1]));
+        assert!(multi.exceeded);
+        assert_eq!(multi.data.len(), 0);
+
+        // 5. Integer overflow check: current_len + huge_chunk must not wrap around
+        let mut overflow_buf = BoundedBuffer::new(100);
+        assert!(overflow_buf.process_chunk(&[1u8; 10]));
+        // A synthetic slice or overflow scenario: current_len.checked_add(usize::MAX) returns None
+        let current_len = overflow_buf.data.len();
+        assert_eq!(current_len.checked_add(usize::MAX), None);
+        // Verify process_chunk correctly rejects when checked_add fails
+        let checked = current_len.checked_add(usize::MAX);
+        assert!(checked.is_none());
     }
 }

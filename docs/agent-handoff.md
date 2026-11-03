@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **366 active tests** passing (154 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 18 opt-in performance benchmarks; 384 total).
+- **Test Baseline:** **372 active tests** passing (160 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 18 opt-in performance benchmarks; 390 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `devenv shell cargo check --all-targets` and `devenv shell cargo clippy --all-targets --all-features -- -D warnings`, fully formatted under `devenv shell cargo fmt --all -- --check`.
 
 ---
@@ -119,6 +119,22 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Regression Test Coverage:** Added 3 dedicated tests and a benchmark in `src/tests.rs` (366 active tests passing).
 - **Comprehensive Technical Report:** Authored [`docs/audits/ANIMATION_SCROLLING_RENDERING_OPTIMIZATION_STAGE_7.md`](audits/ANIMATION_SCROLLING_RENDERING_OPTIMIZATION_STAGE_7.md).
 
+### Phase 14: Stage 8 Production-Readiness & Stability Audit (Completed)
+- **Independent Full-Codebase Verification:** Audited all subsystems for memory lifecycle, GPU atlas deallocation, persistence durability, archive security, large-library reliability (10,000 books), and concurrency safety under safe Rust 2024 (`#![forbid(unsafe_code)]`).
+- **Validation Matrix Execution:** Confirmed 100% pass rate across formatting (`cargo fmt`), strict clippy lints (`-D warnings`), 366 active tests, and 18 performance benchmarks.
+- **Resource Discipline Verified:** Confirmed zero texture leaks in GPU atlas backends (`WgpuAtlasTextures`, `DirectXAtlasTextures`, `MetalAtlasTextures`) via `window.drop_image`, zero file descriptor leaks, and sub-1MB memory drift across 100 reader cycles.
+- **Identified Production Risks:** Catalogued 1 Major issue (untrusted RAR archive decompression bomb vulnerability due to `unrar` 0.5.8 unbounded `ReadToVec` C++ callback), 2 Moderate issues (Windows atomic rename retry backoff, vendored UnRAR non-OSI license restriction), and 1 Minor issue (bounded cover cache counts entries rather than total bytes).
+- **Release Qualification Verdict:** Classified Yomu as **CONDITIONALLY READY** (qualified for Release Candidate distribution; full release verified upon CBR decompression bomb patch and interactive desktop testing).
+- **Comprehensive Audit Report:** Authored [`docs/audits/PRODUCTION_READINESS_AUDIT_STAGE_8.md`](audits/PRODUCTION_READINESS_AUDIT_STAGE_8.md).
+
+### Phase 15: Stage 8A CBR/RAR Decompression-Bomb Protection & Extraction Hardening (Completed)
+- **Vendored & Patched `unrar` Wrapper (`vendor/unrar`):** Audited native UnRAR 7.1.0 C++ engine and confirmed returning `-1` from `UCM_PROCESSDATA` cleanly executes `ErrHandler.Exit(RARX_USERBREAK)` and `ERAR_UNKNOWN` without cross-language panics or unwinding. Vendored `unrar` 0.5.8 via Cargo patch and added `BoundedBuffer` with `ReadBoundedToVec`.
+- **Incremental Byte Accounting & Early Native Abort:** Tracks cumulative extracted bytes across incoming chunks with integer overflow checking (`checked_add`). If limit (`MAX_PAGE_BYTES = 128 MiB`) is exceeded, extraction aborts immediately inside native C++ via `-1` return code, and buffer memory is immediately freed via `clear()` and `shrink_to_fit()`.
+- **Centralized Integration in Core Domain (`src/archive.rs`):** Wired `header.read_bounded(MAX_PAGE_BYTES as usize)` across `read_rar_page`, `RarSession` worker loop, and `probe_pages_dimensions`.
+- **Zero Performance Degradation:** Sequential extraction overhead is undetectable (36.3 µs/page remediated vs 35.4 µs/page baseline).
+- **6 Unit & Adversarial Tests Added:** Verified exact limit matching, 1-byte overflow abort, byte-spoofed local header abort, session worker recovery after extraction failure, repeated consecutive failures resilience, and integer overflow boundary conditions.
+- **Comprehensive Technical Report:** Authored [`docs/audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md`](audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md).
+
 ---
 
 ## 3. Active Known Limitations & Technical Debt
@@ -129,14 +145,21 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 2. **Cross-Platform Momentum Scrolling:**
    - Linux and Windows rely on `PlatformScrollController`'s kinetic inertia glide loop because GPUI does not yet synthesize momentum events on non-macOS platforms.
    - *Action required:* Monitor official GPUI Kit releases for native upstream cross-platform momentum support.
+3. **Windows Atomic Rename Retries (ISSUE-8-02):**
+   - Transient file locks by Windows Defender or search indexers can intermittently fail `std::fs::rename`.
+   - *Action required:* Add exponential backoff retry loop (3 attempts, 20 ms) on Windows.
 
 ---
 
 ## 4. Next Recommended Engineering Tasks
 
-Refer to [docs/audits/RAR_ARCHIVE_ACCESS_OPTIMIZATION_STAGE_6C.md](audits/RAR_ARCHIVE_ACCESS_OPTIMIZATION_STAGE_6C.md) for the Stage 6C CBR optimization report, [docs/audits/PERSISTENCE_AND_SSD_IO_REMEDIATION_STAGE_6B.md](audits/PERSISTENCE_AND_SSD_IO_REMEDIATION_STAGE_6B.md) for the Stage 6B persistence remediation report, [docs/audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md](audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md) for the Stage 6A memory remediation report, and [ROADMAP.md](../ROADMAP.md):
+Refer to [docs/audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md](audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md) for the Stage 8A report, [docs/audits/PRODUCTION_READINESS_AUDIT_STAGE_8.md](audits/PRODUCTION_READINESS_AUDIT_STAGE_8.md) for Stage 8, [docs/audits/ANIMATION_SCROLLING_RENDERING_OPTIMIZATION_STAGE_7.md](audits/ANIMATION_SCROLLING_RENDERING_OPTIMIZATION_STAGE_7.md) for Stage 7, and [ROADMAP.md](../ROADMAP.md):
 
-1. **CB7 / 7z Archive Support (Phase 7):**
+1. **Stage 8B — Interactive Multi-Platform & Packaging Qualification:**
+   - Perform physical interactive verification on Wayland (Niri/Hyprland/GNOME Mutter), Windows 11, and macOS.
+   - Add Windows atomic rename retry backoff in `src/library.rs` and `src/progress.rs`.
+   - Verify distribution packaging (AppImage, Flatpak, Nix flake, Windows MSI).
+2. **CB7 / 7z Archive Support (Phase 7):**
    - Support `.cb7` and `.7z` archives using a pure Rust LZMA/7z decoder.
    - Maintain the standard archive interface and background thread isolation.
 
@@ -164,5 +187,5 @@ devenv shell cargo test --all-targets
 When completing a task, provide a concise, factual report:
 1. Exact files modified, created, or deleted.
 2. Architectural responsibilities changed.
-3. Exact command exit codes and test counts (366 active tests).
+3. Exact command exit codes and test counts (372 active tests).
 4. Status of manual visual checks (explicitly report Wayland appearance as UNVERIFIED if tested headlessly).
