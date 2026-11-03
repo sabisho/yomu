@@ -17,7 +17,7 @@ Yomu is a minimal, keyboard-first, high-performance desktop manga and comic read
   1. *Core Domain Layer (`src/lib.rs` and `src/*.rs`):* GUI-independent Rust combining pure algorithms (layout geometry, animation physics, Vim token parsing, search filtering, selection state machines) with filesystem and persistence operations (archive unpacking, SIMD image decoding, JSON storage). See [src/AGENTS.md](src/AGENTS.md).
   2. *UI Presentation Layer (`src/ui/`):* Reusable GPUI Kit views, components, dialogs, and overlays. See [src/ui/AGENTS.md](src/ui/AGENTS.md).
   3. *Application Orchestration (`src/app/` and `src/main.rs`):* Window lifecycle, state routing, async background scheduling, input dispatch, and persistence coordination. See [src/app/AGENTS.md](src/app/AGENTS.md).
-- **Test Baseline:** **346 active tests** passing (145 core library unit tests in `src/lib.rs`, 201 binary-target UI tests in `src/main.rs`, plus 13 opt-in performance benchmarks; 359 total).
+- **Test Baseline:** **366 active tests** passing (154 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 18 opt-in performance benchmarks; 384 total).
 - **User-Owned Files:** `problems.md` is user-owned. **Never edit, modify, or delete it.**
 
 ---
@@ -176,7 +176,7 @@ devenv shell cargo check --all-targets
 # 3. Strict Clippy lint check with warnings as errors
 devenv shell cargo clippy --all-targets --all-features -- -D warnings
 
-# 4. Full test suite across all targets (346 active tests)
+# 4. Full test suite across all targets (366 active tests)
 devenv shell cargo test --all-targets
 ```
 

@@ -1,8 +1,14 @@
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::{self, BufReader, Read},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, SyncSender, sync_channel},
+    },
+    thread::{Builder, JoinHandle},
 };
 
 use anyhow::{Context, Result, bail};
@@ -266,6 +272,261 @@ fn read_zip_page(path: &Path, name: &str) -> Result<Vec<u8>> {
     read_res
 }
 
+struct RarTask {
+    name: String,
+    cancel: Option<Arc<AtomicBool>>,
+    reply: SyncSender<Result<Vec<u8>>>,
+}
+
+/// A worker-confined CBR/RAR reader session.
+///
+/// Keeps an `unrar::OpenArchive` handle alive on a dedicated background worker thread,
+/// enabling $O(1)$ sequential page advances and eliminating repeated archive reopening
+/// and quadratic ($O(N^2)$) header rescanning.
+///
+/// Thread safety: The UnRAR handle is `!Send` and `!Sync`, so it is strictly confined
+/// to the worker thread that spawned it. `RarSession` communicates with the worker via
+/// safe standard library channels (`std::sync::mpsc`).
+///
+/// Resource lifecycle: When `RarSession` is dropped, `sender` is dropped, causing
+/// the worker thread to exit immediately, call `RARCloseArchive`, and terminate.
+pub struct RarSession {
+    path: PathBuf,
+    sender: Option<SyncSender<RarTask>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+fn rar_worker_loop(path: PathBuf, receiver: Receiver<RarTask>) {
+    let mut proc: Option<unrar::OpenArchive<unrar::Process, unrar::CursorBeforeHeader>> = None;
+    let mut current_physical_index: usize = 0;
+    let mut known_positions: HashMap<String, usize> = HashMap::new();
+
+    while let Ok(task) = receiver.recv() {
+        let RarTask {
+            name,
+            cancel,
+            reply,
+        } = task;
+
+        if let Some(ref c) = cancel
+            && c.load(Ordering::Relaxed)
+        {
+            let _ = reply.send(Err(anyhow::anyhow!("page cancelled")));
+            continue;
+        }
+
+        if !is_safe_archive_entry_name(&name) {
+            let _ = reply.send(Err(anyhow::anyhow!("invalid or unsafe page name: {name}")));
+            continue;
+        }
+
+        let normalized_target = if name.contains('\\') {
+            name.replace('\\', "/")
+        } else {
+            name.clone()
+        };
+
+        // Determine if target entry is already known to be behind our current cursor
+        let target_is_behind = known_positions
+            .get(&normalized_target)
+            .is_some_and(|&pos| pos < current_physical_index);
+
+        if target_is_behind || proc.is_none() {
+            proc = None;
+            current_physical_index = 0;
+            match unrar::Archive::new(&path).open_for_processing() {
+                Ok(opened) => proc = Some(opened),
+                Err(e) => {
+                    let _ = reply.send(Err(anyhow::anyhow!("opening {}: {e}", path.display())));
+                    continue;
+                }
+            }
+        }
+
+        let mut archive = proc.take().unwrap();
+        let found_data;
+        let mut has_retried_from_start = target_is_behind;
+
+        loop {
+            if let Some(ref c) = cancel
+                && c.load(Ordering::Relaxed)
+            {
+                found_data = Some(Err(anyhow::anyhow!("page cancelled")));
+                proc = Some(archive);
+                break;
+            }
+
+            let header = match archive.read_header() {
+                Ok(Some(h)) => h,
+                Ok(None) => {
+                    // Reached end of archive
+                    if current_physical_index > 0 && !has_retried_from_start {
+                        match unrar::Archive::new(&path).open_for_processing() {
+                            Ok(reopened) => {
+                                archive = reopened;
+                                current_physical_index = 0;
+                                has_retried_from_start = true;
+                                continue;
+                            }
+                            Err(e) => {
+                                found_data =
+                                    Some(Err(anyhow::anyhow!("reopening {}: {e}", path.display())));
+                                break;
+                            }
+                        }
+                    }
+                    found_data = Some(Err(anyhow::anyhow!("page {name} missing from archive")));
+                    break;
+                }
+                Err(e) => {
+                    found_data = Some(Err(anyhow::anyhow!(
+                        "reading header from {}: {e}",
+                        path.display()
+                    )));
+                    break;
+                }
+            };
+
+            let entry_fn = &header.entry().filename;
+            let current_name: std::borrow::Cow<'_, str> = if let Some(s) = entry_fn.to_str() {
+                if s.contains('\\') {
+                    std::borrow::Cow::Owned(s.replace('\\', "/"))
+                } else {
+                    std::borrow::Cow::Borrowed(s)
+                }
+            } else {
+                let name_str = entry_fn.to_string_lossy();
+                if name_str.contains('\\') {
+                    std::borrow::Cow::Owned(name_str.replace('\\', "/"))
+                } else {
+                    name_str
+                }
+            };
+
+            let entry_name_str = current_name.as_ref();
+            known_positions
+                .entry(entry_name_str.to_string())
+                .or_insert(current_physical_index);
+
+            let is_match = entry_name_str == normalized_target;
+
+            if is_match {
+                current_physical_index += 1;
+                if header.entry().is_encrypted() {
+                    found_data = Some(Err(anyhow::anyhow!(
+                        "page {name} is password-protected or encrypted in {}",
+                        path.display()
+                    )));
+                    break;
+                }
+                if header.entry().unpacked_size > MAX_PAGE_BYTES {
+                    found_data = Some(Err(anyhow::anyhow!("page {name} is unreasonably large")));
+                    if let Ok(next) = header.skip() {
+                        proc = Some(next);
+                    }
+                    break;
+                }
+                match header.read() {
+                    Ok((data, next)) => {
+                        if data.len() as u64 > MAX_PAGE_BYTES {
+                            found_data = Some(Err(anyhow::anyhow!(
+                                "page {name} decompressed size exceeds maximum budget"
+                            )));
+                        } else {
+                            found_data = Some(Ok(data));
+                        }
+                        proc = Some(next);
+                        break;
+                    }
+                    Err(e) => {
+                        found_data = Some(Err(anyhow::anyhow!(
+                            "extracting {name} from {}: {e}",
+                            path.display()
+                        )));
+                        break;
+                    }
+                }
+            } else {
+                current_physical_index += 1;
+                match header.skip() {
+                    Ok(next) => archive = next,
+                    Err(e) => {
+                        found_data = Some(Err(anyhow::anyhow!(
+                            "skipping entry in {}: {e}",
+                            path.display()
+                        )));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(res) = found_data {
+            let _ = reply.send(res);
+        }
+    }
+}
+
+impl RarSession {
+    /// Opens a new worker-confined RAR session for `path`.
+    pub fn open(path: &Path) -> Result<Self> {
+        let path_buf = path.to_path_buf();
+        let (sender, receiver) = sync_channel::<RarTask>(32);
+        let worker_path = path_buf.clone();
+        let thread_name = format!(
+            "yomu-rar-{}",
+            worker_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("worker")
+        );
+
+        let worker = Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                rar_worker_loop(worker_path, receiver);
+            })
+            .with_context(|| format!("spawning rar worker for {}", path.display()))?;
+
+        Ok(Self {
+            path: path_buf,
+            sender: Some(sender),
+            worker: Some(worker),
+        })
+    }
+
+    /// Read a page by entry name, advancing the worker-local archive position.
+    pub fn read_page(&self, name: &str, cancel: Option<Arc<AtomicBool>>) -> Result<Vec<u8>> {
+        let sender = self.sender.as_ref().context("rar session is closed")?;
+        let (reply_tx, reply_rx) = sync_channel(1);
+        sender
+            .send(RarTask {
+                name: name.to_string(),
+                cancel,
+                reply: reply_tx,
+            })
+            .map_err(|_| anyhow::anyhow!("rar worker channel disconnected"))?;
+
+        reply_rx
+            .recv()
+            .map_err(|_| anyhow::anyhow!("rar worker failed to respond"))?
+    }
+
+    /// Path of the open archive.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for RarSession {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+        if let Some(handle) = self.worker.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 fn read_rar_page(path: &Path, name: &str) -> Result<Vec<u8>> {
     if !is_safe_archive_entry_name(name) {
         bail!("invalid or unsafe page name: {name}");
@@ -325,8 +586,14 @@ fn read_rar_page(path: &Path, name: &str) -> Result<Vec<u8>> {
     }
 }
 
-/// Raw (still encoded) bytes of one page.
-pub fn read_page(path: &Path, kind: SourceKind, name: &str) -> Result<Vec<u8>> {
+/// Raw (still encoded) bytes of one page, optionally reusing a worker-confined `RarSession`.
+pub fn read_page_with_session(
+    path: &Path,
+    kind: SourceKind,
+    name: &str,
+    session: Option<&RarSession>,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<Vec<u8>> {
     match kind {
         SourceKind::Archive => {
             let format = detect_archive_format(path);
@@ -336,23 +603,35 @@ pub fn read_page(path: &Path, kind: SourceKind, name: &str) -> Result<Vec<u8>> {
                     Err(err) => {
                         let msg = format!("{err:#}");
                         if msg.contains("not a valid zip") {
-                            read_rar_page(path, name)
+                            if let Some(s) = session {
+                                s.read_page(name, cancel)
+                            } else {
+                                read_rar_page(path, name)
+                            }
                         } else {
                             Err(err)
                         }
                     }
                 },
-                ArchiveFormat::Rar => match read_rar_page(path, name) {
-                    Ok(data) => Ok(data),
-                    Err(err) => {
-                        let msg = format!("{err:#}");
-                        if msg.contains("not a valid rar") || msg.contains("Not a RAR archive") {
-                            read_zip_page(path, name)
-                        } else {
-                            Err(err)
+                ArchiveFormat::Rar => {
+                    let res = if let Some(s) = session {
+                        s.read_page(name, cancel)
+                    } else {
+                        read_rar_page(path, name)
+                    };
+                    match res {
+                        Ok(data) => Ok(data),
+                        Err(err) => {
+                            let msg = format!("{err:#}");
+                            if msg.contains("not a valid rar") || msg.contains("Not a RAR archive")
+                            {
+                                read_zip_page(path, name)
+                            } else {
+                                Err(err)
+                            }
                         }
                     }
-                },
+                }
             }
         }
         SourceKind::Folder => {
@@ -360,6 +639,11 @@ pub fn read_page(path: &Path, kind: SourceKind, name: &str) -> Result<Vec<u8>> {
             fs::read(&full).with_context(|| format!("reading {}", full.display()))
         }
     }
+}
+
+/// Raw (still encoded) bytes of one page.
+pub fn read_page(path: &Path, kind: SourceKind, name: &str) -> Result<Vec<u8>> {
+    read_page_with_session(path, kind, name, None, None)
 }
 
 /// Inspects the header of a single page in an archive or folder to extract (width, height)
@@ -521,34 +805,74 @@ pub fn probe_pages_dimensions(
     results
 }
 
+fn crc32_inline(data: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if (crc & 1) != 0 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+const TEST_RAR: [u8; 87] = [
+    0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00, 0xcf, 0x90, 0x73, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x0f, 0x0c, 0x74, 0x20, 0x80, 0x27, 0x00, 0x15, 0x00, 0x00, 0x00, 0x0b,
+    0x00, 0x00, 0x00, 0x03, 0x45, 0xf3, 0x7d, 0xc6, 0xa4, 0x8a, 0x07, 0x47, 0x1d, 0x33, 0x07, 0x00,
+    0xa4, 0x81, 0x00, 0x00, 0x56, 0x45, 0x52, 0x53, 0x49, 0x4f, 0x4e, 0x0c, 0x00, 0x8f, 0xec, 0x8a,
+    0x45, 0xcc, 0x23, 0xc8, 0x48, 0x08, 0x83, 0x62, 0xfe, 0x5f, 0xdd, 0x5c, 0x53, 0x88, 0xf0, 0x72,
+    0xc4, 0x3d, 0x7b, 0x00, 0x40, 0x07, 0x00,
+];
+
+#[doc(hidden)]
+pub fn make_multi_page_cbr(names: &[&str]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&TEST_RAR[0..0x14]);
+
+    const PAYLOAD: &[u8] = &[
+        0x0c, 0x00, 0x8f, 0xec, 0x8a, 0x45, 0xcc, 0x23, 0xc8, 0x48, 0x08, 0x83, 0x62, 0xfe, 0x5f,
+        0xdd, 0x5c, 0x53, 0x88, 0xf0, 0x72,
+    ];
+
+    for &name in names {
+        let name_bytes = name.as_bytes();
+        let head_size = (32 + name_bytes.len()) as u16;
+        let mut header = Vec::with_capacity(head_size as usize);
+        header.extend_from_slice(&[0, 0]); // CRC placeholder
+        header.push(0x74); // type: FILE_HEAD
+        header.extend_from_slice(&[0x20, 0x80]); // flags: 0x8020
+        header.extend_from_slice(&head_size.to_le_bytes());
+        header.extend_from_slice(&21u32.to_le_bytes()); // pack_size
+        header.extend_from_slice(&11u32.to_le_bytes()); // unp_size
+        header.push(3); // host_os: Unix
+        header.extend_from_slice(&[0x45, 0xf3, 0x7d, 0xc6]); // file_crc
+        header.extend_from_slice(&[0xa4, 0x8a, 0x07, 0x47]); // file_time
+        header.push(29); // unp_ver
+        header.push(0x33); // method
+        header.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes()); // name_size
+        header.extend_from_slice(&[0xa4, 0x81, 0x00, 0x00]); // file_attr
+        header.extend_from_slice(name_bytes);
+
+        let crc = (crc32_inline(&header[2..]) & 0xffff) as u16;
+        header[0..2].copy_from_slice(&crc.to_le_bytes());
+
+        out.extend_from_slice(&header);
+        out.extend_from_slice(PAYLOAD);
+    }
+
+    out.extend_from_slice(&[0xc4, 0x3d, 0x7b, 0x00, 0x40, 0x07, 0x00]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
-
-    fn crc32_inline(data: &[u8]) -> u32 {
-        let mut crc = 0xffff_ffffu32;
-        for &b in data {
-            crc ^= b as u32;
-            for _ in 0..8 {
-                crc = if (crc & 1) != 0 {
-                    (crc >> 1) ^ 0xedb8_8320
-                } else {
-                    crc >> 1
-                };
-            }
-        }
-        !crc
-    }
-
-    const TEST_RAR: [u8; 87] = [
-        0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00, 0xcf, 0x90, 0x73, 0x00, 0x00, 0x0d, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x0c, 0x74, 0x20, 0x80, 0x27, 0x00, 0x15, 0x00, 0x00,
-        0x00, 0x0b, 0x00, 0x00, 0x00, 0x03, 0x45, 0xf3, 0x7d, 0xc6, 0xa4, 0x8a, 0x07, 0x47, 0x1d,
-        0x33, 0x07, 0x00, 0xa4, 0x81, 0x00, 0x00, 0x56, 0x45, 0x52, 0x53, 0x49, 0x4f, 0x4e, 0x0c,
-        0x00, 0x8f, 0xec, 0x8a, 0x45, 0xcc, 0x23, 0xc8, 0x48, 0x08, 0x83, 0x62, 0xfe, 0x5f, 0xdd,
-        0x5c, 0x53, 0x88, 0xf0, 0x72, 0xc4, 0x3d, 0x7b, 0x00, 0x40, 0x07, 0x00,
-    ];
 
     fn make_test_cbr(name_7chars: &str) -> Vec<u8> {
         assert_eq!(name_7chars.len(), 7);
@@ -575,6 +899,361 @@ mod tests {
         assert_eq!(&bytes, b"unrar-0.4.0");
 
         let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn cbr_multi_page_archive_lists_and_reads_pages() {
+        let cbr_bytes = make_multi_page_cbr(&["001.jpg", "002.jpg", "003.jpg"]);
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_multi_test_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        assert_eq!(detect_archive_format(&tmp), ArchiveFormat::Rar);
+        let pages = list_pages(&tmp, SourceKind::Archive).unwrap();
+        assert_eq!(pages, vec!["001.jpg", "002.jpg", "003.jpg"]);
+
+        let b1 = read_page(&tmp, SourceKind::Archive, "001.jpg").unwrap();
+        assert_eq!(&b1, b"unrar-0.4.0");
+        let b2 = read_page(&tmp, SourceKind::Archive, "002.jpg").unwrap();
+        assert_eq!(&b2, b"unrar-0.4.0");
+        let b3 = read_page(&tmp, SourceKind::Archive, "003.jpg").unwrap();
+        assert_eq!(&b3, b"unrar-0.4.0");
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    #[ignore = "prints timings and metrics"]
+    fn perf_stage6c_cbr_baseline() {
+        use std::time::Instant;
+
+        println!(
+            "\n================================================================================"
+        );
+        println!("  STAGE 6C: CBR/RAR ACCESS BASELINE (QUADRATIC RE-OPENING & HEADER SCANS)");
+        println!(
+            "================================================================================"
+        );
+
+        for &page_count in &[25, 50, 100, 200] {
+            let names: Vec<String> = (1..=page_count)
+                .map(|i| format!("page_{:03}.jpg", i))
+                .collect();
+            let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+
+            let cbr_bytes = make_multi_page_cbr(&name_refs);
+            let tmp = std::env::temp_dir().join(format!(
+                "yomu_cbr_baseline_{}_{}.cbr",
+                page_count,
+                crate::util::now_secs()
+            ));
+            fs::write(&tmp, &cbr_bytes).unwrap();
+
+            // 1. Sequential reading of all pages using current unoptimized read_page()
+            let seq_start = Instant::now();
+            let mut first_page_time = None;
+            let mut mid_page_time = None;
+            let mut last_page_time = None;
+
+            for (i, name) in names.iter().enumerate() {
+                let p_start = Instant::now();
+                let bytes = read_page(&tmp, SourceKind::Archive, name).expect("read page");
+                assert_eq!(bytes, b"unrar-0.4.0");
+                let elapsed = p_start.elapsed();
+
+                if i == 0 {
+                    first_page_time = Some(elapsed);
+                } else if i == page_count / 2 {
+                    mid_page_time = Some(elapsed);
+                } else if i == page_count - 1 {
+                    last_page_time = Some(elapsed);
+                }
+            }
+            let total_seq_time = seq_start.elapsed();
+
+            // 2. Random access & backward jumps
+            let mid_name = &names[page_count / 2];
+            let last_name = &names[page_count - 1];
+            let first_name = &names[0];
+
+            let t_mid_start = Instant::now();
+            let _ = read_page(&tmp, SourceKind::Archive, mid_name).unwrap();
+            let t_mid = t_mid_start.elapsed();
+
+            let t_last_start = Instant::now();
+            let _ = read_page(&tmp, SourceKind::Archive, last_name).unwrap();
+            let t_last = t_last_start.elapsed();
+
+            let t_back_start = Instant::now();
+            let _ = read_page(&tmp, SourceKind::Archive, first_name).unwrap();
+            let t_back = t_back_start.elapsed();
+
+            let total_headers = (page_count * (page_count + 1)) / 2;
+
+            println!("\n--- [CBR Archive: {page_count} Pages] ---");
+            println!(
+                "  Archive File Size:              {} bytes",
+                cbr_bytes.len()
+            );
+            println!("  Sequential Read Total Time:     {total_seq_time:?}");
+            println!(
+                "  Average Time per Page:          {:?}",
+                total_seq_time / page_count as u32
+            );
+            println!("  Archive Opens:                  {page_count} (1 open per page)");
+            println!("  Cumulative Header Scans:        {total_headers} (O(N^2) quadratic)");
+            println!(
+                "  First Page Access Latency:      {:?}",
+                first_page_time.unwrap()
+            );
+            println!(
+                "  Middle Page Access Latency:     {:?}",
+                mid_page_time.unwrap()
+            );
+            println!(
+                "  Last Page Access Latency:       {:?}",
+                last_page_time.unwrap()
+            );
+            println!("  Random Mid-Page Access:         {t_mid:?}");
+            println!("  Random Last-Page Access:        {t_last:?}");
+            println!("  Backward Jump to First Page:    {t_back:?}");
+
+            let _ = fs::remove_file(&tmp);
+        }
+    }
+
+    #[test]
+    fn test_rar_session_sequential_extraction() {
+        let names: Vec<String> = (1..=10).map(|i| format!("page_{:03}.jpg", i)).collect();
+        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let cbr_bytes = make_multi_page_cbr(&name_refs);
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_session_seq_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let session = RarSession::open(&tmp).expect("open rar session");
+        for name in &names {
+            let data = session.read_page(name, None).expect("read page in session");
+            assert_eq!(data, b"unrar-0.4.0");
+        }
+
+        drop(session);
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_rar_session_random_page_access_and_backward() {
+        let names: Vec<String> = (1..=10).map(|i| format!("page_{:03}.jpg", i)).collect();
+        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let cbr_bytes = make_multi_page_cbr(&name_refs);
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_session_rnd_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let session = RarSession::open(&tmp).expect("open rar session");
+
+        // 1. First read
+        assert_eq!(
+            session.read_page("page_001.jpg", None).unwrap(),
+            b"unrar-0.4.0"
+        );
+        // 2. Forward jump
+        assert_eq!(
+            session.read_page("page_007.jpg", None).unwrap(),
+            b"unrar-0.4.0"
+        );
+        // 3. Next page
+        assert_eq!(
+            session.read_page("page_008.jpg", None).unwrap(),
+            b"unrar-0.4.0"
+        );
+        // 4. Backward jump
+        assert_eq!(
+            session.read_page("page_003.jpg", None).unwrap(),
+            b"unrar-0.4.0"
+        );
+        // 5. Repeated read of same page
+        assert_eq!(
+            session.read_page("page_003.jpg", None).unwrap(),
+            b"unrar-0.4.0"
+        );
+        // 6. Jump to end
+        assert_eq!(
+            session.read_page("page_010.jpg", None).unwrap(),
+            b"unrar-0.4.0"
+        );
+
+        drop(session);
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_rar_session_cancellation() {
+        let names = ["page_001.jpg", "page_002.jpg"];
+        let cbr_bytes = make_multi_page_cbr(&names);
+        let tmp = std::env::temp_dir().join(format!(
+            "yomu_session_cancel_{}.cbr",
+            crate::util::now_secs()
+        ));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let session = RarSession::open(&tmp).expect("open rar session");
+
+        let cancel = Arc::new(AtomicBool::new(true));
+        let err = session.read_page("page_001.jpg", Some(cancel)).unwrap_err();
+        assert!(err.to_string().contains("cancelled"));
+
+        // Subsequent non-cancelled read must work cleanly
+        let data = session.read_page("page_001.jpg", None).unwrap();
+        assert_eq!(data, b"unrar-0.4.0");
+
+        drop(session);
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_rar_session_missing_entry_resilience() {
+        let names = ["page_001.jpg", "page_002.jpg"];
+        let cbr_bytes = make_multi_page_cbr(&names);
+        let tmp = std::env::temp_dir().join(format!(
+            "yomu_session_missing_{}.cbr",
+            crate::util::now_secs()
+        ));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let session = RarSession::open(&tmp).expect("open rar session");
+
+        let err = session.read_page("nonexistent.jpg", None).unwrap_err();
+        assert!(err.to_string().contains("missing"));
+
+        // Subsequent valid read must succeed
+        let data = session.read_page("page_002.jpg", None).unwrap();
+        assert_eq!(data, b"unrar-0.4.0");
+
+        drop(session);
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_rar_session_handle_cleanup_on_drop() {
+        let names = ["page_001.jpg"];
+        let cbr_bytes = make_multi_page_cbr(&names);
+        let tmp = std::env::temp_dir().join(format!(
+            "yomu_session_cleanup_{}.cbr",
+            crate::util::now_secs()
+        ));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let session = RarSession::open(&tmp).expect("open rar session");
+        let _ = session.read_page("page_001.jpg", None).unwrap();
+
+        // Explicit drop must join the worker thread and close the file descriptor
+        drop(session);
+
+        // Immediate removal should succeed without file lock errors
+        assert!(fs::remove_file(&tmp).is_ok());
+    }
+
+    #[test]
+    #[ignore = "prints timings and metrics"]
+    fn perf_stage6c_cbr_remediated() {
+        use std::time::Instant;
+
+        println!(
+            "\n================================================================================"
+        );
+        println!("  STAGE 6C: CBR/RAR ACCESS REMEDIATED (WORKER-CONFINED SESSION O(1) ADVANCE)");
+        println!(
+            "================================================================================"
+        );
+
+        for &page_count in &[25, 50, 100, 200] {
+            let names: Vec<String> = (1..=page_count)
+                .map(|i| format!("page_{:03}.jpg", i))
+                .collect();
+            let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+
+            let cbr_bytes = make_multi_page_cbr(&name_refs);
+            let tmp = std::env::temp_dir().join(format!(
+                "yomu_cbr_remediated_{}_{}.cbr",
+                page_count,
+                crate::util::now_secs()
+            ));
+            fs::write(&tmp, &cbr_bytes).unwrap();
+
+            let session = RarSession::open(&tmp).expect("open rar session");
+
+            // 1. Sequential reading of all pages using RarSession
+            let seq_start = Instant::now();
+            let mut first_page_time = None;
+            let mut mid_page_time = None;
+            let mut last_page_time = None;
+
+            for (i, name) in names.iter().enumerate() {
+                let p_start = Instant::now();
+                let bytes = session.read_page(name, None).expect("read page in session");
+                assert_eq!(bytes, b"unrar-0.4.0");
+                let elapsed = p_start.elapsed();
+
+                if i == 0 {
+                    first_page_time = Some(elapsed);
+                } else if i == page_count / 2 {
+                    mid_page_time = Some(elapsed);
+                } else if i == page_count - 1 {
+                    last_page_time = Some(elapsed);
+                }
+            }
+            let total_seq_time = seq_start.elapsed();
+
+            // 2. Random access & backward jumps
+            let mid_name = &names[page_count / 2];
+            let last_name = &names[page_count - 1];
+            let first_name = &names[0];
+
+            let t_mid_start = Instant::now();
+            let _ = session.read_page(mid_name, None).unwrap();
+            let t_mid = t_mid_start.elapsed();
+
+            let t_last_start = Instant::now();
+            let _ = session.read_page(last_name, None).unwrap();
+            let t_last = t_last_start.elapsed();
+
+            let t_back_start = Instant::now();
+            let _ = session.read_page(first_name, None).unwrap();
+            let t_back = t_back_start.elapsed();
+
+            drop(session);
+
+            println!("\n--- [CBR Archive (Remediated): {page_count} Pages] ---");
+            println!(
+                "  Archive File Size:              {} bytes",
+                cbr_bytes.len()
+            );
+            println!("  Sequential Read Total Time:     {total_seq_time:?}");
+            println!(
+                "  Average Time per Page:          {:?}",
+                total_seq_time / page_count as u32
+            );
+            println!("  Archive Opens:                  1 (opened once for entire session)");
+            println!("  Sequential Header Scans:        {page_count} (O(N) linear stream)");
+            println!(
+                "  First Page Access Latency:      {:?}",
+                first_page_time.unwrap()
+            );
+            println!(
+                "  Middle Page Access Latency:     {:?}",
+                mid_page_time.unwrap()
+            );
+            println!(
+                "  Last Page Access Latency:       {:?}",
+                last_page_time.unwrap()
+            );
+            println!("  Random Mid-Page Access:         {t_mid:?}");
+            println!("  Random Last-Page Access:        {t_last:?}");
+            println!("  Backward Jump to First Page:    {t_back:?}");
+
+            let _ = fs::remove_file(&tmp);
+        }
     }
 
     #[test]

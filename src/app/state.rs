@@ -140,6 +140,13 @@ pub struct Yomu {
     pub(crate) write_lock: Arc<Mutex<()>>,
     pub(crate) save_pending: bool,
     pub(crate) save_pending_since: Option<Instant>,
+    pub(crate) last_saved_library_mutation_seq: Arc<AtomicU64>,
+    pub(crate) progress: yomu::progress::ProgressStore,
+    pub(crate) progress_seq: u64,
+    pub(crate) last_saved_progress_seq: Arc<AtomicU64>,
+    pub(crate) progress_write_lock: Arc<Mutex<()>>,
+    pub(crate) progress_save_pending: bool,
+    pub(crate) progress_save_pending_since: Option<Instant>,
     pub(crate) is_quitting: bool,
     // Two-pane redesign fields:
     pub(crate) active_section: ui::sidebar::SidebarSection,
@@ -170,12 +177,28 @@ impl Yomu {
     pub fn with_dirs(dirs: DataDirs, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let _ = yomu::pagecache::system_memory_budget();
         let dirs = Arc::new(dirs);
-        let (library, toast) = match Library::load(&dirs) {
+        let (mut library, toast) = match Library::load(&dirs) {
             Ok(library) => (library, None),
             Err(err) => (
                 Library::default(),
                 Some(SharedString::from(format!("{err:#}"))),
             ),
+        };
+        let progress = match yomu::progress::ProgressStore::load(&dirs) {
+            Ok(mut store) => {
+                if store.is_empty() {
+                    store.harvest_from_library(&library);
+                    let _ = store.save(&dirs);
+                }
+                store.apply_to_library(&mut library);
+                store
+            }
+            Err(_) => {
+                let mut store = yomu::progress::ProgressStore::new();
+                store.harvest_from_library(&library);
+                let _ = store.save(&dirs);
+                store
+            }
         };
         let custom_theme_path = custom_theme_path(&dirs).unwrap_or_else(|error| {
             eprintln!("yomu: cannot determine custom theme path: {error:#}");
@@ -223,6 +246,8 @@ impl Yomu {
         if obsolete_tracking_file.exists() {
             let _ = std::fs::remove_file(obsolete_tracking_file);
         }
+
+        let initial_mutation_seq = library.mutation_seq();
 
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search title, path, or series…"));
@@ -292,6 +317,13 @@ impl Yomu {
             write_lock: Arc::new(Mutex::new(())),
             save_pending: false,
             save_pending_since: None,
+            last_saved_library_mutation_seq: Arc::new(AtomicU64::new(initial_mutation_seq)),
+            progress,
+            progress_seq: 0,
+            last_saved_progress_seq: Arc::new(AtomicU64::new(0)),
+            progress_write_lock: Arc::new(Mutex::new(())),
+            progress_save_pending: false,
+            progress_save_pending_since: None,
             is_quitting: false,
             active_section: ui::sidebar::SidebarSection::ContinueReading,
             active_view: ui::sidebar::MainView::ContinueReading,

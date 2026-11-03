@@ -441,6 +441,7 @@ impl Yomu {
         self.open_group = None;
         self.group_scroll.set_offset(Point::default());
         self.library.clear_all_data();
+        self.progress.clear();
         self.details_cover_checked = None;
         self.details_cover_available = false;
         self.details_cover_seq += 1;
@@ -450,6 +451,7 @@ impl Yomu {
                 let _ = dirs.clear_covers();
             })
             .detach();
+        self.save_progress(cx);
         self.save_library(cx);
         self.show_toast("Application data reset to defaults", cx);
         cx.notify();
@@ -627,10 +629,10 @@ impl Yomu {
         if self.is_quitting {
             return;
         }
-        let is_dark = window.appearance() == gpui_kit::WindowAppearance::Dark;
-        if self.system_dark != is_dark {
-            self.system_dark = is_dark;
-            if self.library.settings().theme_mode == ThemeModePreference::System {
+        if self.library.settings().theme_mode == ThemeModePreference::System {
+            let is_dark = window.appearance() == gpui_kit::WindowAppearance::Dark;
+            if self.system_dark != is_dark {
+                self.system_dark = is_dark;
                 let scheme = self.library.settings().color_scheme.clone();
                 let resolved = ui::theme::resolve_theme_name(
                     &scheme,
@@ -1159,8 +1161,10 @@ impl Render for Yomu {
             reader.off.1 = target_y;
         }
 
-        for image in self.garbage.drain(..) {
-            let _ = window.drop_image(image);
+        if !self.garbage.is_empty() {
+            for image in self.garbage.drain(..) {
+                let _ = window.drop_image(image);
+            }
         }
         // Animations are driven by the time between frames, never by a frame count, and only
         // ask for another frame while something is actually moving.
@@ -1186,8 +1190,10 @@ impl Render for Yomu {
         }
         // Textures that a finished slide just let go of are not drawn this frame, so free them
         // now rather than waiting for a frame that an idle window might never draw.
-        for image in self.garbage.drain(..) {
-            let _ = window.drop_image(image);
+        if !self.garbage.is_empty() {
+            for image in self.garbage.drain(..) {
+                let _ = window.drop_image(image);
+            }
         }
         self.sync_appearance(window, cx);
 

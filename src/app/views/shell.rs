@@ -242,7 +242,7 @@ impl Yomu {
             .fade(0.9, 1.0)
             .apply(
                 div().size_full().child(content),
-                format!("main-view-fade-{}", view_key),
+                (gpui_kit::ElementId::from("main-view-fade"), view_key),
             );
 
         gpui_kit::image_cache(self.cover_cache.clone())

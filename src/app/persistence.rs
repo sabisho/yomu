@@ -34,6 +34,9 @@ impl Yomu {
         if self.is_quitting {
             return;
         }
+        self.progress.harvest_from_library(&self.library);
+        self.save_progress(cx);
+
         self.save_seq += 1;
         self.save_pending = false;
         self.save_pending_since = None;
@@ -46,16 +49,115 @@ impl Yomu {
     /// test assertions where synchronous execution is required.
     #[allow(dead_code)]
     pub(crate) fn save_library_sync(&mut self) {
+        self.progress.harvest_from_library(&self.library);
+        self.save_progress_sync();
+
         self.save_seq += 1;
         let seq = self.save_seq;
         self.save_pending = false;
         self.save_pending_since = None;
         let _guard = self.write_lock.lock().unwrap();
-        if let Err(err) = self.library.save(&self.dirs) {
-            eprintln!("yomu: failed to save library: {err:#}");
+        let mutation_seq = self.library.mutation_seq();
+        if mutation_seq > self.last_saved_library_mutation_seq.load(Ordering::Acquire)
+            || !self.dirs.library_file().exists()
+        {
+            if let Err(err) = self.library.save(&self.dirs) {
+                eprintln!("yomu: failed to save library: {err:#}");
+            } else {
+                self.last_saved_library_mutation_seq
+                    .store(mutation_seq, Ordering::Release);
+                self.last_saved_seq.store(seq, Ordering::Release);
+            }
         } else {
             self.last_saved_seq.store(seq, Ordering::Release);
         }
+    }
+
+    /// Schedule an immediate background save of `progress.json`.
+    pub(crate) fn save_progress(&mut self, cx: &mut Context<Self>) {
+        if self.is_quitting {
+            return;
+        }
+        self.progress_seq += 1;
+        self.progress_save_pending = false;
+        self.progress_save_pending_since = None;
+        self.flush_progress_background(cx);
+    }
+
+    /// Synchronously write `progress.json` to disk (for tests).
+    #[allow(dead_code)]
+    pub(crate) fn save_progress_sync(&mut self) {
+        self.progress_seq += 1;
+        let seq = self.progress_seq;
+        self.progress_save_pending = false;
+        self.progress_save_pending_since = None;
+        let _guard = self.progress_write_lock.lock().unwrap();
+        if let Err(err) = self.progress.save(&self.dirs) {
+            eprintln!("yomu: failed to save progress: {err:#}");
+        } else {
+            self.last_saved_progress_seq.store(seq, Ordering::Release);
+        }
+    }
+
+    /// Request a debounced save of `progress.json` on the background executor.
+    ///
+    /// Coalesces rapid page-turn and scrolling updates within `AUTOSAVE_DEBOUNCE`,
+    /// enforcing `AUTOSAVE_MAX_DELAY` as an upper bound before flushing.
+    ///
+    /// Modifies only `progress.json`; `library.json` is never touched on page turns.
+    pub(crate) fn save_progress_debounced(&mut self, cx: &mut Context<Self>) {
+        if self.is_quitting {
+            return;
+        }
+        self.progress_seq += 1;
+        let now = Instant::now();
+        let pending_since = *self.progress_save_pending_since.get_or_insert(now);
+
+        if now.duration_since(pending_since) >= AUTOSAVE_MAX_DELAY {
+            self.progress_save_pending = false;
+            self.progress_save_pending_since = None;
+            self.flush_progress_background(cx);
+            return;
+        }
+
+        if !self.progress_save_pending {
+            self.progress_save_pending = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(AUTOSAVE_DEBOUNCE).await;
+                let _ = this
+                    .update(cx, |this, cx| {
+                        if this.progress_save_pending {
+                            this.progress_save_pending = false;
+                            this.progress_save_pending_since = None;
+                            this.flush_progress_background(cx);
+                        }
+                    })
+                    .ok();
+            })
+            .detach();
+        }
+    }
+
+    /// Spawns background task to persist `progress.json` on the background executor.
+    pub(crate) fn flush_progress_background(&mut self, cx: &mut Context<Self>) {
+        let seq = self.progress_seq;
+        let progress = self.progress.clone();
+        let dirs = Arc::clone(&self.dirs);
+        let last_saved_seq = Arc::clone(&self.last_saved_progress_seq);
+        let write_lock = Arc::clone(&self.progress_write_lock);
+
+        cx.background_executor()
+            .spawn(async move {
+                let _guard = write_lock.lock().unwrap();
+                if seq > last_saved_seq.load(Ordering::Acquire) {
+                    if let Err(err) = progress.save(&dirs) {
+                        eprintln!("yomu: failed to save progress: {err:#}");
+                    } else {
+                        last_saved_seq.store(seq, Ordering::Release);
+                    }
+                }
+            })
+            .detach();
     }
 
     /// Request a debounced library save on the background executor.
@@ -69,6 +171,9 @@ impl Yomu {
         if self.is_quitting {
             return;
         }
+        self.progress.harvest_from_library(&self.library);
+        self.save_progress_debounced(cx);
+
         self.save_seq += 1;
         let now = Instant::now();
         let pending_since = *self.save_pending_since.get_or_insert(now);
@@ -109,13 +214,22 @@ impl Yomu {
         let dirs = Arc::clone(&self.dirs);
         let last_saved_seq = Arc::clone(&self.last_saved_seq);
         let write_lock = Arc::clone(&self.write_lock);
+        let last_saved_mutation_seq = Arc::clone(&self.last_saved_library_mutation_seq);
 
         cx.background_executor()
             .spawn(async move {
                 let _guard = write_lock.lock().unwrap();
                 if seq > last_saved_seq.load(Ordering::Acquire) {
-                    if let Err(err) = library.save(&dirs) {
-                        eprintln!("yomu: failed to save library: {err:#}");
+                    let mutation_seq = library.mutation_seq();
+                    if mutation_seq > last_saved_mutation_seq.load(Ordering::Acquire)
+                        || !dirs.library_file().exists()
+                    {
+                        if let Err(err) = library.save(&dirs) {
+                            eprintln!("yomu: failed to save library: {err:#}");
+                        } else {
+                            last_saved_mutation_seq.store(mutation_seq, Ordering::Release);
+                            last_saved_seq.store(seq, Ordering::Release);
+                        }
                     } else {
                         last_saved_seq.store(seq, Ordering::Release);
                     }
@@ -138,6 +252,8 @@ impl Yomu {
         self.is_quitting = true;
         self.save_pending = false;
         self.save_pending_since = None;
+        self.progress_save_pending = false;
+        self.progress_save_pending_since = None;
         self.overlay = None;
         self.toast = None;
         self.cleanup_current_reader();
@@ -150,19 +266,47 @@ impl Yomu {
         let dirs = Arc::clone(&self.dirs);
         let last_saved_seq = Arc::clone(&self.last_saved_seq);
         let write_lock = Arc::clone(&self.write_lock);
+        let last_saved_mutation_seq = Arc::clone(&self.last_saved_library_mutation_seq);
+
+        let target_progress_seq = self.progress_seq;
+        let progress = self.progress.clone();
+        let last_saved_progress_seq = Arc::clone(&self.last_saved_progress_seq);
+        let progress_write_lock = Arc::clone(&self.progress_write_lock);
 
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    // 1. Flush pending reading progress to progress.json
+                    {
+                        let _guard = progress_write_lock.lock().unwrap();
+                        if target_progress_seq > last_saved_progress_seq.load(Ordering::Acquire) {
+                            if let Err(err) = progress.save(&dirs) {
+                                eprintln!("yomu: failed to save progress on quit: {err:#}");
+                            } else {
+                                last_saved_progress_seq.store(target_progress_seq, Ordering::Release);
+                            }
+                        }
+                    }
+
+                    // 2. Flush library metadata to library.json
                     let _guard = write_lock.lock().unwrap();
                     if target_seq > last_saved_seq.load(Ordering::Acquire) {
-                        match library.save(&dirs) {
-                            Ok(()) => {
-                                last_saved_seq.store(target_seq, Ordering::Release);
-                                Ok(())
+                        let mutation_seq = library.mutation_seq();
+                        if mutation_seq > last_saved_mutation_seq.load(Ordering::Acquire)
+                            || !dirs.library_file().exists()
+                        {
+                            match library.save(&dirs) {
+                                Ok(()) => {
+                                    last_saved_mutation_seq.store(mutation_seq, Ordering::Release);
+                                    last_saved_seq.store(target_seq, Ordering::Release);
+                                    Ok(())
+                                }
+                                Err(err) => Err(err),
                             }
-                            Err(err) => Err(err),
+                        } else {
+                            last_saved_seq.store(target_seq, Ordering::Release);
+                            Ok(())
                         }
                     } else {
                         Ok(())

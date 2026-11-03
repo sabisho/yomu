@@ -235,6 +235,65 @@ impl Yomu {
         )
     }
 
+    fn render_empty_library_state(
+        &self,
+        radius: Pixels,
+        colors: UiColors,
+        yomu: &Entity<Self>,
+        is_empty_library: bool,
+    ) -> AnyElement {
+        let (title, desc) = if is_empty_library {
+            (
+                "Your Library is Empty",
+                "Import comic archives or manga folders to start reading.",
+            )
+        } else {
+            (
+                "No matching manga found",
+                "Try adjusting your search query.",
+            )
+        };
+        Empty::new()
+            .header(
+                EmptyHeader::new()
+                    .media(
+                        EmptyMedia::new()
+                            .with_variant(EmptyMediaVariant::Icon)
+                            .child(
+                                Icon::new(if is_empty_library {
+                                    IconName::BookOpen
+                                } else {
+                                    IconName::Search
+                                })
+                                .size(px(48.))
+                                .text_color(colors.muted),
+                            ),
+                    )
+                    .title(EmptyTitle::new().child(title))
+                    .description(EmptyDescription::new().child(desc)),
+            )
+            .when(is_empty_library, |this| {
+                let yomu = yomu.clone();
+                this.child(
+                    Button::new("empty-import-btn")
+                        .primary()
+                        .icon(IconName::Plus)
+                        .label("Import Manga")
+                        .with_size(Size::Size(ui::components::CONTROL_HEIGHT_PRIMARY))
+                        .rounded(ButtonRounded::Size(ui::components::button_radius(
+                            radius,
+                            ui::components::CONTROL_HEIGHT_PRIMARY,
+                        )))
+                        .on_click(move |_, _, cx| {
+                            yomu.update(cx, |this, cx| {
+                                this.import_dialog(false, cx);
+                            });
+                        }),
+                )
+            })
+            .into_any_element()
+    }
+
     pub(crate) fn render_all_manga_view(
         &self,
         window: &mut Window,
@@ -245,90 +304,10 @@ impl Yomu {
         let yomu = cx.entity();
 
         let query = self.search_query.trim();
-        let has_query = !query.is_empty();
-        let matches_query = |b: &Book| {
-            if !has_query {
-                return true;
-            }
-            yomu::search::matches(&b.title, &b.path, b.series.as_deref(), query)
-        };
 
-        let sorted_books = self.get_sorted_books();
-
-        let books: Vec<&Book> = if self.library.settings().group_series
-            && let Some(open_key) = self.open_group.as_deref()
-        {
-            let groups = directory_groups(sorted_books);
-            if let Some(group) = groups.into_iter().find(|g| g.key == open_key) {
-                group
-                    .books
-                    .into_iter()
-                    .filter(|b| matches_query(b))
-                    .collect()
-            } else {
-                self.get_sorted_books()
-                    .into_iter()
-                    .filter(|b| matches_query(b))
-                    .collect()
-            }
-        } else {
-            sorted_books
-                .into_iter()
-                .filter(|b| matches_query(b))
-                .collect()
-        };
-
-        if books.is_empty() {
-            let (title, desc) = if query.is_empty() {
-                (
-                    "Your Library is Empty",
-                    "Import comic archives or manga folders to start reading.",
-                )
-            } else {
-                (
-                    "No matching manga found",
-                    "Try adjusting your search query.",
-                )
-            };
-            return Empty::new()
-                .header(
-                    EmptyHeader::new()
-                        .media(
-                            EmptyMedia::new()
-                                .with_variant(EmptyMediaVariant::Icon)
-                                .child(
-                                    Icon::new(if query.is_empty() {
-                                        IconName::BookOpen
-                                    } else {
-                                        IconName::Search
-                                    })
-                                    .size(px(48.))
-                                    .text_color(colors.muted),
-                                ),
-                        )
-                        .title(EmptyTitle::new().child(title))
-                        .description(EmptyDescription::new().child(desc)),
-                )
-                .when(query.is_empty(), |this| {
-                    let yomu = yomu.clone();
-                    this.child(
-                        Button::new("empty-import-btn")
-                            .primary()
-                            .icon(IconName::Plus)
-                            .label("Import Manga")
-                            .with_size(Size::Size(ui::components::CONTROL_HEIGHT_PRIMARY))
-                            .rounded(ButtonRounded::Size(ui::components::button_radius(
-                                radius,
-                                ui::components::CONTROL_HEIGHT_PRIMARY,
-                            )))
-                            .on_click(move |_, _, cx| {
-                                yomu.update(cx, |this, cx| {
-                                    this.import_dialog(false, cx);
-                                });
-                            }),
-                    )
-                })
-                .into_any_element();
+        // If the library is completely empty and no search query is active, show empty state immediately
+        if self.library.books().is_empty() && query.is_empty() {
+            return self.render_empty_library_state(radius, colors, &yomu, true);
         }
 
         let thumb_size = self.library.settings().thumbnail_size;
@@ -382,6 +361,59 @@ impl Yomu {
         );
 
         if !is_cached {
+            let has_query = !query.is_empty();
+            let matches_query = |b: &Book| {
+                if !has_query {
+                    return true;
+                }
+                yomu::search::matches(&b.title, &b.path, b.series.as_deref(), query)
+            };
+
+            let sorted_books = self.get_sorted_books();
+
+            let books: Vec<&Book> = if group_series && let Some(open_key) = open_group_str {
+                let groups = directory_groups(sorted_books);
+                if let Some(group) = groups.into_iter().find(|g| g.key == open_key) {
+                    group
+                        .books
+                        .into_iter()
+                        .filter(|b| matches_query(b))
+                        .collect()
+                } else {
+                    self.get_sorted_books()
+                        .into_iter()
+                        .filter(|b| matches_query(b))
+                        .collect()
+                }
+            } else {
+                sorted_books
+                    .into_iter()
+                    .filter(|b| matches_query(b))
+                    .collect()
+            };
+
+            if books.is_empty() {
+                *cache = ui::library_view::LibraryRowCache {
+                    mutation_seq,
+                    save_seq,
+                    books_len,
+                    search_query: query.to_string(),
+                    sort_by,
+                    sort_direction,
+                    group_series,
+                    open_group: self.open_group.clone(),
+                    view_mode_grid: is_grid,
+                    cols,
+                    card_w,
+                    cover_h,
+                    gap,
+                    pad_x,
+                    rows: Vec::new(),
+                    item_sizes: std::rc::Rc::new(Vec::new()),
+                };
+                return self.render_empty_library_state(radius, colors, &yomu, query.is_empty());
+            }
+
             let mut items: Vec<LibraryItem> = Vec::new();
             if group_series && self.open_group.is_none() {
                 let mut groups = directory_groups(books.iter().copied());
@@ -459,6 +491,10 @@ impl Yomu {
                 rows,
                 item_sizes,
             };
+        }
+
+        if cache.rows.is_empty() {
+            return self.render_empty_library_state(radius, colors, &yomu, query.is_empty());
         }
 
         let item_sizes = cache.item_sizes.clone();

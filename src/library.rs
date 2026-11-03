@@ -111,6 +111,10 @@ impl DataDirs {
         self.root.join("library.json")
     }
 
+    pub fn progress_file(&self) -> PathBuf {
+        self.root.join("progress.json")
+    }
+
     #[inline]
     pub fn covers_dir(&self) -> &Path {
         &self.covers_dir
@@ -959,26 +963,33 @@ impl Library {
             }
         }
 
-        let text = match fs::read_to_string(&file) {
-            Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+        let mut lib = match fs::read_to_string(&file) {
+            Ok(text) => match serde_json::from_str::<Library>(&text) {
+                Ok(mut lib) => {
+                    lib.migrate();
+                    lib
+                }
+                Err(err) => {
+                    // Keep the unreadable file around instead of silently overwriting it.
+                    let backup = file.with_extension("json.corrupt");
+                    let _ = fs::rename(&file, &backup);
+                    bail!(
+                        "library.json was unreadable ({err}); moved it to {} and started fresh",
+                        backup.display()
+                    )
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(err) => return Err(err).with_context(|| format!("reading {}", file.display())),
         };
-        match serde_json::from_str::<Library>(&text) {
-            Ok(mut lib) => {
-                lib.migrate();
-                Ok(lib)
-            }
-            Err(err) => {
-                // Keep the unreadable file around instead of silently overwriting it.
-                let backup = file.with_extension("json.corrupt");
-                let _ = fs::rename(&file, &backup);
-                bail!(
-                    "library.json was unreadable ({err}); moved it to {} and started fresh",
-                    backup.display()
-                )
-            }
+
+        if dirs.progress_file().exists()
+            && let Ok(progress) = crate::progress::ProgressStore::load(dirs)
+        {
+            progress.apply_to_library(&mut lib);
         }
+
+        Ok(lib)
     }
 
     /// Write atomically (temp file + fsync + rename + parent sync) so a crash or power loss cannot corrupt the library.
@@ -1050,6 +1061,21 @@ impl Library {
 
     pub fn books(&self) -> &[Book] {
         &self.books
+    }
+
+    /// Update reading progress fields in-memory without bumping library metadata mutation_seq.
+    pub fn update_progress(
+        &mut self,
+        id: &str,
+        current_page: usize,
+        opened: bool,
+        last_read: Option<u64>,
+    ) {
+        if let Some(book) = self.books.iter_mut().find(|b| b.id == id) {
+            book.current_page = current_page;
+            book.opened = opened;
+            book.last_read = last_read;
+        }
     }
 
     pub fn mutation_seq(&self) -> u64 {

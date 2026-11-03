@@ -341,8 +341,11 @@ impl Yomu {
                     for bid in &ids {
                         if let Some(book) = self.library.get_mut(bid) {
                             book.mark_read();
+                            self.progress
+                                .set(bid, book.current_page, book.opened, book.last_read);
                         }
                     }
+                    self.save_progress(cx);
                     self.save_library(cx);
                     for bid in &ids {
                         self.selection.remove(bid);
@@ -362,8 +365,11 @@ impl Yomu {
                     for bid in &ids {
                         if let Some(book) = self.library.get_mut(bid) {
                             book.reset_progress();
+                            self.progress
+                                .set(bid, book.current_page, book.opened, book.last_read);
                         }
                     }
+                    self.save_progress(cx);
                     self.save_library(cx);
                     for bid in &ids {
                         self.selection.remove(bid);
@@ -427,21 +433,30 @@ impl Yomu {
             BookAction::StartOver => {
                 if let Some(book) = self.library.get_mut(id) {
                     book.start_over();
+                    self.progress
+                        .set(id, book.current_page, book.opened, book.last_read);
                 }
+                self.save_progress(cx);
                 self.save_library(cx);
                 self.open_book(id, window, cx);
             }
             BookAction::MarkRead => {
                 if let Some(book) = self.library.get_mut(id) {
                     book.mark_read();
+                    self.progress
+                        .set(id, book.current_page, book.opened, book.last_read);
                 }
+                self.save_progress(cx);
                 self.save_library(cx);
                 self.show_toast(format!("Marked “{title}” as read"), cx);
             }
             BookAction::MarkUnread | BookAction::ResetProgress => {
                 if let Some(book) = self.library.get_mut(id) {
                     book.reset_progress();
+                    self.progress
+                        .set(id, book.current_page, book.opened, book.last_read);
                 }
+                self.save_progress(cx);
                 self.save_library(cx);
                 let message = if action == BookAction::ResetProgress {
                     format!("Progress reset for “{title}”")
@@ -651,8 +666,10 @@ impl Yomu {
             return;
         };
         self.library.remove(id, &self.dirs);
+        self.progress.remove(id);
         self.prune_selection();
         self.prune_open_group();
+        self.save_progress(cx);
         self.save_library(cx);
         self.show_toast(format!("Removed “{title}” from the library"), cx);
     }

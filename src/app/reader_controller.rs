@@ -58,11 +58,11 @@ impl Yomu {
         let settings = self.library.settings().clone();
         self.reader = Some(Reader::new(&book, &settings));
 
-        if let Some(entry) = self.library.get_mut(id) {
-            entry.opened = true;
-            entry.last_read = Some(now_secs());
-        }
-        self.save_library(cx);
+        self.library
+            .update_progress(id, book.current_page, true, Some(now_secs()));
+        self.progress
+            .set(id, book.current_page, true, Some(now_secs()));
+        self.save_progress_debounced(cx);
 
         // Listing a big archive's pages touches the disk, so keep it off the UI thread.
         let (path, kind, book_id) = (book.path, book.kind, book.id);
@@ -133,11 +133,19 @@ impl Yomu {
                     None
                 };
 
+                let mut page_count_changed = false;
                 if let Some(book) = self.library.get_mut(&book_id) {
-                    book.page_count = total;
+                    if book.page_count != total {
+                        book.page_count = total;
+                        page_count_changed = true;
+                    }
                     book.current_page = page;
                 }
-                self.save_library(cx);
+                self.progress.set(&book_id, page, true, Some(now_secs()));
+                self.save_progress_debounced(cx);
+                if page_count_changed {
+                    self.save_library(cx);
+                }
 
                 if let Some(cancel) = cancel {
                     let probe_book_id = book_id.clone();
@@ -227,7 +235,7 @@ impl Yomu {
         self.cursor_pos = None;
         window.set_window_title("yomu");
         window.focus(&self.focus_handle, cx);
-        self.save_library(cx);
+        self.save_progress(cx);
         cx.notify();
     }
 
@@ -259,12 +267,10 @@ impl Yomu {
         reader.arrive = Some(arrive);
         reader.drag = None;
         let book_id = reader.book_id.clone();
-        if let Some(book) = self.library.get_mut(&book_id) {
-            book.current_page = target;
-            book.opened = true;
-            book.last_read = Some(now_secs());
-        }
-        self.save_library_debounced(cx);
+        self.library
+            .update_progress(&book_id, target, true, Some(now_secs()));
+        self.progress.set(&book_id, target, true, Some(now_secs()));
+        self.save_progress_debounced(cx);
         self.wake();
         cx.notify();
     }
@@ -942,7 +948,6 @@ impl Yomu {
         let vp = viewport_of(window);
 
         let ReaderSyncOutcome {
-            wanted,
             animating,
             progress_changed,
         } = {
@@ -964,11 +969,9 @@ impl Yomu {
             let progress_changed = if reader.continuous && reader.page != previous_page {
                 let id = reader.book_id.clone();
                 let page = reader.page;
-                if let Some(book) = self.library.get_mut(&id) {
-                    book.current_page = page;
-                    book.opened = true;
-                    book.last_read = Some(now_secs());
-                }
+                self.library
+                    .update_progress(&id, page, true, Some(now_secs()));
+                self.progress.set(&id, page, true, Some(now_secs()));
                 Some((id, page))
             } else {
                 None
@@ -1045,82 +1048,95 @@ impl Yomu {
                 }
             };
 
-            let wanted_indices: Vec<usize> = if reader.continuous {
-                keep.filter(|ix| *ix < pages_len).collect()
-            } else if reader.is_double_page_active() {
-                let mut order = Vec::with_capacity(12);
+            reader.wanted_scratch.clear();
+            let is_double_active = reader.is_double_page_active();
+            let active_spread = if is_double_active {
+                Some(reader.active_spread())
+            } else {
+                None
+            };
+            let to_tier = |ix: usize| -> u32 {
+                if reader.continuous {
+                    let width = vp.width * reader.zoom * vp.scale;
+                    let (w, h) = reader.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
+                    layout::tier_for(width.max(width * h as f32 / w.max(1) as f32))
+                } else if (is_double_active
+                    && active_spread.as_ref().is_some_and(|s| s.contains(ix)))
+                    || (!is_double_active && ix == reader.page)
+                {
+                    current_tier
+                } else {
+                    neighbour_tier
+                }
+            };
+
+            if reader.continuous {
+                for ix in keep {
+                    if ix < pages_len {
+                        let tier = to_tier(ix);
+                        reader.wanted_scratch.push((ix, tier));
+                    }
+                }
+            } else if is_double_active {
                 let current_s = reader.current_spread_index();
                 let total_s = reader.total_spreads();
 
                 // 1. Current spread pages
                 if let Some(pages) = reader.pages_for_spread(current_s) {
-                    order.push(pages.primary);
+                    reader
+                        .wanted_scratch
+                        .push((pages.primary, to_tier(pages.primary)));
                     if let Some(sec) = pages.secondary {
-                        order.push(sec);
+                        reader.wanted_scratch.push((sec, to_tier(sec)));
                     }
                 }
                 // 2. Next spread pages (ahead)
                 if current_s + 1 < total_s
                     && let Some(pages) = reader.pages_for_spread(current_s + 1)
                 {
-                    order.push(pages.primary);
+                    reader
+                        .wanted_scratch
+                        .push((pages.primary, to_tier(pages.primary)));
                     if let Some(sec) = pages.secondary {
-                        order.push(sec);
+                        reader.wanted_scratch.push((sec, to_tier(sec)));
                     }
                 }
                 // 3. Previous spread pages (behind)
                 if current_s > 0
                     && let Some(pages) = reader.pages_for_spread(current_s - 1)
                 {
-                    order.push(pages.primary);
+                    reader
+                        .wanted_scratch
+                        .push((pages.primary, to_tier(pages.primary)));
                     if let Some(sec) = pages.secondary {
-                        order.push(sec);
+                        reader.wanted_scratch.push((sec, to_tier(sec)));
                     }
                 }
                 // 4. Spread + 2
                 if current_s + 2 < total_s
                     && let Some(pages) = reader.pages_for_spread(current_s + 2)
                 {
-                    order.push(pages.primary);
+                    reader
+                        .wanted_scratch
+                        .push((pages.primary, to_tier(pages.primary)));
                     if let Some(sec) = pages.secondary {
-                        order.push(sec);
+                        reader.wanted_scratch.push((sec, to_tier(sec)));
                     }
                 }
-                order
             } else {
-                pagecache::prefetch_order(reader.page, pages_len)
-            };
-            let is_current_spread = |ix: usize| {
-                if reader.is_double_page_active() {
-                    reader.active_spread().contains(ix)
-                } else {
-                    ix == reader.page
+                for ix in pagecache::prefetch_order(reader.page, pages_len) {
+                    reader.wanted_scratch.push((ix, to_tier(ix)));
                 }
-            };
-            let wanted = wanted_indices
-                .into_iter()
-                .map(|ix| {
-                    let tier = if reader.continuous {
-                        let width = vp.width * reader.zoom * vp.scale;
-                        let (w, h) = reader.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
-                        layout::tier_for(width.max(width * h as f32 / w.max(1) as f32))
-                    } else if is_current_spread(ix) {
-                        current_tier
-                    } else {
-                        neighbour_tier
-                    };
-                    (ix, tier)
-                })
-                .collect();
+            }
+
             ReaderSyncOutcome {
-                wanted,
                 animating,
                 progress_changed,
             }
         };
 
         if progress_changed.is_some() {
-            self.save_library_debounced(cx);
+            self.save_progress_debounced(cx);
         }
 
         // Textures released by finished slides are freed on the next frame.
@@ -1128,7 +1144,11 @@ impl Yomu {
             self.garbage.append(&mut reader.released);
             // Cancel background prefetch tasks for pages that are no longer wanted:
             reader.cancellations.retain(|ix, token| {
-                if !wanted.iter().any(|(wanted_ix, _)| wanted_ix == ix) {
+                if !reader
+                    .wanted_scratch
+                    .iter()
+                    .any(|(wanted_ix, _)| wanted_ix == ix)
+                {
                     token.store(true, Ordering::Relaxed);
                     reader.pending.remove(ix);
                     false
@@ -1137,7 +1157,15 @@ impl Yomu {
                 }
             });
         }
-        for (ix, tier) in wanted {
+        let mut stack_wanted = [(0usize, 0u32); 32];
+        let count = self
+            .reader
+            .as_ref()
+            .map_or(0, |r| r.wanted_scratch.len().min(stack_wanted.len()));
+        if let Some(reader) = self.reader.as_ref() {
+            stack_wanted[..count].copy_from_slice(&reader.wanted_scratch[..count]);
+        }
+        for &(ix, tier) in &stack_wanted[..count] {
             self.request_page(ix, tier, cx);
         }
         animating
@@ -1168,12 +1196,19 @@ impl Yomu {
         let path = reader.path.clone();
         let kind = reader.kind;
         let cancel_token = cancel.clone();
+        let rar_session = reader.rar_session.clone();
 
         let task = cx.background_executor().spawn(async move {
             if cancel_token.load(Ordering::Relaxed) {
                 anyhow::bail!("page decode cancelled");
             }
-            let bytes = archive::read_page(&path, kind, &name)?;
+            let bytes = archive::read_page_with_session(
+                &path,
+                kind,
+                &name,
+                rar_session.as_deref(),
+                Some(cancel_token.clone()),
+            )?;
             if cancel_token.load(Ordering::Relaxed) {
                 anyhow::bail!("page decode cancelled");
             }

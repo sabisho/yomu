@@ -303,10 +303,7 @@ pub fn render_book_card(
     let format_label = book_format_label(book);
 
     div()
-        .id(ElementId::from(SharedString::from(format!(
-            "manga-item-{}",
-            book.id
-        ))))
+        .id((ElementId::from("manga-item"), book.id.as_str()))
         .w(px(card_w))
         .flex_none()
         .flex()
@@ -336,10 +333,7 @@ pub fn render_book_card(
         .context_menu(context_menu)
         .child(
             div()
-                .id(ElementId::from(SharedString::from(format!(
-                    "manga-cover-{}",
-                    book.id
-                ))))
+                .id((ElementId::from("manga-cover"), book.id.as_str()))
                 .relative()
                 .w_full()
                 .h(px(cover_h))
@@ -507,155 +501,151 @@ pub fn render_book_list_row(
     };
     let display_title = book.title.clone();
 
-    ListItem::new(ElementId::from(SharedString::from(format!(
-        "manga-item-{}",
-        book.id
-    ))))
-    .h(px(64.))
-    .px_3p5()
-    .rounded(radius)
-    .selected(is_selected)
-    .bg(if is_selected {
-        with_alpha(colors.accent, 0.12)
-    } else {
-        with_alpha(colors.surface, 0.85)
-    })
-    .border(px(if is_selected {
-        border_px.max(1.5)
-    } else {
-        border_px.max(1.0)
-    }))
-    .border_color(if is_selected {
-        colors.accent
-    } else {
-        colors.border
-    })
-    .on_click(on_click)
-    .context_menu(context_menu)
-    .child(
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .min_w_0()
-                    .flex_1()
-                    .children(is_selected.then(|| {
-                        div()
-                            .size(px(18.))
-                            .rounded(px(4.))
-                            .bg(colors.accent)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Icon::new(IconName::Check)
-                                    .size(px(12.))
-                                    .text_color(colors.accent_foreground),
-                            )
-                    }))
-                    .child(
-                        div()
-                            .id(ElementId::from(SharedString::from(format!(
-                                "manga-cover-{}",
-                                book.id
-                            ))))
-                            .w(px(38.))
-                            .h(px(52.))
-                            .flex_none()
-                            .rounded(px(f32::from(radius).min(4.)))
-                            .bg(with_alpha(colors.foreground, 0.04))
-                            .overflow_hidden()
-                            .child(
-                                img(cover_path)
-                                    .size_full()
-                                    .rounded(px(f32::from(radius).min(4.)))
-                                    .object_fit(ObjectFit::Contain),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .min_w_0()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(colors.foreground)
-                                    .truncate()
-                                    .child(display_title),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_xs()
-                                    .text_color(colors.muted)
-                                    .child(Tag::secondary().small().child(book_format_label(book)))
-                                    .children(
-                                        book.series
-                                            .as_deref()
-                                            .map(|s| Tag::secondary().small().child(s.to_string())),
-                                    )
-                                    .child(div().truncate().child(if book.opened {
-                                        format!(
-                                            "Ch. {current} of {total} · {:.0}%",
-                                            progress * 100.0
+    ListItem::new((ElementId::from("manga-item"), book.id.as_str()))
+        .h(px(64.))
+        .px_3p5()
+        .rounded(radius)
+        .selected(is_selected)
+        .bg(if is_selected {
+            with_alpha(colors.accent, 0.12)
+        } else {
+            with_alpha(colors.surface, 0.85)
+        })
+        .border(px(if is_selected {
+            border_px.max(1.5)
+        } else {
+            border_px.max(1.0)
+        }))
+        .border_color(if is_selected {
+            colors.accent
+        } else {
+            colors.border
+        })
+        .on_click(on_click)
+        .context_menu(context_menu)
+        .child(
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .min_w_0()
+                        .flex_1()
+                        .children(is_selected.then(|| {
+                            div()
+                                .size(px(18.))
+                                .rounded(px(4.))
+                                .bg(colors.accent)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    Icon::new(IconName::Check)
+                                        .size(px(12.))
+                                        .text_color(colors.accent_foreground),
+                                )
+                        }))
+                        .child(
+                            div()
+                                .id((ElementId::from("manga-cover"), book.id.as_str()))
+                                .w(px(38.))
+                                .h(px(52.))
+                                .flex_none()
+                                .rounded(px(f32::from(radius).min(4.)))
+                                .bg(with_alpha(colors.foreground, 0.04))
+                                .overflow_hidden()
+                                .child(
+                                    img(cover_path)
+                                        .size_full()
+                                        .rounded(px(f32::from(radius).min(4.)))
+                                        .object_fit(ObjectFit::Contain),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .min_w_0()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(colors.foreground)
+                                        .truncate()
+                                        .child(display_title),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .text_xs()
+                                        .text_color(colors.muted)
+                                        .child(
+                                            Tag::secondary().small().child(book_format_label(book)),
                                         )
-                                    } else {
-                                        format!("{total} pages")
-                                    })),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .flex_none()
-                    .children(book.opened.then(|| {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Progress::new(ElementId::from(SharedString::from(format!(
-                                    "list-prog-{}",
-                                    book.id
-                                ))))
-                                .value(progress * 100.0)
-                                .w(px(90.)),
-                            )
-                            .child(
-                                div()
-                                    .w(px(34.))
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(colors.muted)
-                                    .child(format!("{:.0}%", progress * 100.0)),
-                            )
-                    }))
-                    .child(if progress >= 1.0 {
-                        Tag::success().small().child("Completed")
-                    } else if book.opened {
-                        Tag::primary().small().child("Reading")
-                    } else {
-                        Tag::secondary().small().child("Unread")
-                    }),
-            ),
-    )
-    .into_any_element()
+                                        .children(
+                                            book.series.as_deref().map(|s| {
+                                                Tag::secondary().small().child(s.to_string())
+                                            }),
+                                        )
+                                        .child(div().truncate().child(if book.opened {
+                                            format!(
+                                                "Ch. {current} of {total} · {:.0}%",
+                                                progress * 100.0
+                                            )
+                                        } else {
+                                            format!("{total} pages")
+                                        })),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .flex_none()
+                        .children(book.opened.then(|| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Progress::new(ElementId::from(SharedString::from(format!(
+                                        "list-prog-{}",
+                                        book.id
+                                    ))))
+                                    .value(progress * 100.0)
+                                    .w(px(90.)),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(34.))
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(colors.muted)
+                                        .child(format!("{:.0}%", progress * 100.0)),
+                                )
+                        }))
+                        .child(if progress >= 1.0 {
+                            Tag::success().small().child("Completed")
+                        } else if book.opened {
+                            Tag::primary().small().child("Reading")
+                        } else {
+                            Tag::secondary().small().child("Unread")
+                        }),
+                ),
+        )
+        .into_any_element()
 }
 
 /// Renders a series or directory folder grid card.
@@ -675,7 +665,7 @@ pub fn render_folder_card(
     let inner_radius = (radius - px(border_px)).max(px(0.));
 
     div()
-        .id(SharedString::from(format!("folder-{}", group_key)))
+        .id((ElementId::from("folder"), group_key))
         .w(px(card_w))
         .flex_none()
         .flex()
@@ -783,94 +773,91 @@ pub fn render_folder_list_row(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
     context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
-    ListItem::new(ElementId::from(SharedString::from(format!(
-        "folder-item-{}",
-        group_key
-    ))))
-    .h(px(64.))
-    .px_3p5()
-    .rounded(radius)
-    .bg(with_alpha(colors.surface, 0.85))
-    .border(px(border_px.max(1.0)))
-    .border_color(colors.border)
-    .on_click(on_click)
-    .context_menu(context_menu)
-    .child(
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .min_w_0()
-                    .flex_1()
-                    .child(
-                        div()
-                            .w(px(38.))
-                            .h(px(52.))
-                            .flex_none()
-                            .rounded(px(f32::from(radius).min(4.)))
-                            .bg(with_alpha(colors.foreground, 0.04))
-                            .overflow_hidden()
-                            .child(
-                                img(cover_path)
-                                    .size_full()
-                                    .rounded(px(f32::from(radius).min(4.)))
-                                    .object_fit(ObjectFit::Contain),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .min_w_0()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .child(
-                                        Icon::new(IconName::Folder)
-                                            .size(px(14.))
-                                            .text_color(colors.accent),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(colors.foreground)
-                                            .truncate()
-                                            .child(group_name.to_string()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(colors.muted)
-                                    .child(format!("{count} volumes · Series folder")),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2p5()
-                    .flex_none()
-                    .child(stat_badge(count, false, colors, radius))
-                    .child(
-                        Icon::new(IconName::ChevronRight)
-                            .size(px(16.))
-                            .text_color(colors.muted),
-                    ),
-            ),
-    )
-    .into_any_element()
+    ListItem::new((ElementId::from("folder-item"), group_key))
+        .h(px(64.))
+        .px_3p5()
+        .rounded(radius)
+        .bg(with_alpha(colors.surface, 0.85))
+        .border(px(border_px.max(1.0)))
+        .border_color(colors.border)
+        .on_click(on_click)
+        .context_menu(context_menu)
+        .child(
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .min_w_0()
+                        .flex_1()
+                        .child(
+                            div()
+                                .w(px(38.))
+                                .h(px(52.))
+                                .flex_none()
+                                .rounded(px(f32::from(radius).min(4.)))
+                                .bg(with_alpha(colors.foreground, 0.04))
+                                .overflow_hidden()
+                                .child(
+                                    img(cover_path)
+                                        .size_full()
+                                        .rounded(px(f32::from(radius).min(4.)))
+                                        .object_fit(ObjectFit::Contain),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .min_w_0()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .child(
+                                            Icon::new(IconName::Folder)
+                                                .size(px(14.))
+                                                .text_color(colors.accent),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(colors.foreground)
+                                                .truncate()
+                                                .child(group_name.to_string()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(colors.muted)
+                                        .child(format!("{count} volumes · Series folder")),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2p5()
+                        .flex_none()
+                        .child(stat_badge(count, false, colors, radius))
+                        .child(
+                            Icon::new(IconName::ChevronRight)
+                                .size(px(16.))
+                                .text_color(colors.muted),
+                        ),
+                ),
+        )
+        .into_any_element()
 }

@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **346 active tests** passing (145 core library unit tests in `src/lib.rs`, 201 binary-target UI tests in `src/main.rs`, plus 13 opt-in performance benchmarks; 359 total).
+- **Test Baseline:** **366 active tests** passing (154 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 18 opt-in performance benchmarks; 384 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `devenv shell cargo check --all-targets` and `devenv shell cargo clippy --all-targets --all-features -- -D warnings`, fully formatted under `devenv shell cargo fmt --all -- --check`.
 
 ---
@@ -92,6 +92,33 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Regression Test Coverage:** Added 4 focused regression tests verifying reader cancellation, late completion race condition immunity, cache clearing, and LRU capacity enforcement (346 active tests).
 - **Comprehensive Technical Report:** Authored [`docs/audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md`](audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md).
 
+### Phase 11: Stage 6B Persistence Architecture & SSD Write Amplification Remediation (Completed)
+- **Dedicated Progress Sidecar (`progress.json`):** Created `src/progress.rs` implementing `ProgressStore` (v1) to decouple frequent reading-progress updates (`current_page`, `opened`, `last_read`) from static library metadata (`library.json`).
+- **Transparent In-Memory Overlay & Automatic Migration:** `Library::load(&dirs)` automatically overlays `progress.json` records onto in-memory `Book` models on startup, preserving existing UI queries and zero-loss migration from older `library.json` files without progress sidecars.
+- **Dual Dirty-State Detection:** Added monotonic `mutation_seq` tracking to both `Library` and `ProgressStore`. Background flush tasks skip serialization and disk I/O when state is unchanged.
+- **Decoupled Debounced Autosave:** Routed active reading progress mutations to `save_progress_debounced()` (500 ms debounce, 2000 ms max delay bound). `library.json` is never written during active reading sessions.
+- **Empirical Scalability Breakthrough:** In a 10,000-book collection, reduced single-save payload from 17.07 MB to 1.06 KB (99.994% reduction), reduced 100 page turns writes from 1.67 GB to 2.12 KB (99.99987% reduction), reduced CPU serialization time from 76.06 ms to 9.07 µs (8,386x speedup), reduced disk latency from 169.83 ms to 3.95 ms (43x speedup), and lowered write amplification from 2,184,324x to 272x.
+- **Regression Test Coverage:** Added 6 dedicated regression tests and 2 performance benchmarks in `src/tests.rs` (353 active tests passing).
+- **Comprehensive Technical Report:** Authored [`docs/audits/PERSISTENCE_AND_SSD_IO_REMEDIATION_STAGE_6B.md`](audits/PERSISTENCE_AND_SSD_IO_REMEDIATION_STAGE_6B.md).
+
+### Phase 12: Stage 6C CBR/RAR Archive Access & I/O Optimization (Completed)
+- **Worker-Confined Session Architecture (`RarSession`):** Confined `unrar::OpenArchive` to an OS worker thread spawned per active CBR/RAR book reader in `src/archive.rs`. Communicates over safe standard library channels (`std::sync::mpsc`), keeping `RarSession` `Send + Sync` in safe Rust without unsafe code or raw pointer wrappers.
+- **Eliminated Quadratic Header Traversal:** Monotonically advances the UnRAR stream on forward page turns and prefetch queries, achieving $O(1)$ constant-time page access (~33.9 µs/page) without reopening the file. Tracks known entry positions and executes lazy rewind on backward navigation.
+- **Empirical Verification (200-Page Archive):** Reduced total sequential extraction time from 230.66 ms to **6.79 ms (34x speedup)**, average time per page from 1.15 ms to **33.9 µs (34x speedup)**, archive opens from 200 to **1 (99.5% reduction)**, and header scans from 20,100 to **200 (99.0% reduction)**. Last-page extraction dropped from 2.08 ms to **29.3 µs (71x speedup)**.
+- **Deterministic RAII Teardown:** Dropping `Reader::rar_session` in `cleanup_current_reader()` immediately disconnects the channel, causes the worker thread to close the UnRAR handle, and cleanly joins the thread.
+- **Regression Test Coverage:** Added 6 unit tests and benchmarks in `src/archive.rs` and 2 UI tests in `src/tests.rs` (361 active tests passing).
+- **Comprehensive Technical Report:** Authored [`docs/audits/RAR_ARCHIVE_ACCESS_OPTIMIZATION_STAGE_6C.md`](audits/RAR_ARCHIVE_ACCESS_OPTIMIZATION_STAGE_6C.md).
+
+### Phase 13: Stage 7 Animation, Scrolling & Rendering Performance Optimization (Completed)
+- **Library Grid Scroll Frame Invalidation Bypass:** Reordered `render_all_manga_view` to validate `LibraryRowCache` *before* sorting and query filtering. When scrolling or gliding through the library, sorting and `matches_query` passes are completely bypassed, achieving flat **0.010 ms** frame latency across 10,000 books (18,146x faster than recomputing).
+- **Library Element ID Formatting Elimination:** Replaced runtime `format!` strings on book and folder cards with zero-allocation composite tuple IDs (`(ElementId::from("manga-item"), book.id.as_str())`), eliminating ~30,000 transient string allocations per second during 144 Hz scrolling.
+- **Reader Frame Render Loop Allocation Elimination (`sync_reader`):** Added `wanted_scratch: Vec<(usize, u32)>` on `Reader` and stack chunking (`[(usize, u32); 32]`) for prefetch dispatch, completely eliminating heap allocations in the reader's frame tick.
+- **Continuous Layout Cache In-Place Buffer Reuse & $O(1)$ Settle:** Updated `ensure_continuous_cache` to reuse `tops`, `heights`, and `bottoms` vector capacity in-place during zoom/resize; optimized `settle` to read arrival offsets directly from cache in sub-microsecond time.
+- **Page Counter String Caching (`CachedPageCounter`):** Cached formatted counter string on `Reader`, reducing page string resolution to 3.9 ns with zero allocations during scrolling, zooming, and panning within the same page.
+- **Appearance & Texture Drop Guards:** Optimized `sync_appearance` to early-return when theme mode is manual and opacity is set; guarded texture drop sweeps with `!self.garbage.is_empty()`.
+- **Regression Test Coverage:** Added 3 dedicated tests and a benchmark in `src/tests.rs` (366 active tests passing).
+- **Comprehensive Technical Report:** Authored [`docs/audits/ANIMATION_SCROLLING_RENDERING_OPTIMIZATION_STAGE_7.md`](audits/ANIMATION_SCROLLING_RENDERING_OPTIMIZATION_STAGE_7.md).
+
 ---
 
 ## 3. Active Known Limitations & Technical Debt
@@ -99,13 +126,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 1. **Wayland Compositor Visual Verification:**
    - Headless simulated GPUI tests validate layout, interaction, focus, and state transitions, but do not validate visual appearance (translucent surfaces, backdrop blur, compositor shadows) under physical Wayland compositors (e.g., Niri, Sway, GNOME Mutter, KDE KWin).
    - *Rule for agents:* Never claim visual verification on Wayland unless manually inspected on a real desktop session.
-2. **Reading Autosave SSD Write Amplification (Finding S1):**
-   - Turning a page modifies 8 bytes of progress, but triggers full serialization and atomic disk replacement of the entire 16.58 MB library JSON with two `sync_all()` barriers (2,173,616x write amplification at 10k books).
-   - *Remediation:* Implement reading progress dirty checks and evaluate an append-only progress journal or lightweight progress sidecar.
-3. **CBR/RAR Quadratic Header Read Traversal (Finding S2):**
-   - In `src/archive.rs:269-326`, `read_rar_page()` opens the archive from byte 0 and scans entry headers sequentially from the beginning on every page request because `unrar::OpenArchive` is `!Send`.
-   - *Remediation:* Cache entry byte offsets during the initial dimension probe pass to allow constant-time seeks.
-4. **Cross-Platform Momentum Scrolling:**
+2. **Cross-Platform Momentum Scrolling:**
    - Linux and Windows rely on `PlatformScrollController`'s kinetic inertia glide loop because GPUI does not yet synthesize momentum events on non-macOS platforms.
    - *Action required:* Monitor official GPUI Kit releases for native upstream cross-platform momentum support.
 
@@ -113,16 +134,9 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 
 ## 4. Next Recommended Engineering Tasks
 
-Refer to [docs/audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md](audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md) for the Stage 6A remediation report, [docs/audits/MEMORY_LEAK_AND_SSD_IO_AUDIT.md](audits/MEMORY_LEAK_AND_SSD_IO_AUDIT.md) for the Stage 5 deep memory and SSD audit, and [ROADMAP.md](../ROADMAP.md):
+Refer to [docs/audits/RAR_ARCHIVE_ACCESS_OPTIMIZATION_STAGE_6C.md](audits/RAR_ARCHIVE_ACCESS_OPTIMIZATION_STAGE_6C.md) for the Stage 6C CBR optimization report, [docs/audits/PERSISTENCE_AND_SSD_IO_REMEDIATION_STAGE_6B.md](audits/PERSISTENCE_AND_SSD_IO_REMEDIATION_STAGE_6B.md) for the Stage 6B persistence remediation report, [docs/audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md](audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md) for the Stage 6A memory remediation report, and [ROADMAP.md](../ROADMAP.md):
 
-1. **Stage 6B P0: Mitigate Autosave SSD Write Amplification (Finding S1):**
-   - Add dirty checks to prevent saving unchanged reading state on navigation.
-   - Implement a lightweight reading progress sidecar or journal to separate high-frequency page turn progress from static library metadata.
-
-2. **Stage 6B P1: CBR / RAR Header Seek Optimization (Finding S2):**
-   - Cache entry byte offsets during initial dimension probing to eliminate quadratic header rescanning during sequential reading.
-
-3. **CB7 / 7z Archive Support (Phase 7):**
+1. **CB7 / 7z Archive Support (Phase 7):**
    - Support `.cb7` and `.7z` archives using a pure Rust LZMA/7z decoder.
    - Maintain the standard archive interface and background thread isolation.
 
@@ -150,5 +164,5 @@ devenv shell cargo test --all-targets
 When completing a task, provide a concise, factual report:
 1. Exact files modified, created, or deleted.
 2. Architectural responsibilities changed.
-3. Exact command exit codes and test counts (346 active tests).
+3. Exact command exit codes and test counts (366 active tests).
 4. Status of manual visual checks (explicitly report Wayland appearance as UNVERIFIED if tested headlessly).

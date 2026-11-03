@@ -118,7 +118,6 @@ impl WheelParams {
 }
 
 pub struct ReaderSyncOutcome {
-    pub wanted: Vec<(usize, u32)>,
     pub animating: bool,
     pub progress_changed: Option<(String, usize)>,
 }
@@ -862,6 +861,15 @@ pub struct ContinuousLayoutCache {
     pub total_height: f32,
 }
 
+/// Cached formatted page counter string to eliminate per-frame allocations during reading.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedPageCounter {
+    pub primary: usize,
+    pub secondary: Option<usize>,
+    pub total: usize,
+    pub formatted: SharedString,
+}
+
 pub struct Reader {
     pub book_id: String,
     pub book_title: SharedString,
@@ -876,6 +884,8 @@ pub struct Reader {
     pub total: usize,
     pub layout_version: u64,
     pub continuous_cache: std::cell::RefCell<Option<ContinuousLayoutCache>>,
+    pub page_str_cache: std::cell::RefCell<Option<CachedPageCounter>>,
+    pub wanted_scratch: Vec<(usize, u32)>,
 
     pub fit: FitMode,
     /// Multiplier on top of the fit size; `1.0` is exactly the fit.
@@ -924,6 +934,7 @@ pub struct Reader {
     pub probe_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub failed: HashMap<usize, String>,
     pub error: Option<String>,
+    pub rar_session: Option<Arc<yomu::archive::RarSession>>,
 
     pub vim: Vim,
     pub drag: Option<Drag>,
@@ -947,6 +958,15 @@ impl Reader {
             settings.first_page_is_cover,
             |_| PageClassification::Single,
         );
+        let rar_session = if book.kind == SourceKind::Archive
+            && yomu::archive::detect_archive_format(&book.path) == yomu::archive::ArchiveFormat::Rar
+        {
+            yomu::archive::RarSession::open(&book.path)
+                .ok()
+                .map(Arc::new)
+        } else {
+            None
+        };
         let mut reader = Self {
             book_id: book.id.clone(),
             book_title: SharedString::from(book.title.clone()),
@@ -958,6 +978,8 @@ impl Reader {
             total: book.page_count,
             layout_version: 0,
             continuous_cache: std::cell::RefCell::new(None),
+            page_str_cache: std::cell::RefCell::new(None),
+            wanted_scratch: Vec::with_capacity(16),
             fit: settings.fit,
             zoom,
             off: (0.0, 0.0),
@@ -984,6 +1006,7 @@ impl Reader {
             probe_cancel: None,
             failed: HashMap::new(),
             error: None,
+            rar_session,
             vim: Vim::new(),
             drag: None,
             kinetic: KineticScroll::new(),
@@ -1011,19 +1034,38 @@ impl Reader {
         if self.total == 0 {
             return SharedString::from("0 / 0");
         }
-        if self.is_double_page_active() {
+        let (primary, secondary) = if self.is_double_page_active() {
             let spread = self.active_spread();
-            match spread.secondary {
-                Some(sec) => {
-                    let min_p = spread.primary.min(sec) + 1;
-                    let max_p = spread.primary.max(sec) + 1;
-                    SharedString::from(format!("{}–{} / {}", min_p, max_p, self.total))
-                }
-                None => SharedString::from(format!("{} / {}", spread.primary + 1, self.total)),
-            }
+            (spread.primary, spread.secondary)
         } else {
-            SharedString::from(format!("{} / {}", self.page + 1, self.total))
+            (self.page, None)
+        };
+
+        let mut cache = self.page_str_cache.borrow_mut();
+        if let Some(ref cached) = *cache
+            && cached.primary == primary
+            && cached.secondary == secondary
+            && cached.total == self.total
+        {
+            return cached.formatted.clone();
         }
+
+        let str = match secondary {
+            Some(sec) => {
+                let min_p = primary.min(sec) + 1;
+                let max_p = primary.max(sec) + 1;
+                SharedString::from(format!("{}–{} / {}", min_p, max_p, self.total))
+            }
+            None => SharedString::from(format!("{} / {}", primary + 1, self.total)),
+        };
+
+        *cache = Some(CachedPageCounter {
+            primary,
+            secondary,
+            total: self.total,
+            formatted: str.clone(),
+        });
+        str
     }
 
     /// Total number of visual spreads under current layout and page classifications.
@@ -1184,31 +1226,32 @@ impl Reader {
             } else {
                 12.0 * self.zoom
             };
-            let mut tops = Vec::with_capacity(self.total);
-            let mut heights = Vec::with_capacity(self.total);
-            let mut bottoms = Vec::with_capacity(self.total);
+            let mut cache_ref = self.continuous_cache.borrow_mut();
+            let cache = cache_ref.get_or_insert_with(ContinuousLayoutCache::default);
+            cache.width = width;
+            cache.zoom = self.zoom;
+            cache.webcomics = self.webcomics;
+            cache.layout_version = self.layout_version;
+            cache.total = self.total;
+
+            cache.tops.clear();
+            cache.tops.reserve(self.total);
+            cache.heights.clear();
+            cache.heights.reserve(self.total);
+            cache.bottoms.clear();
+            cache.bottoms.reserve(self.total);
+
             let mut top = 0.0;
             for ix in 0..self.total {
-                tops.push(top);
+                cache.tops.push(top);
                 let (w, h) = self.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
                 let height = width * h as f32 / w.max(1) as f32;
-                heights.push(height);
+                cache.heights.push(height);
                 let bottom = top + height;
-                bottoms.push(bottom);
+                cache.bottoms.push(bottom);
                 top = bottom + gap;
             }
-            let total_height = bottoms.last().copied().unwrap_or(0.0);
-            *self.continuous_cache.borrow_mut() = Some(ContinuousLayoutCache {
-                width,
-                zoom: self.zoom,
-                webcomics: self.webcomics,
-                layout_version: self.layout_version,
-                total: self.total,
-                tops,
-                heights,
-                bottoms,
-                total_height,
-            });
+            cache.total_height = cache.bottoms.last().copied().unwrap_or(0.0);
         }
 
         std::cell::Ref::map(self.continuous_cache.borrow(), |c| c.as_ref().unwrap())
@@ -1227,6 +1270,7 @@ impl Reader {
         self.ensure_continuous_cache(vp).total_height
     }
 
+    #[allow(dead_code)]
     pub fn continuous_page_at(&self, y: f32, vp: &Viewport) -> usize {
         if self.total == 0 {
             return 0;
@@ -1264,33 +1308,23 @@ impl Reader {
             if self.total == 0 {
                 return None;
             }
-            let width = vp.width * self.zoom;
-            let page_w = width.max(1.0);
-            let gap = if self.webcomics {
-                0.0
-            } else {
-                12.0 * self.zoom
-            };
+            let width = (vp.width * self.zoom).max(1.0);
             let page = self.page.min(self.total - 1);
             if let Some(arrive) = self.arrive.take() {
-                let mut top = 0.0;
-                let mut page_h = 0.0;
-                for ix in 0..=page {
-                    let (w, h) = self.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
-                    let h = page_w * h as f32 / w.max(1) as f32;
-                    if ix == page {
-                        page_h = h;
-                        break;
-                    }
-                    top += h + gap;
-                }
+                let (top, page_h) = {
+                    let cache = self.ensure_continuous_cache(vp);
+                    (cache.tops[page], cache.heights[page])
+                };
                 self.scroll_target.1 = match arrive {
                     Arrive::Start => top,
                     Arrive::End => (top + page_h - vp.height).max(0.0),
                 };
                 self.off = self.scroll_target;
             }
-            let doc_height = self.continuous_total_height(vp);
+            let doc_height = {
+                let cache = self.ensure_continuous_cache(vp);
+                cache.total_height
+            };
             let max_x = (width - vp.width).max(0.0);
             let max_y = (doc_height - vp.height).max(0.0);
             self.off.0 = self.off.0.clamp(0.0, max_x);
@@ -1298,13 +1332,16 @@ impl Reader {
             self.scroll_target.0 = self.scroll_target.0.clamp(0.0, max_x);
             self.scroll_target.1 = self.scroll_target.1.clamp(0.0, max_y);
             let mid_y = self.off.1 + vp.height * 0.5;
-            self.page = self.continuous_page_at(mid_y, vp);
-            let (w, h) = self
-                .orig_sizes
-                .get(self.page)
-                .and_then(|v| *v)
-                .unwrap_or((2, 3));
-            let current_h = page_w * h as f32 / w.max(1) as f32;
+            let (page, current_h) = {
+                let cache = self.ensure_continuous_cache(vp);
+                let p = cache
+                    .bottoms
+                    .partition_point(|&b| b <= mid_y)
+                    .min(self.total.saturating_sub(1));
+                let h = cache.heights.get(p).copied().unwrap_or(0.0);
+                (p, h)
+            };
+            self.page = page;
             return Some((width, current_h));
         }
         if self.is_double_page_active() {
