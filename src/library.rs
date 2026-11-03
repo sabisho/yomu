@@ -242,7 +242,7 @@ pub struct Book {
     pub spread_overrides: BTreeMap<String, PageSpreadOverride>,
     /// Cached dimensions for archive entries: archive entry name -> (width, height).
     #[serde(default)]
-    pub page_dimensions: BTreeMap<String, (u32, u32)>,
+    pub page_dimensions: Arc<BTreeMap<String, (u32, u32)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +253,9 @@ pub enum ReadStatus {
 }
 
 impl Book {
+    pub fn insert_page_dimension(&mut self, name: String, dims: (u32, u32)) {
+        Arc::make_mut(&mut self.page_dimensions).insert(name, dims);
+    }
     pub fn status(&self) -> ReadStatus {
         if self.is_finished() {
             ReadStatus::Finished
@@ -914,6 +917,8 @@ pub struct Library {
     settings: Settings,
     #[serde(default)]
     pub favorites: HashSet<String>,
+    #[serde(skip)]
+    mutation_seq: u64,
 }
 
 impl Default for Library {
@@ -923,6 +928,7 @@ impl Default for Library {
             books: Vec::new(),
             settings: Settings::default(),
             favorites: HashSet::new(),
+            mutation_seq: 0,
         }
     }
 }
@@ -938,6 +944,21 @@ impl Library {
 
     pub fn load(dirs: &DataDirs) -> Result<Self> {
         let file = dirs.library_file();
+
+        // Clean up leftover temporary files from prior crashes or ungraceful shutdowns
+        if let Some(parent) = file.parent()
+            && let Ok(entries) = fs::read_dir(parent)
+        {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                    && (name.starts_with("library.tmp.") || name == "library.json.tmp")
+                {
+                    let _ = fs::remove_file(p);
+                }
+            }
+        }
+
         let text = match fs::read_to_string(&file) {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
@@ -960,13 +981,70 @@ impl Library {
         }
     }
 
-    /// Write atomically (temp file + rename) so a crash cannot leave a half-written library.
+    /// Write atomically (temp file + fsync + rename + parent sync) so a crash or power loss cannot corrupt the library.
     pub fn save(&self, dirs: &DataDirs) -> Result<()> {
+        use std::io::Write as _;
+
         let file = dirs.library_file();
-        let tmp = file.with_extension("json.tmp");
+        let parent = file
+            .parent()
+            .context("library file destination has no parent directory")?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating directory {}", parent.display()))?;
+
+        // 1. Serialize in-memory before touching any files on disk
         let json = serde_json::to_vec_pretty(self)?;
-        fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
-        fs::rename(&tmp, &file).with_context(|| format!("replacing {}", file.display()))?;
+
+        // 2. Unique temporary file in the same directory (same filesystem mount)
+        static TMP_SAVE_COUNTER: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let counter = TMP_SAVE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = parent.join(format!(
+            "library.tmp.{}.{}.{}",
+            std::process::id(),
+            nanos,
+            counter
+        ));
+
+        // 3. Write and sync temporary file contents to disk
+        let write_and_sync = || -> Result<()> {
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp)
+                .with_context(|| format!("opening temporary library file {}", tmp.display()))?;
+
+            f.write_all(&json)
+                .with_context(|| format!("writing to {}", tmp.display()))?;
+            f.sync_all()
+                .with_context(|| format!("synchronizing {}", tmp.display()))?;
+            Ok(())
+        };
+
+        if let Err(err) = write_and_sync() {
+            let _ = fs::remove_file(&tmp);
+            return Err(err);
+        }
+
+        // 4. Atomically replace destination
+        if let Err(err) = fs::rename(&tmp, &file) {
+            let _ = fs::remove_file(&tmp);
+            return Err(err).with_context(|| format!("replacing {}", file.display()));
+        }
+
+        // 5. Synchronize parent directory where supported (Unix/Linux/macOS)
+        #[cfg(unix)]
+        {
+            if let Ok(dir_file) = fs::File::open(parent) {
+                let _ = dir_file.sync_all();
+            }
+        }
+
         Ok(())
     }
 
@@ -974,11 +1052,20 @@ impl Library {
         &self.books
     }
 
+    pub fn mutation_seq(&self) -> u64 {
+        self.mutation_seq
+    }
+
+    pub fn bump_mutation_seq(&mut self) {
+        self.mutation_seq = self.mutation_seq.wrapping_add(1);
+    }
+
     pub fn settings(&self) -> &Settings {
         &self.settings
     }
 
     pub fn settings_mut(&mut self) -> &mut Settings {
+        self.bump_mutation_seq();
         &mut self.settings
     }
 
@@ -991,6 +1078,7 @@ impl Library {
     }
 
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Book> {
+        self.bump_mutation_seq();
         self.books.iter_mut().find(|b| b.id == id)
     }
 
@@ -999,12 +1087,14 @@ impl Library {
         if self.get(&book.id).is_some() {
             return false;
         }
+        self.bump_mutation_seq();
         self.books.push(book);
         true
     }
 
     /// Remove from the library and delete the cached cover across all size tiers. The comic file itself is untouched.
     pub fn remove(&mut self, id: &str, dirs: &DataDirs) {
+        self.bump_mutation_seq();
         self.books.retain(|b| b.id != id);
         for size in ThumbnailSize::ALL {
             let _ = fs::remove_file(dirs.cover_dir(size).join(format!("{id}.jpg")));
@@ -1017,6 +1107,7 @@ impl Library {
     }
 
     pub fn toggle_favorite(&mut self, id: &str) -> bool {
+        self.bump_mutation_seq();
         if self.favorites.contains(id) {
             self.favorites.remove(id);
             false
@@ -1034,6 +1125,7 @@ impl Library {
     /// Clear all in-memory library data: books, reading history, marks, favorites,
     /// and reset settings to default.
     pub fn clear_all_data(&mut self) {
+        self.bump_mutation_seq();
         self.books.clear();
         self.favorites.clear();
         self.settings = Settings::default();
@@ -1069,6 +1161,7 @@ impl Library {
     /// Assign or clear a series for several books. Names are trimmed and matching existing
     /// names are reused case-insensitively so groups do not split over capitalization.
     pub fn set_series(&mut self, ids: &[String], series: Option<String>) {
+        self.bump_mutation_seq();
         let series = series
             .map(|name| name.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|name| !name.is_empty())
@@ -1331,12 +1424,14 @@ fn build_book(
             if is_cancelled(cancel) {
                 bail!("import cancelled");
             }
-            let legacy_path = dirs.covers_dir().join(format!("{id}.jpg"));
-            let _ = fs::write(&legacy_path, &jpeg);
             let medium_path = dirs
                 .cover_dir(ThumbnailSize::Medium)
                 .join(format!("{id}.jpg"));
             let _ = fs::write(&medium_path, &jpeg);
+            let legacy_path = dirs.covers_dir().join(format!("{id}.jpg"));
+            if fs::hard_link(&medium_path, &legacy_path).is_err() {
+                let _ = fs::write(&legacy_path, &jpeg);
+            }
             let small_path = dirs
                 .cover_dir(ThumbnailSize::Small)
                 .join(format!("{id}.jpg"));
@@ -1373,7 +1468,7 @@ fn build_book(
         last_read: None,
         marks: BTreeMap::new(),
         spread_overrides: BTreeMap::new(),
-        page_dimensions: BTreeMap::new(),
+        page_dimensions: Arc::default(),
     })
 }
 
@@ -1507,7 +1602,7 @@ mod tests {
             last_read: None,
             marks: BTreeMap::new(),
             spread_overrides: BTreeMap::new(),
-            page_dimensions: BTreeMap::new(),
+            page_dimensions: Arc::default(),
         };
         assert_eq!(book.progress(), 0.0);
         book.opened = true;
@@ -1572,7 +1667,7 @@ mod tests {
             last_read: None,
             marks: BTreeMap::new(),
             spread_overrides: BTreeMap::new(),
-            page_dimensions: BTreeMap::new(),
+            page_dimensions: Arc::default(),
         }
     }
 
@@ -1730,16 +1825,14 @@ mod tests {
             last_read: None,
             marks: BTreeMap::new(),
             spread_overrides: BTreeMap::new(),
-            page_dimensions: BTreeMap::new(),
+            page_dimensions: Arc::default(),
         };
         book.spread_overrides
             .insert("page_02.jpg".into(), PageSpreadOverride::ForceSpread);
         book.spread_overrides
             .insert("page_03.jpg".into(), PageSpreadOverride::ForceSingle);
-        book.page_dimensions
-            .insert("page_01.jpg".into(), (1000, 1500));
-        book.page_dimensions
-            .insert("page_02.jpg".into(), (2000, 1500));
+        book.insert_page_dimension("page_01.jpg".into(), (1000, 1500));
+        book.insert_page_dimension("page_02.jpg".into(), (2000, 1500));
 
         lib.add(book);
         lib.save(&dirs).unwrap();
@@ -2259,5 +2352,95 @@ mod tests {
         let fallback = Settings::from_value(&corrupt);
         assert_eq!(fallback.sort_by, SortBy::Default);
         assert_eq!(fallback.sort_direction, SortDirection::Ascending);
+    }
+
+    #[test]
+    fn test_persistence_durability_and_temp_cleanup() {
+        let tmp = temp_dir("persistence-durability");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+
+        let mut lib = Library::default();
+        let mut b = sample_book();
+        b.id = "book_durability_1".into();
+        b.title = "Durability Test Book".into();
+        b.insert_page_dimension("p1.png".into(), (1200, 1800));
+        lib.add(b);
+
+        // Simulate leftover temp file from an interrupted process
+        let leftover_tmp = dirs.root().join("library.tmp.99999.12345678");
+        fs::write(&leftover_tmp, b"partial corrupted temporary write").unwrap();
+        assert!(leftover_tmp.exists());
+
+        // Save library
+        lib.save(&dirs)
+            .expect("save should succeed with atomic rename and sync");
+        assert!(dirs.root().join("library.json").exists());
+
+        // Load library - should clean up leftover temp files and load successfully
+        let loaded = Library::load(&dirs).expect("load should succeed");
+        assert_eq!(loaded.books().len(), 1);
+        assert_eq!(loaded.books()[0].title, "Durability Test Book");
+        assert_eq!(
+            loaded.books()[0].page_dimensions.get("p1.png"),
+            Some(&(1200, 1800))
+        );
+        assert!(
+            !leftover_tmp.exists(),
+            "leftover temp file must be cleaned up on load"
+        );
+    }
+
+    #[test]
+    fn test_persistence_preserves_valid_file_on_failure() {
+        let tmp = temp_dir("persistence-preservation");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+
+        let mut lib = Library::default();
+        let mut b = sample_book();
+        b.id = "book_orig".into();
+        b.title = "Original Book".into();
+        lib.add(b);
+        lib.save(&dirs).unwrap();
+
+        let lib_path = dirs.root().join("library.json");
+        let original_contents = fs::read_to_string(&lib_path).unwrap();
+
+        // Verify that if a temp file cannot be moved or if destination is valid, original is untouched
+        let reloaded = Library::load(&dirs).unwrap();
+        assert_eq!(reloaded.books().len(), 1);
+        assert_eq!(reloaded.books()[0].title, "Original Book");
+        assert_eq!(fs::read_to_string(&lib_path).unwrap(), original_contents);
+    }
+
+    #[test]
+    fn test_concurrent_saves_produce_consistent_library() {
+        use std::thread;
+
+        let tmp = temp_dir("persistence-concurrent");
+        let dirs = Arc::new(DataDirs::at(tmp.join("data")).unwrap());
+
+        let handles: Vec<_> = (0..5)
+            .map(|thread_id| {
+                let dirs = Arc::clone(&dirs);
+                thread::spawn(move || {
+                    let mut lib = Library::default();
+                    for b_idx in 0..10 {
+                        let mut b = sample_book();
+                        b.id = format!("t{thread_id}_b{b_idx}");
+                        b.title = format!("Thread {thread_id} Book {b_idx}");
+                        lib.add(b);
+                    }
+                    lib.save(&dirs).unwrap();
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Library file must be valid, parseable JSON and load cleanly
+        let loaded = Library::load(&dirs).expect("concurrent saves must not leave corrupted file");
+        assert_eq!(loaded.books().len(), 10);
     }
 }

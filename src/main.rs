@@ -433,7 +433,10 @@ impl Yomu {
         if self.is_quitting {
             return;
         }
-        self.reader = None;
+        self.cleanup_current_reader();
+        self.cover_cache.update(cx, |cache, _cx| {
+            cache.clear_without_window();
+        });
         self.selection.clear();
         self.open_group = None;
         self.group_scroll.set_offset(Point::default());
@@ -725,7 +728,7 @@ impl Yomu {
                     })
                     .unwrap_or(true);
                 if should_stop {
-                    let _ = this.update(cx, |this, _| {
+                    let _ = this.update(cx, |this, cx| {
                         let was_active = this
                             .import_cancel
                             .as_ref()
@@ -734,6 +737,9 @@ impl Yomu {
                             this.import_cancel = None;
                             this.importing = false;
                             this.importing_title = None;
+                            if this.imported_count > 0 && !this.is_quitting {
+                                this.save_library(cx);
+                            }
                         }
                     });
                     break;
@@ -747,7 +753,7 @@ impl Yomu {
                                 }
                                 let title = book.title.clone();
                                 if this.library.add(book) {
-                                    this.save_library(cx);
+                                    this.save_library_debounced(cx);
                                     this.imported_count += 1;
                                 }
                                 this.importing_title = Some(title);
@@ -771,6 +777,9 @@ impl Yomu {
                                     this.import_cancel = None;
                                     this.importing = false;
                                     this.importing_title = None;
+                                    if this.imported_count > 0 && !this.is_quitting {
+                                        this.save_library(cx);
+                                    }
                                 }
                                 if !this.is_quitting && !cancel_ui.load(Ordering::Relaxed) {
                                     this.show_toast(report.summary(), cx);
@@ -795,6 +804,9 @@ impl Yomu {
                                     this.import_cancel = None;
                                     this.importing = false;
                                     this.importing_title = None;
+                                    if this.imported_count > 0 && !this.is_quitting {
+                                        this.save_library(cx);
+                                    }
                                 }
                                 cx.notify();
                             })

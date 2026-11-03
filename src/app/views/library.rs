@@ -5,21 +5,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::ScrollBounce;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::empty::{
     Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
 };
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, App, ClickEvent, Context, Entity, Pixels, Window, div, px};
+use gpui_kit::{AnyElement, App, ClickEvent, Context, Entity, Pixels, Window, div, px, size};
 
 use crate::app::state::Yomu;
 use crate::ui;
 use crate::ui::library_view::{
-    BookCardProps, directory_groups, render_book_card, render_book_list_row, render_folder_card,
-    render_folder_list_row, sort_groups,
+    BookCardProps, LibraryItem, directory_groups, render_book_card, render_book_list_row,
+    render_folder_card, render_folder_list_row, sort_groups,
 };
 use crate::ui::theme::UiColors;
 use yomu::library::Book;
@@ -242,13 +244,13 @@ impl Yomu {
         let radius = px(self.radius_px());
         let yomu = cx.entity();
 
-        let query = self.search_query.trim().to_lowercase();
+        let query = self.search_query.trim();
+        let has_query = !query.is_empty();
         let matches_query = |b: &Book| {
-            query.is_empty()
-                || b.title.to_lowercase().contains(&query)
-                || b.series
-                    .as_ref()
-                    .is_some_and(|s| s.to_lowercase().contains(&query))
+            if !has_query {
+                return true;
+            }
+            yomu::search::matches(&b.title, &b.path, b.series.as_deref(), query)
         };
 
         let sorted_books = self.get_sorted_books();
@@ -338,71 +340,129 @@ impl Yomu {
         );
         let card_w = grid.card_w;
         let cover_h = grid.cover_h;
-
         let border_px = self.border_px();
         let is_grid = self.view_mode_grid;
-        let mut cards: Vec<AnyElement> = Vec::new();
-
-        if self.library.settings().group_series && self.open_group.is_none() {
-            let mut groups = directory_groups(books.iter().copied());
-            let sort_by = self.library.settings().sort_by;
-            let sort_direction = self.library.settings().sort_direction;
-            sort_groups(&mut groups, sort_by, sort_direction);
-            let mut grouped_ids: HashSet<&str> = HashSet::new();
-
-            for group in &groups {
-                for b in &group.books {
-                    grouped_ids.insert(b.id.as_str());
-                }
-                let first = group.books[0];
-                let count = group.books.len();
-                let cover_path = self.dirs.cover_for_size(&first.id, thumb_size);
-
-                if is_grid {
-                    cards.push(self.render_folder_card(
-                        &group.key,
-                        &group.name,
-                        count,
-                        cover_path,
-                        card_w,
-                        cover_h,
-                        radius,
-                        colors,
-                        &yomu,
-                    ));
-                } else {
-                    cards.push(self.render_folder_list_row(
-                        &group.key,
-                        &group.name,
-                        count,
-                        cover_path,
-                        radius,
-                        colors,
-                        border_px,
-                        &yomu,
-                    ));
-                }
-            }
-
-            for book in books
-                .iter()
-                .filter(|b| !grouped_ids.contains(b.id.as_str()))
-            {
-                if is_grid {
-                    cards.push(self.render_book_card(book, card_w, cover_h, radius, colors, &yomu));
-                } else {
-                    cards.push(self.render_book_list_row(book, radius, colors, &yomu));
-                }
-            }
+        let cols = if is_grid { grid.cols } else { 1 };
+        let gap = if is_grid { grid.gap } else { 8.0 };
+        let pad_x = if is_grid {
+            grid.pad_x
         } else {
-            for book in &books {
-                if is_grid {
-                    cards.push(self.render_book_card(book, card_w, cover_h, radius, colors, &yomu));
-                } else {
-                    cards.push(self.render_book_list_row(book, radius, colors, &yomu));
+            grid.pad_x.max(16.0)
+        };
+        let row_height = if is_grid { cover_h + 64.0 } else { 64.0 };
+        let row_slot_h = row_height + gap;
+        let content_w = (f32::from(window.viewport_size().width)
+            - if !sidebar_collapsed { 240.0 } else { 48.0 })
+        .max(200.0);
+
+        let mutation_seq = self.library.mutation_seq();
+        let save_seq = self.save_seq;
+        let books_len = self.library.books().len();
+        let sort_by = self.library.settings().sort_by;
+        let sort_direction = self.library.settings().sort_direction;
+        let group_series = self.library.settings().group_series;
+        let open_group_str = self.open_group.as_deref();
+
+        let mut cache = self.library_row_cache.borrow_mut();
+        let is_cached = cache.is_valid(
+            mutation_seq,
+            save_seq,
+            books_len,
+            query,
+            sort_by,
+            sort_direction,
+            group_series,
+            open_group_str,
+            is_grid,
+            cols,
+            card_w,
+            cover_h,
+            gap,
+            pad_x,
+        );
+
+        if !is_cached {
+            let mut items: Vec<LibraryItem> = Vec::new();
+            if group_series && self.open_group.is_none() {
+                let mut groups = directory_groups(books.iter().copied());
+                sort_groups(&mut groups, sort_by, sort_direction);
+                let mut grouped_ids: HashSet<&str> = HashSet::new();
+
+                for group in &groups {
+                    for b in &group.books {
+                        grouped_ids.insert(b.id.as_str());
+                    }
+                    let first = group.books[0];
+                    let count = group.books.len();
+                    items.push(LibraryItem::Folder {
+                        key: group.key.clone(),
+                        name: group.name.clone(),
+                        count,
+                        cover_id: first.id.clone(),
+                    });
+                }
+
+                for book in books
+                    .iter()
+                    .filter(|b| !grouped_ids.contains(b.id.as_str()))
+                {
+                    let index = self
+                        .library
+                        .books()
+                        .iter()
+                        .position(|b| b.id == book.id)
+                        .unwrap_or(0);
+                    items.push(LibraryItem::Book {
+                        id: book.id.clone(),
+                        index,
+                    });
+                }
+            } else {
+                for book in &books {
+                    let index = self
+                        .library
+                        .books()
+                        .iter()
+                        .position(|b| b.id == book.id)
+                        .unwrap_or(0);
+                    items.push(LibraryItem::Book {
+                        id: book.id.clone(),
+                        index,
+                    });
                 }
             }
+
+            let mut rows: Vec<Vec<LibraryItem>> =
+                Vec::with_capacity((items.len() + cols - 1) / cols.max(1));
+            for chunk in items.chunks(cols.max(1)) {
+                rows.push(chunk.to_vec());
+            }
+
+            let row_count = rows.len();
+            let item_sizes = std::rc::Rc::new(vec![size(px(content_w), px(row_slot_h)); row_count]);
+
+            *cache = ui::library_view::LibraryRowCache {
+                mutation_seq,
+                save_seq,
+                books_len,
+                search_query: query.to_string(),
+                sort_by,
+                sort_direction,
+                group_series,
+                open_group: self.open_group.clone(),
+                view_mode_grid: is_grid,
+                cols,
+                card_w,
+                cover_h,
+                gap,
+                pad_x,
+                rows,
+                item_sizes,
+            };
         }
+
+        let item_sizes = cache.item_sizes.clone();
+        drop(cache);
 
         let in_group = self.open_group.is_some();
         let scroll_handle = if in_group {
@@ -411,6 +471,114 @@ impl Yomu {
             &self.library_scroll
         };
 
+        let virtual_list = v_virtual_list(
+            yomu.clone(),
+            if in_group {
+                "group-virtual-grid"
+            } else {
+                "library-virtual-grid"
+            },
+            item_sizes,
+            move |this, visible_range, _window, cx| {
+                let cache = this.library_row_cache.borrow();
+                let yomu = cx.entity();
+                let mut rendered = Vec::with_capacity(visible_range.len());
+
+                for row_ix in visible_range {
+                    let Some(row) = cache.rows.get(row_ix) else {
+                        continue;
+                    };
+
+                    let row_element = if is_grid {
+                        div()
+                            .id(("grid-row", row_ix))
+                            .w_full()
+                            .h(px(row_slot_h))
+                            .pb(px(gap))
+                            .px(px(pad_x))
+                            .flex()
+                            .flex_row()
+                            .items_start()
+                            .gap(px(gap))
+                            .children(row.iter().map(|item| match item {
+                                LibraryItem::Folder {
+                                    key,
+                                    name,
+                                    count,
+                                    cover_id,
+                                } => {
+                                    let cover_path = this.dirs.cover_for_size(cover_id, thumb_size);
+                                    this.render_folder_card(
+                                        key, name, *count, cover_path, card_w, cover_h, radius,
+                                        colors, &yomu,
+                                    )
+                                }
+                                LibraryItem::Book { id, index } => {
+                                    let book = this
+                                        .library
+                                        .books()
+                                        .get(*index)
+                                        .filter(|b| b.id == *id)
+                                        .or_else(|| this.library.get(id));
+                                    if let Some(book) = book {
+                                        this.render_book_card(
+                                            book, card_w, cover_h, radius, colors, &yomu,
+                                        )
+                                    } else {
+                                        div().into_any_element()
+                                    }
+                                }
+                            }))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .id(("list-row", row_ix))
+                            .w_full()
+                            .max_w(px(1040.))
+                            .mx_auto()
+                            .px(px(pad_x))
+                            .h(px(row_slot_h))
+                            .pb(px(8.0))
+                            .children(row.first().map(|item| match item {
+                                LibraryItem::Folder {
+                                    key,
+                                    name,
+                                    count,
+                                    cover_id,
+                                } => {
+                                    let cover_path = this.dirs.cover_for_size(cover_id, thumb_size);
+                                    this.render_folder_list_row(
+                                        key, name, *count, cover_path, radius, colors, border_px,
+                                        &yomu,
+                                    )
+                                }
+                                LibraryItem::Book { id, index } => {
+                                    let book = this
+                                        .library
+                                        .books()
+                                        .get(*index)
+                                        .filter(|b| b.id == *id)
+                                        .or_else(|| this.library.get(id));
+                                    if let Some(book) = book {
+                                        this.render_book_list_row(book, radius, colors, &yomu)
+                                    } else {
+                                        div().into_any_element()
+                                    }
+                                }
+                            }))
+                            .into_any_element()
+                    };
+
+                    rendered.push(row_element);
+                }
+
+                rendered
+            },
+        )
+        .track_scroll(scroll_handle)
+        .pt(px(if is_grid { 24.0 } else { 16.0 }))
+        .pb(px(if is_grid { 24.0 } else { 16.0 }));
+
         div()
             .id(if in_group {
                 "group-grid"
@@ -418,34 +586,22 @@ impl Yomu {
                 "all-manga-container"
             })
             .size_full()
-            .overflow_y_scrollbar()
-            .track_scroll(scroll_handle)
-            .scroll_bounce(true)
-            .scroll_wheel(false)
-            .flex()
-            .flex_col()
-            .child(if is_grid {
-                div()
-                    .px(px(grid.pad_x))
-                    .py_6()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_start()
-                    .gap(px(grid.gap))
-                    .children(cards)
-            } else {
-                div()
-                    .w_full()
-                    .max_w(px(1040.))
-                    .mx_auto()
-                    .px(px(grid.pad_x.max(16.0)))
-                    .py_4()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(cards)
-            })
+            .relative()
+            .overflow_hidden()
+            .child(
+                ScrollBounce::new(
+                    if in_group {
+                        "group-scroll-bounce"
+                    } else {
+                        "library-scroll-bounce"
+                    },
+                    scroll_handle,
+                    virtual_list,
+                )
+                .enabled(true)
+                .scroll_wheel(false),
+            )
+            .child(Scrollbar::vertical(scroll_handle).viewport_from_layout())
             .into_any_element()
     }
 }

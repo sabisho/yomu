@@ -39,6 +39,79 @@ pub fn book_format_label(book: &Book) -> &'static str {
     }
 }
 
+/// A displayable item in the virtualized library view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryItem {
+    Folder {
+        key: String,
+        name: String,
+        count: usize,
+        cover_id: String,
+    },
+    Book {
+        id: String,
+        /// Cached index in `Library::books` for fast O(1) lookup.
+        index: usize,
+    },
+}
+
+/// Cached partition of library items into virtualized rows to eliminate
+/// per-frame element construction and layout recomputation.
+#[derive(Clone, Default)]
+pub struct LibraryRowCache {
+    pub mutation_seq: u64,
+    pub save_seq: u64,
+    pub books_len: usize,
+    pub search_query: String,
+    pub sort_by: SortBy,
+    pub sort_direction: SortDirection,
+    pub group_series: bool,
+    pub open_group: Option<String>,
+    pub view_mode_grid: bool,
+    pub cols: usize,
+    pub card_w: f32,
+    pub cover_h: f32,
+    pub gap: f32,
+    pub pad_x: f32,
+    pub rows: Vec<Vec<LibraryItem>>,
+    pub item_sizes: std::rc::Rc<Vec<gpui_kit::Size<gpui_kit::Pixels>>>,
+}
+
+impl LibraryRowCache {
+    pub fn is_valid(
+        &self,
+        mutation_seq: u64,
+        save_seq: u64,
+        books_len: usize,
+        search_query: &str,
+        sort_by: SortBy,
+        sort_direction: SortDirection,
+        group_series: bool,
+        open_group: Option<&str>,
+        view_mode_grid: bool,
+        cols: usize,
+        card_w: f32,
+        cover_h: f32,
+        gap: f32,
+        pad_x: f32,
+    ) -> bool {
+        self.mutation_seq == mutation_seq
+            && self.save_seq == save_seq
+            && self.books_len == books_len
+            && self.search_query == search_query
+            && self.sort_by == sort_by
+            && self.sort_direction == sort_direction
+            && self.group_series == group_series
+            && self.open_group.as_deref() == open_group
+            && self.view_mode_grid == view_mode_grid
+            && self.cols == cols
+            && (self.card_w - card_w).abs() < 0.1
+            && (self.cover_h - cover_h).abs() < 0.1
+            && (self.gap - gap).abs() < 0.1
+            && (self.pad_x - pad_x).abs() < 0.1
+    }
+}
+
 /// A grouped set of books sharing a parent directory or an explicit series name.
 pub struct LibraryGroup<'a> {
     pub key: String,
@@ -48,42 +121,60 @@ pub struct LibraryGroup<'a> {
     pub books: Vec<&'a Book>,
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum GroupKey<'a> {
+    Series(std::borrow::Cow<'a, str>),
+    Directory(&'a Path),
+}
+
 /// Partitions a slice of books into series or directory-based folders.
 pub fn directory_groups<'a>(books: impl IntoIterator<Item = &'a Book>) -> Vec<LibraryGroup<'a>> {
-    let mut buckets: std::collections::BTreeMap<String, (String, usize, Vec<&'a Book>)> =
-        std::collections::BTreeMap::new();
+    let mut buckets: std::collections::BTreeMap<
+        GroupKey<'a>,
+        (String, String, usize, Vec<&'a Book>),
+    > = std::collections::BTreeMap::new();
     for (index, book) in books.into_iter().enumerate() {
         let manual_series = book
             .series
             .as_deref()
             .map(str::trim)
             .filter(|name| !name.is_empty());
-        let key = if let Some(series) = manual_series {
-            format!("series:{}", series.to_lowercase())
+
+        let group_key = if let Some(series) = manual_series {
+            if series.chars().any(char::is_uppercase) {
+                GroupKey::Series(std::borrow::Cow::Owned(series.to_lowercase()))
+            } else {
+                GroupKey::Series(std::borrow::Cow::Borrowed(series))
+            }
         } else {
             let parent = book.path.parent().unwrap_or_else(|| Path::new("."));
-            format!("directory:{}", parent.display())
+            GroupKey::Directory(parent)
         };
 
-        if let Some((_, _, members)) = buckets.get_mut(&key) {
+        if let Some((_, _, _, members)) = buckets.get_mut(&group_key) {
             members.push(book);
         } else {
-            let name = if let Some(series) = manual_series {
-                series.to_string()
-            } else {
-                let parent = book.path.parent().unwrap_or_else(|| Path::new("."));
-                parent
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| parent.display().to_string())
+            let (key_str, name) = match &group_key {
+                GroupKey::Series(series) => (
+                    format!("series:{series}"),
+                    manual_series.unwrap().to_string(),
+                ),
+                GroupKey::Directory(parent) => {
+                    let key = format!("directory:{}", parent.display());
+                    let name = parent
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| parent.display().to_string());
+                    (key, name)
+                }
             };
-            buckets.insert(key, (name, index, vec![book]));
+            buckets.insert(group_key, (key_str, name, index, vec![book]));
         }
     }
 
     let mut groups: Vec<_> = buckets
-        .into_iter()
-        .filter_map(|(key, (name, first_seen, members))| {
+        .into_values()
+        .filter_map(|(key, name, first_seen, members)| {
             if members.len() < 2 {
                 return None;
             }

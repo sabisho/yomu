@@ -579,28 +579,20 @@ pub fn render_reader(
         ));
     } else if reader.continuous {
         let width = vp.width * reader.zoom;
-        let page_w = width.max(1.0);
-        let gap = if reader.webcomics {
-            0.0
-        } else {
-            12.0 * reader.zoom
-        };
         let left = (vp.width - width) / 2.0 - reader.off.0;
         let visible_top = reader.off.1;
         let visible_bottom = visible_top + vp.height;
-        let mut top = 0.0;
-        for ix in 0..reader.total {
-            let (w, h) = reader.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
-            let height = page_w * h as f32 / w.max(1) as f32;
-            let overlap = if reader.webcomics && ix + 1 < reader.total {
-                1.0
-            } else {
-                0.0
-            };
-            if top > visible_bottom {
-                break;
-            }
-            if top + height + overlap >= visible_top {
+        let (first, last) = reader.continuous_visible_range(visible_top, visible_bottom, &vp);
+        let cache = reader.ensure_continuous_cache(&vp);
+        if reader.total > 0 && !cache.tops.is_empty() {
+            for ix in first..=last {
+                let top = cache.tops[ix];
+                let height = cache.heights[ix];
+                let overlap = if reader.webcomics && ix + 1 < reader.total {
+                    1.0
+                } else {
+                    0.0
+                };
                 if let Some(page) = reader.images.get(&ix) {
                     content.push(page_layer(
                         &page.image,
@@ -615,7 +607,6 @@ pub fn render_reader(
                     ));
                 }
             }
-            top += height + gap;
         }
     } else {
         let (shift_out, shift_in) = match &reader.transition {
@@ -858,6 +849,19 @@ pub fn render_reader(
 }
 
 /// State of the book that is currently open.
+#[derive(Debug, Clone, Default)]
+pub struct ContinuousLayoutCache {
+    pub width: f32,
+    pub zoom: f32,
+    pub webcomics: bool,
+    pub layout_version: u64,
+    pub total: usize,
+    pub tops: Vec<f32>,
+    pub heights: Vec<f32>,
+    pub bottoms: Vec<f32>,
+    pub total_height: f32,
+}
+
 pub struct Reader {
     pub book_id: String,
     pub book_title: SharedString,
@@ -870,6 +874,8 @@ pub struct Reader {
     pub orig_sizes: Vec<Option<(u32, u32)>>,
     pub page: usize,
     pub total: usize,
+    pub layout_version: u64,
+    pub continuous_cache: std::cell::RefCell<Option<ContinuousLayoutCache>>,
 
     pub fit: FitMode,
     /// Multiplier on top of the fit size; `1.0` is exactly the fit.
@@ -915,6 +921,7 @@ pub struct Reader {
     pub images: HashMap<usize, Page>,
     pub pending: HashSet<usize>,
     pub cancellations: HashMap<usize, Arc<std::sync::atomic::AtomicBool>>,
+    pub probe_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub failed: HashMap<usize, String>,
     pub error: Option<String>,
 
@@ -949,6 +956,8 @@ impl Reader {
             orig_sizes: Vec::new(),
             page: book.current_page.min(book.page_count.saturating_sub(1)),
             total: book.page_count,
+            layout_version: 0,
+            continuous_cache: std::cell::RefCell::new(None),
             fit: settings.fit,
             zoom,
             off: (0.0, 0.0),
@@ -972,6 +981,7 @@ impl Reader {
             images: HashMap::new(),
             pending: HashSet::new(),
             cancellations: HashMap::new(),
+            probe_cancel: None,
             failed: HashMap::new(),
             error: None,
             vim: Vim::new(),
@@ -1151,99 +1161,96 @@ impl Reader {
         layout::visual_spread(self.active_spread(), self.reading_direction)
     }
 
+    pub fn ensure_continuous_cache(
+        &self,
+        vp: &Viewport,
+    ) -> std::cell::Ref<'_, ContinuousLayoutCache> {
+        let width = (vp.width * self.zoom).max(1.0);
+        let is_valid = {
+            if let Some(cache) = self.continuous_cache.borrow().as_ref() {
+                (cache.width - width).abs() < 0.001
+                    && (cache.zoom - self.zoom).abs() < 0.001
+                    && cache.webcomics == self.webcomics
+                    && cache.layout_version == self.layout_version
+                    && cache.total == self.total
+            } else {
+                false
+            }
+        };
+
+        if !is_valid {
+            let gap = if self.webcomics {
+                0.0
+            } else {
+                12.0 * self.zoom
+            };
+            let mut tops = Vec::with_capacity(self.total);
+            let mut heights = Vec::with_capacity(self.total);
+            let mut bottoms = Vec::with_capacity(self.total);
+            let mut top = 0.0;
+            for ix in 0..self.total {
+                tops.push(top);
+                let (w, h) = self.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
+                let height = width * h as f32 / w.max(1) as f32;
+                heights.push(height);
+                let bottom = top + height;
+                bottoms.push(bottom);
+                top = bottom + gap;
+            }
+            let total_height = bottoms.last().copied().unwrap_or(0.0);
+            *self.continuous_cache.borrow_mut() = Some(ContinuousLayoutCache {
+                width,
+                zoom: self.zoom,
+                webcomics: self.webcomics,
+                layout_version: self.layout_version,
+                total: self.total,
+                tops,
+                heights,
+                bottoms,
+                total_height,
+            });
+        }
+
+        std::cell::Ref::map(self.continuous_cache.borrow(), |c| c.as_ref().unwrap())
+    }
+
     #[cfg(test)]
     pub fn continuous_layout(&self, vp: &Viewport) -> (Vec<f32>, Vec<f32>) {
-        let width = (vp.width * self.zoom).max(1.0);
-        let gap = if self.webcomics {
-            0.0
-        } else {
-            12.0 * self.zoom
-        };
-        let mut tops = Vec::with_capacity(self.total);
-        let mut heights = Vec::with_capacity(self.total);
-        let mut top = 0.0;
-        for ix in 0..self.total {
-            tops.push(top);
-            // Unknown pages use a typical portrait ratio until their metadata is read.
-            let (w, h) = self.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
-            let height = width * h as f32 / w.max(1) as f32;
-            heights.push(height);
-            top += height + gap;
-        }
-        (tops, heights)
+        let cache = self.ensure_continuous_cache(vp);
+        (cache.tops.clone(), cache.heights.clone())
     }
 
     pub fn continuous_total_height(&self, vp: &Viewport) -> f32 {
         if self.total == 0 {
             return 0.0;
         }
-        let width = (vp.width * self.zoom).max(1.0);
-        let gap = if self.webcomics {
-            0.0
-        } else {
-            12.0 * self.zoom
-        };
-        let mut total = 0.0;
-        for ix in 0..self.total {
-            let (w, h) = self.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
-            let height = width * h as f32 / w.max(1) as f32;
-            total += height;
-            if ix + 1 < self.total {
-                total += gap;
-            }
-        }
-        total
+        self.ensure_continuous_cache(vp).total_height
     }
 
     pub fn continuous_page_at(&self, y: f32, vp: &Viewport) -> usize {
         if self.total == 0 {
             return 0;
         }
-        let width = (vp.width * self.zoom).max(1.0);
-        let gap = if self.webcomics {
-            0.0
-        } else {
-            12.0 * self.zoom
-        };
-        let mut top = 0.0;
-        for ix in 0..self.total {
-            let (w, h) = self.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
-            let height = width * h as f32 / w.max(1) as f32;
-            if y < top + height {
-                return ix;
-            }
-            top += height + gap;
-        }
-        self.total.saturating_sub(1)
+        let cache = self.ensure_continuous_cache(vp);
+        cache
+            .bottoms
+            .partition_point(|&b| b <= y)
+            .min(self.total.saturating_sub(1))
     }
 
     pub fn continuous_visible_range(&self, low: f32, high: f32, vp: &Viewport) -> (usize, usize) {
         if self.total == 0 {
             return (0, 0);
         }
-        let width = (vp.width * self.zoom).max(1.0);
-        let gap = if self.webcomics {
-            0.0
-        } else {
-            12.0 * self.zoom
-        };
-        let mut top = 0.0;
-        let mut first = None;
-        let mut last = None;
-        for ix in 0..self.total {
-            let (w, h) = self.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
-            let height = width * h as f32 / w.max(1) as f32;
-            if top < high && top + height > low {
-                if first.is_none() {
-                    first = Some(ix);
-                }
-                last = Some(ix);
-            } else if top >= high && first.is_some() {
-                break;
-            }
-            top += height + gap;
+        let cache = self.ensure_continuous_cache(vp);
+        let first = cache.bottoms.partition_point(|&b| b <= low);
+        let last_idx = cache.tops.partition_point(|&t| t < high);
+        if first >= self.total || last_idx == 0 || first >= last_idx {
+            let clamped = first.min(self.total.saturating_sub(1));
+            return (clamped, clamped);
         }
-        (first.unwrap_or(self.page), last.unwrap_or(self.page))
+        let last = (last_idx - 1).min(self.total - 1);
+        (first, last.max(first))
     }
 
     pub fn orig_of(page: &Page) -> (f32, f32) {
@@ -1620,7 +1627,7 @@ mod tests {
             last_read: None,
             marks: BTreeMap::new(),
             spread_overrides: BTreeMap::new(),
-            page_dimensions: BTreeMap::new(),
+            page_dimensions: Default::default(),
         };
         let settings = Settings {
             continuous: true,
@@ -1645,6 +1652,108 @@ mod tests {
         let (first, last) = reader.continuous_visible_range(tops[2], tops[5] + 1.0, &vp);
         assert_eq!(first, 2);
         assert_eq!(last, 5);
+    }
+
+    #[test]
+    fn test_continuous_cache_fuzzy_matches_naive_reference() {
+        let mut reader = Reader::new(
+            &Book {
+                id: "test".into(),
+                title: "Test".into(),
+                series: None,
+                path: PathBuf::from("/tmp/test.cbz"),
+                kind: SourceKind::Archive,
+                page_count: 50,
+                current_page: 0,
+                opened: false,
+                added_at: 1,
+                last_read: None,
+                marks: BTreeMap::new(),
+                spread_overrides: BTreeMap::new(),
+                page_dimensions: Arc::default(),
+            },
+            &Settings {
+                continuous: true,
+                ..Default::default()
+            },
+        );
+
+        let dims = [
+            (1000, 1500),
+            (1920, 1080),
+            (2400, 1600),
+            (1200, 1200),
+            (800, 2400),
+        ];
+        reader.orig_sizes = (0..50).map(|i| Some(dims[i % dims.len()])).collect();
+
+        let vp = Viewport {
+            width: 1200.0,
+            height: 900.0,
+            scale: 1.0,
+        };
+
+        let naive_layout = |r: &Reader, vp: &Viewport| -> (Vec<f32>, Vec<f32>, f32) {
+            let width = (vp.width * r.zoom).max(1.0);
+            let gap = if r.webcomics { 0.0 } else { 12.0 * r.zoom };
+            let mut tops = Vec::with_capacity(r.total);
+            let mut heights = Vec::with_capacity(r.total);
+            let mut top = 0.0;
+            for ix in 0..r.total {
+                tops.push(top);
+                let (w, h) = r.orig_sizes.get(ix).and_then(|v| *v).unwrap_or((2, 3));
+                let height = width * h as f32 / w.max(1) as f32;
+                heights.push(height);
+                top += height + gap;
+            }
+            let total = if tops.is_empty() {
+                0.0
+            } else {
+                tops.last().unwrap() + heights.last().unwrap()
+            };
+            (tops, heights, total)
+        };
+
+        let naive_page_at = |r: &Reader, y: f32, vp: &Viewport| -> usize {
+            let (tops, heights, _) = naive_layout(r, vp);
+            for (ix, (&top, &height)) in tops.iter().zip(&heights).enumerate() {
+                if y < top + height {
+                    return ix;
+                }
+            }
+            r.total.saturating_sub(1)
+        };
+
+        for zoom in [0.5, 1.0, 1.5, 2.5] {
+            reader.zoom = zoom;
+            for webcomics in [false, true] {
+                reader.webcomics = webcomics;
+                reader.layout_version += 1;
+
+                let (ref_tops, ref_heights, ref_total) = naive_layout(&reader, &vp);
+                let cached_total = reader.continuous_total_height(&vp);
+                assert!(
+                    (cached_total - ref_total).abs() < 0.01,
+                    "cached total {cached_total} must match naive reference {ref_total} at zoom {zoom}"
+                );
+
+                let cache = reader.ensure_continuous_cache(&vp);
+                for i in 0..reader.total {
+                    assert!((cache.tops[i] - ref_tops[i]).abs() < 0.01);
+                    assert!((cache.heights[i] - ref_heights[i]).abs() < 0.01);
+                }
+
+                for step in 0..=100 {
+                    let y = ref_total * (step as f32 / 100.0);
+                    let ref_page = naive_page_at(&reader, y, &vp);
+                    let cached_page = reader.continuous_page_at(y, &vp);
+                    assert_eq!(
+                        cached_page, ref_page,
+                        "page at y={y} (zoom={zoom}, webcomics={webcomics}) mismatch: cached={cached_page}, naive={ref_page}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1691,7 +1800,7 @@ mod tests {
             last_read: None,
             marks: BTreeMap::new(),
             spread_overrides: BTreeMap::new(),
-            page_dimensions: BTreeMap::new(),
+            page_dimensions: Default::default(),
         };
         let settings = Settings::default();
         let reader = Reader::new(&book, &settings);

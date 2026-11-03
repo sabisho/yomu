@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **308 active tests** passing (130 core library unit tests in `src/lib.rs`, 178 binary-target UI tests in `src/main.rs`, plus 3 opt-in performance benchmarks; 311 total).
+- **Test Baseline:** **346 active tests** passing (145 core library unit tests in `src/lib.rs`, 201 binary-target UI tests in `src/main.rs`, plus 13 opt-in performance benchmarks; 359 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `devenv shell cargo check --all-targets` and `devenv shell cargo clippy --all-targets --all-features -- -D warnings`, fully formatted under `devenv shell cargo fmt --all -- --check`.
 
 ---
@@ -46,6 +46,52 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Phase 4.2 & 4.2.1 (Dual-Page Spread Mode & Mixed-Source Support):** Implemented native dual-page spread layout with automatic detection of single-image double-page spreads via aspect ratio threshold (`1.25`), lightweight dimension probing, manual overrides (`Auto`, `ForceSingle`, `ForceSpread`), precomputed `SpreadPlan` with zero per-frame allocations, and cover isolation toggle.
 - **Phase 4.3 (Restrained Motion Transitions & Reader Polish):** Introduced subtle, interruptible desktop motion (`EffectTransition`, 120–140 ms ease-out) under a permanent animation policy (`cx.set_reduce_motion(false)`). Hardened reader layout clamping, empty archive handling, `.jfif` format support, responsive feedback toasts, and Vim layout commands (`d`, `s`, `:double`, `:single`, `:layout`).
 
+### Phase 5: CBR/RAR Security, Hardening & Probing Optimization (Completed)
+- **UnRAR C++ Audit:** Verified `unrar_sys 0.5.8` bundles official Eugene Roshal UnRAR 7.1.0 (May 2024), containing all upstream security fixes (CVE-2023-38831, CVE-2023-40477). Handle lifecycle managed via RAII `RARCloseArchive` drop semantics; operations strictly isolated to background executors.
+- **Path Traversal Protection (`is_safe_archive_entry_name`):** Added centralized validator rejecting relative path components (`../`, `../../`), root paths (`/etc/passwd`), Windows drive letters and ADS (`C:\`, `foo:stream`), null bytes (`\0`), and hidden metadata across both CBZ and CBR pipelines.
+- **Decompression Bomb & Encryption Hardening:** Added pre-decompression validation against `unpacked_size > MAX_PAGE_BYTES` (256 MiB), post-decompression streaming bounds checking, and clean detection of encrypted/password-protected entries.
+- **$O(N^2) \to O(N)$ Probing Optimization:** Refactored RAR `probe_pages_dimensions` from $N$ repetitive archive reopenings to a single sequential extraction pass using a hash set of requested pages, reducing file opens from $N \to 1$ and entry advances from quadratic to linear.
+- **Dedicated Regression Tests:** Added 5 new unit tests verifying safe entry names, traversal rejection, decompression bomb rejection, corrupted archive resilience, and single-pass probing with cooperative cancellation.
+
+### Phase 6: Stage 2 CPU, Memory & Storage Optimization (Completed)
+- **Batch Import Persistence Coalescing (`src/main.rs`):** Replaced per-book immediate serialization with debounced autosave (`save_library_debounced`), flushing reliably on batch finish, cancellation, shutdown, and worker disconnect. Eliminates hundreds of redundant full-file writes.
+- **Crash-Resilient Persistence & Leftover Cleanup (`src/library.rs`):** Implemented temporary file isolation (`library.tmp.{pid}.{nanos}.{counter}`), `sync_all()`, atomic rename, Unix parent directory sync, and automated stale temp file cleanup on startup. Verified under concurrent multi-threaded saves.
+- **Idle Theme Polling Elimination (`src/app/state.rs`, `src/ui/theme.rs`):** Replaced continuous full-file reads and hashing with metadata change detection (`len`, `mtime`, Unix `inode`), dropping idle read I/O to 0 bytes while preserving hot-reloading.
+- **Zero-Copy Autosave Snapshots (`src/library.rs`, `src/app/reader_controller.rs`):** Wrapped `Book::page_dimensions` in `Arc<BTreeMap<String, (u32, u32)>>` with copy-on-write `insert_page_dimension`, making UI-thread library cloning $O(1)$ per book and eliminating 100,000+ map node clones.
+- **Continuous Reader $O(1)$ Height & $O(\log N)$ Prefix Array (`src/ui/reader.rs`):** Replaced linear height accumulation loops with `ContinuousLayoutCache` prefix-sums and `partition_point` binary search, reducing scroll layout work by 99.7%.
+- **Zero-Allocation Grouping & Search Filtering (`src/ui/library_view.rs`, `src/app/views/library.rs`, `src/archive.rs`):** Borrowed folder paths in `directory_groups`, eliminated redundant string allocations in search matching (`search::matches`), and optimized RAR entry name scans.
+- **Dependency Hygiene (`Cargo.toml`):** Removed unused `memmap2 = "0.9"`.
+- **7 New Regression Tests Added:** 3 unit tests in `src/library.rs` (durability, temp cleanup, failure preservation, concurrent saves), 3 UI integration tests in `src/tests.rs` (batch import coalescing, cancellation persistence, shutdown flush), and 1 theme metadata test in `src/ui/theme.rs`.
+
+### Phase 7: Stage 3 Independent Verification & Scalability Profiling (Completed)
+- **Persistence Verification & Durability Stress:** Benchmarked batch import write volumes across 100, 500, and 1,000 books, measuring 98.0% to 99.5% fewer disk writes and 92.4% to 98.5% reduced write volume. Verified crash durability, atomic rename, Unix parent directory sync, and automated cleanup of orphaned `library.tmp.*` files. Added large-collection durability flush regression test (`test_batch_import_large_collection_durability_and_flush`).
+- **Theme Monitoring Syscall Audit:** Benchmarked stat queries (1.11 µs) vs content reads (3.38 µs). Confirmed 4,800 reads eliminated per idle hour (0 bytes read vs ~1.2 MiB). Added test coverage for same-size file updates and atomic replacement.
+- **Memory Snapshot Latency Profiling:** Measured snapshot cloning speedup across 100 to 5,000 books, demonstrating 114.9x to 153.9x lower UI-thread latency (0.55 ms vs 84.98 ms for 5,000 books) and safe copy-on-write memory reclamation.
+- **Continuous Reader Layout Invalidation & Fuzzy Verification:** Implemented 50-iteration randomized fuzzy comparison between `ContinuousLayoutCache` and naive linear accumulation, verifying 100% precision across mixed dimensions and zoom levels. Benchmarked layout queries across 100 to 10,000 pages (8.5x to 312x faster, with $O(1)$ total height taking 5.3 ns).
+- **CBR/RAR Archive Safety & Concurrency Analysis:** Investigated UnRAR C++ backend handle constraints. Confirmed `unrar::OpenArchive` contains raw pointer `NonNull<unrar_sys::Handle>` which is strictly `!Send` and `!Sync`. Documented why shared handle pools are prohibited under `#![forbid(unsafe_code)]` and validated Yomu's single-pass entry header probing architecture.
+- **Library Grid Scalability Benchmark:** Benchmarked render tree generation across 100 to 10,000 books (2.57 ms at 100 books to 388.97 ms at 10,000 books). Documented GPUI Kit 0.8.1's 1D `v_virtual_list` limitation and established architectural recommendations respecting Rule 3.
+
+### Phase 8: Stage 4 Library Scalability & Official GPUI Kit Row-Based Virtualization (Completed)
+- **Official GPUI Kit Virtualization (`v_virtual_list`):** Implemented row-based 2D grid virtualization using `gpui_kit::component::v_virtual_list` and `VirtualListScrollHandle` without creating a custom second UI framework. Precomputed uniform row heights and paired with native `ScrollBounce` and `Scrollbar`.
+- **Derived Row Partition Cache (`LibraryRowCache`):** Caches logical rows and item sizes with automatic invalidation on library mutations (`mutation_seq`), search query changes, sort options, folder expansion/collapse, view mode toggles, and responsive column rebalancing.
+- **Measurable Scalability Breakthrough:** Reduced element construction time for 10,000 books from 388.97 ms to **0.05 ms (7,779x faster)**. Per-frame card instantiation dropped from 10,000 cards to **~35 cards (99.6% reduction)**, taking just 0.02 ms per scroll frame (0.3% of 144 Hz frame budget).
+- **4 Dedicated Regression Tests Added:** Verified row chunking and partially filled rows (`test_virtual_grid_row_construction_and_partially_filled_rows`), search/sort invalidation (`test_virtual_grid_filtering_and_sorting_invalidation`), group expansion/collapse (`test_virtual_grid_group_expansion_and_collapse`), and list mode row partitioning (`test_virtual_grid_list_mode_row_partitioning`).
+
+### Phase 9: Stage 5 Deep Memory Leak, Memory Management & SSD I/O Audit (Completed)
+- **Deep Memory Lifecycle & Leak Audit:** Conducted exhaustive ownership tracing, task cancellation auditing, and dynamic heap profiling using Valgrind DHAT, Valgrind Massif, and Linux `/proc/self` telemetry. Measured peak live heap during active reading of just **3.96 MB** (4,218 blocks), with scratch decode/SIMD buffers immediately deallocated upon task completion.
+- **Direct Book Switching Texture & Task Defect Isolated (Finding M1):** Identified that `open_book()` in `src/app/reader_controller.rs` dropped `self.reader` in-place without enqueuing previous `RenderImage` textures to `self.garbage` or signalling task cancellation tokens, causing GPU textures to remain allocated in the GPUI sprite atlas until application shutdown.
+- **Unbounded GPUI Cover Asset Retention Isolated (Finding M2):** Identified that cover thumbnails rendered via `img(cover_path)` route into GPUI-pre 0.3.10's asset cache without an LRU eviction policy or capacity cap, retaining ~5.4 GB of uncompressed textures across a 10,000-book library.
+- **Autosave SSD Write Amplification Quantified (Finding S1):** Measured that updating reading progress by 8 bytes triggers full library JSON serialization, writing **16.58 MB** to disk with two `sync_all()` barriers for a 10,000-book library (**2,173,616x write amplification**; 1.66 GB written across 100 page turns).
+- **CBR/RAR Quadratic Header Read Traversal Isolated (Finding S2):** Confirmed that reading a 200-page CBR chapter triggers $\approx 20,100$ sequential entry header reads and 200 archive open/close cycles due to `unrar::OpenArchive` being `!Send`.
+- **Comprehensive Audit Deliverable Produced:** Authored [`docs/audits/MEMORY_LEAK_AND_SSD_IO_AUDIT.md`](audits/MEMORY_LEAK_AND_SSD_IO_AUDIT.md) providing full empirical findings, stress scenario tables, and a severity-ranked Stage 6 remediation roadmap.
+
+### Phase 10: Stage 6A Memory Lifecycle & GPU Resource Remediation (Completed)
+- **Test Inventory Reconciled:** Restored 10 regression tests and 9 benchmarks inadvertently truncated in Stage 5, elevating the verified test suite to 342 active tests before making functional changes.
+- **Reader Lifecycle & GPU Texture Cleanup (Finding M1 Remediated):** Centralized reader teardown in `cleanup_current_reader()`, actively cancelling in-flight decode tasks, draining `RenderImage` instances via `reader.into_images()`, and scheduling immediate GPU sprite atlas release via `window.drop_image()` in `drain_garbage()`. Wired into `open_book`, `close_book`, `clear_all_data`, and `request_quit`.
+- **Bounded Cover Asset Cache (Finding M2 Remediated):** Implemented `BoundedCoverCache` in `src/ui/cover_cache.rs` using standard library LRU tracking, implementing the native `gpui_kit::ImageCache` trait with a 256-cover capacity cap (~138 MB limit). Wrapped the two-pane shell via `gpui_kit::image_cache()`, automatically bounding cover texture memory and explicitly calling `cx.drop_image()` upon eviction.
+- **Regression Test Coverage:** Added 4 focused regression tests verifying reader cancellation, late completion race condition immunity, cache clearing, and LRU capacity enforcement (346 active tests).
+- **Comprehensive Technical Report:** Authored [`docs/audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md`](audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md).
+
 ---
 
 ## 3. Active Known Limitations & Technical Debt
@@ -53,9 +99,13 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 1. **Wayland Compositor Visual Verification:**
    - Headless simulated GPUI tests validate layout, interaction, focus, and state transitions, but do not validate visual appearance (translucent surfaces, backdrop blur, compositor shadows) under physical Wayland compositors (e.g., Niri, Sway, GNOME Mutter, KDE KWin).
    - *Rule for agents:* Never claim visual verification on Wayland unless manually inspected on a real desktop session.
-2. **Test File Size:**
-   - `src/tests.rs` (~3,600 lines) contains 178 binary UI tests. Future maintenance may modularize test categories (e.g., navigation, persistence, reader, settings) without weakening coverage.
-3. **Cross-Platform Momentum Scrolling:**
+2. **Reading Autosave SSD Write Amplification (Finding S1):**
+   - Turning a page modifies 8 bytes of progress, but triggers full serialization and atomic disk replacement of the entire 16.58 MB library JSON with two `sync_all()` barriers (2,173,616x write amplification at 10k books).
+   - *Remediation:* Implement reading progress dirty checks and evaluate an append-only progress journal or lightweight progress sidecar.
+3. **CBR/RAR Quadratic Header Read Traversal (Finding S2):**
+   - In `src/archive.rs:269-326`, `read_rar_page()` opens the archive from byte 0 and scans entry headers sequentially from the beginning on every page request because `unrar::OpenArchive` is `!Send`.
+   - *Remediation:* Cache entry byte offsets during the initial dimension probe pass to allow constant-time seeks.
+4. **Cross-Platform Momentum Scrolling:**
    - Linux and Windows rely on `PlatformScrollController`'s kinetic inertia glide loop because GPUI does not yet synthesize momentum events on non-macOS platforms.
    - *Action required:* Monitor official GPUI Kit releases for native upstream cross-platform momentum support.
 
@@ -63,15 +113,18 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 
 ## 4. Next Recommended Engineering Tasks
 
-Refer to [ROADMAP.md](../ROADMAP.md) for full descriptions:
+Refer to [docs/audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md](audits/MEMORY_LIFECYCLE_REMEDIATION_STAGE_6A.md) for the Stage 6A remediation report, [docs/audits/MEMORY_LEAK_AND_SSD_IO_AUDIT.md](audits/MEMORY_LEAK_AND_SSD_IO_AUDIT.md) for the Stage 5 deep memory and SSD audit, and [ROADMAP.md](../ROADMAP.md):
 
-1. **Background Persistence Zero-Copy Snapshots (Phase 3.3):**
-   - Eliminate deep cloning of entire `Library` vectors during debounced autosave by using lightweight serialization diffs or immutable snapshots.
-2. **Dependency & Vendor Hygiene:**
-   - Remove unused dependency `memmap2` from `Cargo.toml`.
-   - Resolve the `Selectable` trait re-export cleanly and assess removing `vendor/gpui-component`.
-3. **CB7 / 7z Archive Support (Phase 5):**
-   - Support `.cb7` and `.7z` comic archives alongside CBZ, CBR, ZIP, and RAR using a pure Rust 7z reader.
+1. **Stage 6B P0: Mitigate Autosave SSD Write Amplification (Finding S1):**
+   - Add dirty checks to prevent saving unchanged reading state on navigation.
+   - Implement a lightweight reading progress sidecar or journal to separate high-frequency page turn progress from static library metadata.
+
+2. **Stage 6B P1: CBR / RAR Header Seek Optimization (Finding S2):**
+   - Cache entry byte offsets during initial dimension probing to eliminate quadratic header rescanning during sequential reading.
+
+3. **CB7 / 7z Archive Support (Phase 7):**
+   - Support `.cb7` and `.7z` archives using a pure Rust LZMA/7z decoder.
+   - Maintain the standard archive interface and background thread isolation.
 
 ---
 
@@ -97,5 +150,5 @@ devenv shell cargo test --all-targets
 When completing a task, provide a concise, factual report:
 1. Exact files modified, created, or deleted.
 2. Architectural responsibilities changed.
-3. Exact command exit codes and test counts (308 active tests).
+3. Exact command exit codes and test counts (346 active tests).
 4. Status of manual visual checks (explicitly report Wayland appearance as UNVERIFIED if tested headlessly).

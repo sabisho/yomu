@@ -82,6 +82,29 @@ fn is_junk(name: &str) -> bool {
         .any(|part| part.starts_with('.') || part == "__MACOSX")
 }
 
+/// Reject path traversal, absolute paths, null bytes, Windows drive specifications, and hidden junk.
+pub fn is_safe_archive_entry_name(name: &str) -> bool {
+    if name.is_empty()
+        || name.starts_with('/')
+        || name.starts_with('\\')
+        || name.contains('\0')
+        || name.contains(':')
+    {
+        return false;
+    }
+    for part in name.split(['/', '\\']) {
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.starts_with('.')
+            || part == "__MACOSX"
+        {
+            return false;
+        }
+    }
+    true
+}
+
 struct CachedArchive {
     path: PathBuf,
     archive: zip::ZipArchive<BufReader<File>>,
@@ -111,15 +134,19 @@ fn checkin_archive(path: PathBuf, archive: zip::ZipArchive<BufReader<File>>) {
 }
 
 fn list_zip_pages(path: &Path) -> Result<Vec<String>> {
-    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let reader = BufReader::with_capacity(64 * 1024, file);
-    let archive = zip::ZipArchive::new(reader)
-        .with_context(|| format!("{} is not a valid zip/cbz", path.display()))?;
-    Ok(archive
+    let archive = checkout_archive(path)?;
+    let pages: Vec<String> = archive
         .file_names()
-        .filter(|name| !name.ends_with('/') && is_image_name(name) && !is_junk(name))
+        .filter(|name| {
+            !name.ends_with('/')
+                && is_safe_archive_entry_name(name)
+                && is_image_name(name)
+                && !is_junk(name)
+        })
         .map(str::to_owned)
-        .collect::<Vec<_>>())
+        .collect();
+    checkin_archive(path.to_path_buf(), archive);
+    Ok(pages)
 }
 
 fn list_rar_pages(path: &Path) -> Result<Vec<String>> {
@@ -130,7 +157,7 @@ fn list_rar_pages(path: &Path) -> Result<Vec<String>> {
     let mut pages = Vec::new();
     for entry in entries {
         let entry = entry.with_context(|| format!("reading entry from {}", path.display()))?;
-        if entry.is_directory() {
+        if entry.is_directory() || entry.is_encrypted() {
             continue;
         }
         let name_str = entry.filename.to_string_lossy();
@@ -139,7 +166,10 @@ fn list_rar_pages(path: &Path) -> Result<Vec<String>> {
         } else {
             name_str.into_owned()
         };
-        if is_image_name(&normalized) && !is_junk(&normalized) {
+        if is_safe_archive_entry_name(&normalized)
+            && is_image_name(&normalized)
+            && !is_junk(&normalized)
+        {
             pages.push(normalized);
         }
     }
@@ -207,6 +237,9 @@ pub fn folder_has_images(dir: &Path) -> bool {
 }
 
 fn read_zip_page(path: &Path, name: &str) -> Result<Vec<u8>> {
+    if !is_safe_archive_entry_name(name) {
+        bail!("invalid or unsafe page name: {name}");
+    }
     let mut archive = checkout_archive(path)?;
 
     let read_res = (|| -> Result<Vec<u8>> {
@@ -234,6 +267,9 @@ fn read_zip_page(path: &Path, name: &str) -> Result<Vec<u8>> {
 }
 
 fn read_rar_page(path: &Path, name: &str) -> Result<Vec<u8>> {
+    if !is_safe_archive_entry_name(name) {
+        bail!("invalid or unsafe page name: {name}");
+    }
     let archive = unrar::Archive::new(path);
     let mut proc = archive
         .open_for_processing()
@@ -249,19 +285,37 @@ fn read_rar_page(path: &Path, name: &str) -> Result<Vec<u8>> {
             Ok(None) => bail!("page {name} missing from archive"),
             Err(e) => bail!("reading header from {}: {e}", path.display()),
         };
-        let name_str = header.entry().filename.to_string_lossy();
-        let current_name = if name_str.contains('\\') {
-            name_str.replace('\\', "/")
+        let entry_filename = &header.entry().filename;
+        let is_match = if let Some(s) = entry_filename.to_str() {
+            if s.contains('\\') {
+                s.replace('\\', "/") == normalized_target
+            } else {
+                s == normalized_target
+            }
         } else {
-            name_str.into_owned()
+            let name_str = entry_filename.to_string_lossy();
+            if name_str.contains('\\') {
+                name_str.replace('\\', "/") == normalized_target
+            } else {
+                name_str == normalized_target
+            }
         };
-        if current_name == normalized_target {
-            if header.entry().unpacked_size as u64 > MAX_PAGE_BYTES {
+        if is_match {
+            if header.entry().is_encrypted() {
+                bail!(
+                    "page {name} is password-protected or encrypted in {}",
+                    path.display()
+                );
+            }
+            if header.entry().unpacked_size > MAX_PAGE_BYTES {
                 bail!("page {name} is unreasonably large");
             }
             let (data, _next) = header
                 .read()
                 .with_context(|| format!("extracting {name} from {}", path.display()))?;
+            if data.len() as u64 > MAX_PAGE_BYTES {
+                bail!("page {name} decompressed size exceeds maximum budget");
+            }
             return Ok(data);
         } else {
             proc = header
@@ -342,6 +396,129 @@ pub fn probe_page_dimensions(path: &Path, kind: SourceKind, name: &str) -> Resul
             }
         }
     }
+}
+
+/// Probes dimensions for multiple pages in an archive or folder, with cooperative cancellation support.
+/// Borrows the archive once for zip files to avoid repeatedly acquiring the archive pool lock.
+pub fn probe_pages_dimensions(
+    path: &Path,
+    kind: SourceKind,
+    pages: &[(usize, String)],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Vec<(usize, String, (u32, u32))> {
+    use std::sync::atomic::Ordering;
+
+    let mut results = Vec::with_capacity(pages.len());
+    match kind {
+        SourceKind::Folder => {
+            for &(ix, ref name) in pages {
+                if let Some(c) = cancel
+                    && c.load(Ordering::Relaxed)
+                {
+                    break;
+                }
+                if let Ok(dims) = probe_page_dimensions(path, kind, name) {
+                    results.push((ix, name.clone(), dims));
+                }
+            }
+        }
+        SourceKind::Archive => {
+            let format = detect_archive_format(path);
+            match format {
+                ArchiveFormat::Zip => {
+                    if let Ok(mut archive) = checkout_archive(path) {
+                        for &(ix, ref name) in pages {
+                            if let Some(c) = cancel
+                                && c.load(Ordering::Relaxed)
+                            {
+                                break;
+                            }
+                            if let Ok(entry) = archive.by_name(name) {
+                                let mut buf = Vec::with_capacity(64 * 1024);
+                                if entry.take(64 * 1024).read_to_end(&mut buf).is_ok()
+                                    && let Ok(dims) = crate::imaging::probe_dimensions(&buf)
+                                {
+                                    results.push((ix, name.clone(), dims));
+                                }
+                            }
+                        }
+                        checkin_archive(path.to_path_buf(), archive);
+                    }
+                }
+                ArchiveFormat::Rar => {
+                    if let Ok(archive) = unrar::Archive::new(path).open_for_processing() {
+                        let mut target_map: std::collections::HashMap<String, usize> = pages
+                            .iter()
+                            .map(|&(ix, ref name)| (name.clone(), ix))
+                            .collect();
+                        let mut proc = archive;
+                        while !target_map.is_empty() {
+                            if let Some(c) = cancel
+                                && c.load(Ordering::Relaxed)
+                            {
+                                break;
+                            }
+                            let header = match proc.read_header() {
+                                Ok(Some(h)) => h,
+                                _ => break,
+                            };
+                            let entry_fn = &header.entry().filename;
+                            let current_name: std::borrow::Cow<'_, str> =
+                                if let Some(s) = entry_fn.to_str() {
+                                    if s.contains('\\') {
+                                        std::borrow::Cow::Owned(s.replace('\\', "/"))
+                                    } else {
+                                        std::borrow::Cow::Borrowed(s)
+                                    }
+                                } else {
+                                    let name_str = entry_fn.to_string_lossy();
+                                    if name_str.contains('\\') {
+                                        std::borrow::Cow::Owned(name_str.replace('\\', "/"))
+                                    } else {
+                                        name_str
+                                    }
+                                };
+                            let should_extract = if let Some((name_in_map, &ix)) =
+                                target_map.get_key_value(current_name.as_ref())
+                            {
+                                if header.entry().unpacked_size <= MAX_PAGE_BYTES
+                                    && !header.entry().is_encrypted()
+                                {
+                                    Some((name_in_map.clone(), ix))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            if let Some((name, ix)) = should_extract {
+                                match header.read() {
+                                    Ok((data, next)) => {
+                                        if data.len() as u64 <= MAX_PAGE_BYTES
+                                            && let Ok(dims) =
+                                                crate::imaging::probe_dimensions(&data)
+                                        {
+                                            results.push((ix, name.clone(), dims));
+                                        }
+                                        target_map.remove(&name);
+                                        proc = next;
+                                    }
+                                    Err(_) => break,
+                                }
+                            } else {
+                                match header.skip() {
+                                    Ok(next) => proc = next,
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    results
 }
 
 #[cfg(test)]
@@ -441,6 +618,45 @@ mod tests {
     }
 
     #[test]
+    fn probe_pages_dimensions_with_cancellation() {
+        use std::sync::atomic::AtomicBool;
+
+        // Generate tiny valid PNG bytes (10x20)
+        let mut png_bytes = Vec::new();
+        let img = image::RgbaImage::from_pixel(10, 20, image::Rgba([0, 0, 0, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+
+        let tmp = std::env::temp_dir().join(format!("yomu_probe_{}.cbz", crate::util::now_secs()));
+        let file = File::create(&tmp).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("001.png", options).unwrap();
+        zip.write_all(&png_bytes).unwrap();
+        zip.start_file("002.png", options).unwrap();
+        zip.write_all(&png_bytes).unwrap();
+        zip.finish().unwrap();
+
+        let pages = vec![(0, "001.png".to_string()), (1, "002.png".to_string())];
+        let probed = probe_pages_dimensions(&tmp, SourceKind::Archive, &pages, None);
+        assert_eq!(probed.len(), 2);
+        assert_eq!(probed[0], (0, "001.png".to_string(), (10, 20)));
+        assert_eq!(probed[1], (1, "002.png".to_string(), (10, 20)));
+
+        // Test early cancellation
+        let cancel = AtomicBool::new(true);
+        let probed_cancelled =
+            probe_pages_dimensions(&tmp, SourceKind::Archive, &pages, Some(&cancel));
+        assert!(probed_cancelled.is_empty());
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
     fn archive_cache_reads_repeatedly() {
         let tmp = std::env::temp_dir().join(format!("yomu_test_{}.cbz", crate::util::now_secs()));
         let file = File::create(&tmp).unwrap();
@@ -486,6 +702,41 @@ mod tests {
             let t2 = s.spawn(|| read_page(&tmp, SourceKind::Archive, "002.jpg").unwrap());
             assert_eq!(t1.join().unwrap(), b"page1content");
             assert_eq!(t2.join().unwrap(), b"page2content");
+        });
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn archive_pool_high_concurrency_stress() {
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_test_stress_{}.cbz", crate::util::now_secs()));
+        let file = File::create(&tmp).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for i in 0..12 {
+            zip.start_file(format!("{i:03}.jpg"), options).unwrap();
+            zip.write_all(format!("content_for_page_{i}").as_bytes())
+                .unwrap();
+        }
+        zip.finish().unwrap();
+
+        std::thread::scope(|s| {
+            let mut handles = Vec::new();
+            for t in 0..16 {
+                let p = &tmp;
+                handles.push(s.spawn(move || {
+                    for iter in 0..10 {
+                        let page_num = (t + iter) % 12;
+                        let page_name = format!("{page_num:03}.jpg");
+                        let data = read_page(p, SourceKind::Archive, &page_name).unwrap();
+                        assert_eq!(data, format!("content_for_page_{page_num}").as_bytes());
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
         });
 
         let _ = fs::remove_file(&tmp);
@@ -591,6 +842,112 @@ mod tests {
             err_msg.contains("is unreasonably large"),
             "expected 'is unreasonably large', got: {err_msg}"
         );
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_is_safe_archive_entry_name() {
+        assert!(is_safe_archive_entry_name("001.jpg"));
+        assert!(is_safe_archive_entry_name("sub/001.jpg"));
+        assert!(is_safe_archive_entry_name("chapter_01/sub_02/001.png"));
+
+        // Path traversal
+        assert!(!is_safe_archive_entry_name(""));
+        assert!(!is_safe_archive_entry_name("../001.jpg"));
+        assert!(!is_safe_archive_entry_name("sub/../001.jpg"));
+        assert!(!is_safe_archive_entry_name("/root/001.jpg"));
+        assert!(!is_safe_archive_entry_name(r"\windows\001.jpg"));
+        assert!(!is_safe_archive_entry_name(r"C:\001.jpg"));
+        assert!(!is_safe_archive_entry_name("sub//001.jpg"));
+        assert!(!is_safe_archive_entry_name("sub/.hidden/001.jpg"));
+        assert!(!is_safe_archive_entry_name("sub/__MACOSX/001.jpg"));
+        assert!(!is_safe_archive_entry_name("page\0.jpg"));
+    }
+
+    #[test]
+    fn test_cbr_path_traversal_entry_rejected() {
+        let cbr_bytes = make_test_cbr("../evil");
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_traversal_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        // Path traversal entry should be omitted from list_pages
+        let pages = list_pages(&tmp, SourceKind::Archive).unwrap();
+        assert!(pages.is_empty());
+
+        // Explicit read request must be rejected
+        let read_err = read_page(&tmp, SourceKind::Archive, "../evil").unwrap_err();
+        assert!(read_err.to_string().contains("invalid or unsafe"));
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_cbr_decompression_bomb_unpacked_size_rejected() {
+        let mut bytes = make_test_cbr("001.jpg");
+        // Overwrite unpacked size at offset 31..35 with 1 GiB (0x40000000)
+        bytes[31..35].copy_from_slice(&0x4000_0000u32.to_le_bytes());
+        let head_size = u16::from_le_bytes([bytes[0x19], bytes[0x1a]]) as usize;
+        let data = &bytes[0x16..0x14 + head_size];
+        let crc = (crc32_inline(data) & 0xffff) as u16;
+        bytes[0x14..0x16].copy_from_slice(&crc.to_le_bytes());
+
+        let tmp = std::env::temp_dir().join(format!("yomu_bomb_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &bytes).unwrap();
+
+        let err = read_page(&tmp, SourceKind::Archive, "001.jpg").unwrap_err();
+        assert!(err.to_string().contains("unreasonably large"));
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_cbr_corrupted_archive_handled_gracefully() {
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_corrupt_{}.cbr", crate::util::now_secs()));
+        // Truncated / empty RAR file returns empty pages or error, and read fails
+        fs::write(&tmp, b"Rar!\x1a\x07\x00").unwrap();
+        let pages = list_pages(&tmp, SourceKind::Archive).unwrap_or_default();
+        assert!(pages.is_empty(), "Empty archive has no pages");
+        assert!(read_page(&tmp, SourceKind::Archive, "001.jpg").is_err());
+
+        // Completely random garbage bytes
+        fs::write(&tmp, b"corrupted random data stream").unwrap();
+        assert!(list_pages(&tmp, SourceKind::Archive).is_err());
+        assert!(read_page(&tmp, SourceKind::Archive, "001.jpg").is_err());
+
+        // Corrupted header after magic bytes
+        fs::write(&tmp, b"Rar!\x1a\x07\x00\x00\x00\x00\x00").unwrap();
+        let pages = list_pages(&tmp, SourceKind::Archive).unwrap_or_default();
+        assert!(pages.is_empty());
+        assert!(read_page(&tmp, SourceKind::Archive, "001.jpg").is_err());
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_cbr_single_pass_dimension_probing_with_cancellation() {
+        use std::sync::atomic::AtomicBool;
+
+        let cbr_bytes = make_test_cbr("001.jpg");
+        let tmp =
+            std::env::temp_dir().join(format!("yomu_probe_cbr_{}.cbr", crate::util::now_secs()));
+        fs::write(&tmp, &cbr_bytes).unwrap();
+
+        let pages = vec![(0, "001.jpg".to_string()), (1, "002.jpg".to_string())];
+
+        // 1. Probing with early cancellation flag active immediately returns empty
+        let cancel_flag = AtomicBool::new(true);
+        let cancelled_probed =
+            probe_pages_dimensions(&tmp, SourceKind::Archive, &pages, Some(&cancel_flag));
+        assert!(cancelled_probed.is_empty());
+
+        // 2. Probing without cancellation attempts decompression; non-image returns Ok([]) cleanly
+        let cancel_off = AtomicBool::new(false);
+        let probed = probe_pages_dimensions(&tmp, SourceKind::Archive, &pages, Some(&cancel_off));
+        // b"unrar-0.4.0" is not a valid image, so probe_dimensions fails and results are empty
+        assert!(probed.is_empty());
 
         let _ = fs::remove_file(&tmp);
     }

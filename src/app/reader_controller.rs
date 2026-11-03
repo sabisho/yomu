@@ -52,6 +52,9 @@ impl Yomu {
         window.set_window_title(&book.title);
         window.focus(&self.focus_handle, cx);
 
+        self.cleanup_current_reader();
+        self.drain_garbage(window);
+
         let settings = self.library.settings().clone();
         self.reader = Some(Reader::new(&book, &settings));
 
@@ -108,6 +111,7 @@ impl Yomu {
                     reader.spread_overrides = book.spread_overrides.clone();
                 }
                 reader.orig_sizes = orig_sizes;
+                reader.layout_version += 1;
                 reader.pages = Some(Arc::new(pages.clone()));
                 reader.rebuild_spread_plan();
 
@@ -121,22 +125,24 @@ impl Yomu {
                 let path = reader.path.clone();
                 let kind = reader.kind;
 
+                let cancel = if !unprobed.is_empty() {
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    reader.probe_cancel = Some(cancel.clone());
+                    Some(cancel)
+                } else {
+                    None
+                };
+
                 if let Some(book) = self.library.get_mut(&book_id) {
                     book.page_count = total;
                     book.current_page = page;
                 }
                 self.save_library(cx);
 
-                if !unprobed.is_empty() {
+                if let Some(cancel) = cancel {
                     let probe_book_id = book_id.clone();
                     let task = cx.background_executor().spawn(async move {
-                        let mut probed = Vec::new();
-                        for (ix, name) in unprobed {
-                            if let Ok(dims) = archive::probe_page_dimensions(&path, kind, &name) {
-                                probed.push((ix, name, dims));
-                            }
-                        }
-                        probed
+                        archive::probe_pages_dimensions(&path, kind, &unprobed, Some(&cancel))
                     });
                     cx.spawn(async move |this, cx| {
                         let probed = task.await;
@@ -159,13 +165,17 @@ impl Yomu {
         probed: Vec<(usize, String, (u32, u32))>,
         cx: &mut Context<Self>,
     ) {
-        if self.is_quitting || probed.is_empty() {
+        if self.is_quitting {
             return;
         }
         let Some(reader) = self.reader.as_mut() else {
             return;
         };
         if reader.book_id != book_id {
+            return;
+        }
+        reader.probe_cancel = None;
+        if probed.is_empty() {
             return;
         }
         let mut changed = false;
@@ -177,13 +187,32 @@ impl Yomu {
                 changed = true;
             }
             if let Some(book) = self.library.get_mut(&book_id) {
-                book.page_dimensions.insert(name, dims);
+                book.insert_page_dimension(name, dims);
             }
         }
         if changed {
+            reader.layout_version += 1;
             reader.rebuild_spread_plan();
             self.save_library_debounced(cx);
             cx.notify();
+        }
+    }
+
+    pub(crate) fn cleanup_current_reader(&mut self) {
+        if let Some(reader) = self.reader.take() {
+            if let Some(ref cancel) = reader.probe_cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            for token in reader.cancellations.values() {
+                token.store(true, Ordering::Relaxed);
+            }
+            self.garbage.extend(reader.into_images());
+        }
+    }
+
+    pub(crate) fn drain_garbage(&mut self, window: &mut Window) {
+        for image in self.garbage.drain(..) {
+            let _ = window.drop_image(image);
         }
     }
 
@@ -191,12 +220,8 @@ impl Yomu {
         if self.is_quitting {
             return;
         }
-        if let Some(reader) = self.reader.take() {
-            for token in reader.cancellations.values() {
-                token.store(true, Ordering::Relaxed);
-            }
-            self.garbage.extend(reader.into_images());
-        }
+        self.cleanup_current_reader();
+        self.drain_garbage(window);
         self.last_frame = None;
         self.hud = None;
         self.cursor_pos = None;
@@ -1203,7 +1228,7 @@ impl Yomu {
         }
 
         let was_cancelled = cancel_token.load(Ordering::Relaxed);
-        if was_cancelled {
+        if !is_current || was_cancelled {
             return;
         }
 
@@ -1222,12 +1247,13 @@ impl Yomu {
                 let old_class = reader.classify_page(ix);
                 if let Some(size) = reader.orig_sizes.get_mut(ix) {
                     *size = Some(orig);
+                    reader.layout_version += 1;
                 }
                 if let Some(pages) = reader.pages.as_ref()
                     && let Some(name) = pages.get(ix)
                     && let Some(book) = self.library.get_mut(&book_id)
                 {
-                    book.page_dimensions.insert(name.clone(), orig);
+                    book.insert_page_dimension(name.clone(), orig);
                 }
                 if reader.classify_page(ix) != old_class {
                     reader.rebuild_spread_plan();
@@ -1245,7 +1271,10 @@ impl Yomu {
                 }
             }
             Err(err) => {
-                reader.failed.insert(ix, format!("{err:#}"));
+                let msg = format!("{err:#}");
+                if !msg.contains("cancelled") {
+                    reader.failed.insert(ix, msg);
+                }
             }
         }
         cx.notify();

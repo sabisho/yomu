@@ -140,6 +140,7 @@ impl Yomu {
         self.save_pending_since = None;
         self.overlay = None;
         self.toast = None;
+        self.cleanup_current_reader();
         if let Some(token) = &self.import_cancel {
             token.store(true, Ordering::Relaxed);
         }
@@ -282,7 +283,7 @@ mod tests {
                 last_read: None,
                 marks: std::collections::BTreeMap::new(),
                 spread_overrides: std::collections::BTreeMap::new(),
-                page_dimensions: std::collections::BTreeMap::new(),
+                page_dimensions: Default::default(),
             };
             this.library.add(book);
         });
@@ -532,7 +533,7 @@ mod tests {
                 last_read: None,
                 marks: std::collections::BTreeMap::new(),
                 spread_overrides: std::collections::BTreeMap::new(),
-                page_dimensions: std::collections::BTreeMap::new(),
+                page_dimensions: Default::default(),
             };
             this.library.add(book);
         });
@@ -560,7 +561,7 @@ mod tests {
             last_read: None,
             marks: std::collections::BTreeMap::new(),
             spread_overrides: std::collections::BTreeMap::new(),
-            page_dimensions: std::collections::BTreeMap::new(),
+            page_dimensions: Default::default(),
         });
 
         {
@@ -812,7 +813,7 @@ mod tests {
                 last_read: None,
                 marks: std::collections::BTreeMap::new(),
                 spread_overrides: std::collections::BTreeMap::new(),
-                page_dimensions: std::collections::BTreeMap::new(),
+                page_dimensions: Default::default(),
             };
             this.library.add(book);
             this.save_library_debounced(cx);
@@ -853,7 +854,7 @@ mod tests {
                     last_read: None,
                     marks: std::collections::BTreeMap::new(),
                     spread_overrides: std::collections::BTreeMap::new(),
-                    page_dimensions: std::collections::BTreeMap::new(),
+                    page_dimensions: Default::default(),
                 };
                 this.library.add(book);
                 this.save_library_debounced(cx);

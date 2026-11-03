@@ -8586,7 +8586,6 @@ dependencies = [
  "fast_image_resize",
  "gpui-kit",
  "image",
- "memmap2",
  "serde",
  "serde_json",
  "toml 0.8.23",

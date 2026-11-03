@@ -2,6 +2,7 @@
 
 pub mod components;
 pub mod continue_reading;
+pub mod cover_cache;
 pub mod details;
 pub mod library_view;
 pub mod overlays;

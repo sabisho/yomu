@@ -16,7 +16,7 @@ use std::{
 };
 
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::{Theme as KitTheme, ThemeConfig};
+use gpui_kit::component::{Theme as KitTheme, ThemeConfig, VirtualListScrollHandle};
 use gpui_kit::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, Point, RenderImage, ScrollHandle,
     SharedString, Window, px,
@@ -29,12 +29,12 @@ use yomu::{
 use crate::ui;
 use crate::ui::overlays::{Overlay, SettingsTab};
 use crate::ui::reader::Reader;
-#[cfg(not(test))]
-use crate::ui::theme::custom_theme_fingerprint;
 use crate::ui::theme::{
     DEFAULT_THEME_NAME, UiColors, built_in_theme, built_in_theme_names, custom_theme_path,
     ensure_custom_theme_file, parse_custom_themes, resolve_theme_name,
 };
+#[cfg(not(test))]
+use crate::ui::theme::{custom_theme_fingerprint, custom_theme_metadata};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SortedBooksCache {
@@ -95,6 +95,7 @@ pub struct Yomu {
     /// Images that are no longer shown. Their GPU textures are freed on the next render,
     /// because that is where we have access to the `Window`.
     pub(crate) garbage: Vec<Arc<RenderImage>>,
+    pub(crate) cover_cache: Entity<crate::ui::cover_cache::BoundedCoverCache>,
     pub(crate) toast: Option<SharedString>,
     pub(crate) toast_seq: u64,
     pub(crate) hud: Option<SharedString>,
@@ -123,8 +124,8 @@ pub struct Yomu {
     pub(crate) open_group: Option<String>,
     /// Which background appearance the window currently has (`None` before the first frame).
     pub(crate) applied_opaque: Option<bool>,
-    pub(crate) library_scroll: ScrollHandle,
-    pub(crate) group_scroll: ScrollHandle,
+    pub(crate) library_scroll: VirtualListScrollHandle,
+    pub(crate) group_scroll: VirtualListScrollHandle,
     pub(crate) continue_reading_scroll: ScrollHandle,
     pub(crate) details_scroll: ScrollHandle,
     pub(crate) settings_scroll: ScrollHandle,
@@ -155,6 +156,7 @@ pub struct Yomu {
     pub(crate) details_cover_available: bool,
     pub(crate) details_cover_seq: u64,
     pub(crate) sorted_books_cache: RefCell<Option<SortedBooksCache>>,
+    pub(crate) library_row_cache: RefCell<ui::library_view::LibraryRowCache>,
     pub(crate) last_context_menu_book: Option<String>,
     pub(crate) window_handle: gpui_kit::AnyWindowHandle,
 }
@@ -249,6 +251,10 @@ impl Yomu {
             theme_status,
             reader: None,
             garbage: Vec::new(),
+            cover_cache: crate::ui::cover_cache::BoundedCoverCache::new(
+                crate::ui::cover_cache::DEFAULT_COVER_CACHE_CAPACITY,
+                cx,
+            ),
             toast,
             toast_seq: 0,
             hud: None,
@@ -271,8 +277,8 @@ impl Yomu {
             search_input: Some(search_input),
             open_group: None,
             applied_opaque: None,
-            library_scroll: ScrollHandle::new(),
-            group_scroll: ScrollHandle::new(),
+            library_scroll: VirtualListScrollHandle::new(),
+            group_scroll: VirtualListScrollHandle::new(),
             continue_reading_scroll: ScrollHandle::new(),
             details_scroll: ScrollHandle::new(),
             settings_scroll: ScrollHandle::new(),
@@ -303,6 +309,7 @@ impl Yomu {
             details_cover_available: true,
             details_cover_seq: 0,
             sorted_books_cache: RefCell::new(None),
+            library_row_cache: RefCell::new(ui::library_view::LibraryRowCache::default()),
             last_context_menu_book: None,
             window_handle: window.window_handle(),
         };
@@ -508,11 +515,11 @@ impl Yomu {
 
     pub fn current_scroll_handle(&self) -> ScrollHandle {
         if self.open_group.is_some() {
-            self.group_scroll.clone()
+            self.group_scroll.base_handle().clone()
         } else {
             match self.active_view {
                 ui::sidebar::MainView::ContinueReading => self.continue_reading_scroll.clone(),
-                ui::sidebar::MainView::AllManga => self.library_scroll.clone(),
+                ui::sidebar::MainView::AllManga => self.library_scroll.base_handle().clone(),
                 ui::sidebar::MainView::Details(_) => self.details_scroll.clone(),
                 ui::sidebar::MainView::Settings => self.settings_scroll.clone(),
             }
@@ -560,11 +567,12 @@ impl Yomu {
     }
 
     /// Watch the generated custom theme file so Noctalia palette changes apply without a manual
-    /// reload. Hashing is done on the background executor; the small TOML is parsed on change.
+    /// reload. Metadata check (len, mtime, inode) avoids reading or hashing the file while unchanged.
     #[cfg(not(test))]
     pub fn watch_custom_theme_file(&self, cx: &mut Context<Self>) {
         let path = self.custom_theme_path.clone();
         cx.spawn(async move |this, cx| {
+            let mut last_meta = custom_theme_metadata(&path);
             let mut last_hash = custom_theme_fingerprint(&path);
             loop {
                 let is_quitting = this
@@ -574,14 +582,17 @@ impl Yomu {
                     break;
                 }
                 cx.background_executor()
-                    .timer(Duration::from_millis(750))
+                    .timer(Duration::from_millis(1500))
                     .await;
+
                 let check_path = path.clone();
-                let next_hash = cx
+                let next_meta = cx
                     .background_executor()
-                    .spawn(async move { custom_theme_fingerprint(&check_path) })
+                    .spawn(async move { custom_theme_metadata(&check_path) })
                     .await;
-                if next_hash.is_none() || next_hash == last_hash {
+
+                // While metadata is unchanged, do NOT perform synchronous or asynchronous file reads.
+                if next_meta == last_meta {
                     continue;
                 }
 
@@ -590,21 +601,35 @@ impl Yomu {
                 cx.background_executor()
                     .timer(Duration::from_millis(200))
                     .await;
+
                 let check_path = path.clone();
-                let stable_hash = cx
+                let stable_meta = cx
+                    .background_executor()
+                    .spawn(async move { custom_theme_metadata(&check_path) })
+                    .await;
+                if stable_meta != next_meta {
+                    continue;
+                }
+
+                let check_path = path.clone();
+                let next_hash = cx
                     .background_executor()
                     .spawn(async move { custom_theme_fingerprint(&check_path) })
                     .await;
-                if stable_hash != next_hash {
+
+                if next_hash == last_hash {
+                    last_meta = stable_meta;
                     continue;
                 }
+
                 if this
                     .update(cx, |this, cx| this.reload_custom_themes(cx))
                     .is_err()
                 {
                     break;
                 }
-                last_hash = stable_hash;
+                last_hash = next_hash;
+                last_meta = stable_meta;
             }
         })
         .detach();

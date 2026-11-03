@@ -249,6 +249,31 @@ pub fn custom_theme_path(_data_dirs: &DataDirs) -> Result<PathBuf> {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThemeFileMetadata {
+    pub len: u64,
+    pub modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    pub inode: u64,
+}
+
+#[allow(dead_code)]
+pub fn custom_theme_metadata(path: &Path) -> Option<ThemeFileMetadata> {
+    let meta = fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    let inode = {
+        use std::os::unix::fs::MetadataExt as _;
+        meta.ino()
+    };
+    Some(ThemeFileMetadata {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        #[cfg(unix)]
+        inode,
+    })
+}
+
+#[allow(dead_code)]
 pub fn custom_theme_fingerprint(path: &Path) -> Option<u64> {
     let contents = fs::read(path).ok()?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -538,5 +563,74 @@ mod tests {
         assert!(is_standalone_scheme("Noctalia Dynamic"));
         assert!(!is_standalone_scheme("Catppuccin"));
         assert!(!is_standalone_scheme("Gruvbox"));
+    }
+
+    #[test]
+    fn test_custom_theme_metadata_and_atomic_replacement() {
+        let dir = std::env::temp_dir().join(format!("theme_test_{}", crate::now_secs()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("themes.toml");
+
+        // Missing file returns None
+        assert!(custom_theme_metadata(&path).is_none());
+        assert!(custom_theme_fingerprint(&path).is_none());
+
+        // Create file
+        fs::write(&path, "initial = 1").unwrap();
+        let meta1 = custom_theme_metadata(&path).expect("meta must exist");
+        let hash1 = custom_theme_fingerprint(&path).expect("hash must exist");
+        assert_eq!(meta1.len, 11);
+
+        // Unmodified file produces identical metadata
+        let meta1_again = custom_theme_metadata(&path).unwrap();
+        assert_eq!(meta1, meta1_again);
+
+        // Modify file
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "initial = 1; modified = 2").unwrap();
+        let meta2 = custom_theme_metadata(&path).unwrap();
+        let hash2 = custom_theme_fingerprint(&path).unwrap();
+        assert_ne!(meta1, meta2);
+        assert_ne!(hash1, hash2);
+
+        // Atomic replacement (write to temp and rename)
+        let tmp = dir.join("themes.tmp");
+        fs::write(&tmp, "replaced = 3").unwrap();
+        fs::rename(&tmp, &path).unwrap();
+        let meta3 = custom_theme_metadata(&path).unwrap();
+        let hash3 = custom_theme_fingerprint(&path).unwrap();
+        assert_ne!(meta2, meta3);
+        assert_ne!(hash2, hash3);
+
+        // Deletion
+        fs::remove_file(&path).unwrap();
+        assert!(custom_theme_metadata(&path).is_none());
+        assert!(custom_theme_fingerprint(&path).is_none());
+
+        // Same-size content modification test
+        fs::write(&path, "content_aaa").unwrap(); // 11 bytes
+        let meta_a = custom_theme_metadata(&path).unwrap();
+        let hash_a = custom_theme_fingerprint(&path).unwrap();
+        assert_eq!(meta_a.len, 11);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "content_bbb").unwrap(); // exactly 11 bytes, same length
+        let meta_b = custom_theme_metadata(&path).unwrap();
+        let hash_b = custom_theme_fingerprint(&path).unwrap();
+        assert_eq!(meta_b.len, 11);
+        assert_ne!(
+            hash_a, hash_b,
+            "fingerprints must differ for different content"
+        );
+        assert_ne!(
+            meta_a.modified, meta_b.modified,
+            "modified timestamp must update even when file size is identical"
+        );
+        assert_ne!(
+            meta_a, meta_b,
+            "metadata must differ on same-size modification"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

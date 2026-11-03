@@ -28,6 +28,77 @@ pub fn probe_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
     if bytes.is_empty() {
         bail!("empty image buffer");
     }
+
+    // 1. Fast path for PNG (IHDR chunk at fixed offset)
+    if bytes.len() >= 24 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" && &bytes[12..16] == b"IHDR" {
+        let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+        let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+        if w > 0 && h > 0 {
+            if u64::from(w) * u64::from(h) > MAX_PIXELS {
+                bail!("image is too large ({w}x{h})");
+            }
+            return Ok((w, h));
+        }
+    }
+
+    // 2. Fast path for JPEG via SIMD-accelerated header parser
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        let mut decoder = JpegDecoder::new(Cursor::new(bytes));
+        if decoder.decode_headers().is_ok()
+            && let Some((w, h)) = decoder.dimensions()
+        {
+            let (w, h) = (w as u32, h as u32);
+            if w > 0 && h > 0 {
+                if u64::from(w) * u64::from(h) > MAX_PIXELS {
+                    bail!("image is too large ({w}x{h})");
+                }
+                return Ok((w, h));
+            }
+        }
+    }
+
+    // 3. Fast path for WebP (VP8, VP8L, VP8X headers)
+    if bytes.len() >= 30 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        let chunk = &bytes[12..16];
+        if chunk == b"VP8 " {
+            if bytes.len() >= 30 && bytes[23] == 0x9d && bytes[24] == 0x01 && bytes[25] == 0x2a {
+                let w = (u16::from(bytes[26]) | (u16::from(bytes[27] & 0x3f) << 8)) as u32;
+                let h = (u16::from(bytes[28]) | (u16::from(bytes[29] & 0x3f) << 8)) as u32;
+                if w > 0 && h > 0 {
+                    if u64::from(w) * u64::from(h) > MAX_PIXELS {
+                        bail!("image is too large ({w}x{h})");
+                    }
+                    return Ok((w, h));
+                }
+            }
+        } else if chunk == b"VP8L" {
+            if bytes.len() >= 25 && bytes[20] == 0x2f {
+                let b0 = bytes[21] as u32;
+                let b1 = bytes[22] as u32;
+                let b2 = bytes[23] as u32;
+                let b3 = bytes[24] as u32;
+                let w = 1 + (((b1 & 0x3f) << 8) | b0);
+                let h = 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
+                if w > 0 && h > 0 {
+                    if u64::from(w) * u64::from(h) > MAX_PIXELS {
+                        bail!("image is too large ({w}x{h})");
+                    }
+                    return Ok((w, h));
+                }
+            }
+        } else if chunk == b"VP8X" && bytes.len() >= 30 {
+            let w = 1 + (bytes[24] as u32 | ((bytes[25] as u32) << 8) | ((bytes[26] as u32) << 16));
+            let h = 1 + (bytes[27] as u32 | ((bytes[28] as u32) << 8) | ((bytes[29] as u32) << 16));
+            if w > 0 && h > 0 {
+                if u64::from(w) * u64::from(h) > MAX_PIXELS {
+                    bail!("image is too large ({w}x{h})");
+                }
+                return Ok((w, h));
+            }
+        }
+    }
+
+    // 4. General fallback via image crate
     if let Ok(reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()
         && let Ok((w, h)) = reader.into_dimensions()
         && w > 0
@@ -36,26 +107,16 @@ pub fn probe_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
     {
         return Ok((w, h));
     }
-    let mut decoder = JpegDecoder::new(Cursor::new(bytes));
-    if decoder.decode_headers().is_ok()
-        && let Some((w, h)) = decoder.dimensions()
-    {
-        let (w, h) = (w as u32, h as u32);
-        if w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_PIXELS {
-            return Ok((w, h));
-        }
-    }
+
     bail!("could not determine image dimensions from header");
 }
 
 fn decode(bytes: &[u8]) -> Result<DynamicImage> {
-    if let Ok(reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()
-        && let Ok((w, h)) = reader.into_dimensions()
-        && u64::from(w) * u64::from(h) > MAX_PIXELS
-    {
-        bail!("image is too large ({w}x{h})");
-    }
-    let img = image::load_from_memory(bytes)?;
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(MAX_PIXELS * 4);
+    reader.limits(limits);
+    let img = reader.decode()?;
     if u64::from(img.width()) * u64::from(img.height()) > MAX_PIXELS {
         bail!("image is too large ({}x{})", img.width(), img.height());
     }
@@ -63,6 +124,7 @@ fn decode(bytes: &[u8]) -> Result<DynamicImage> {
 }
 
 /// A decoded page.
+#[derive(Debug)]
 pub struct Decoded {
     /// Pixels in **BGRA** order, already scaled down to the requested size.
     pub image: RgbaImage,
@@ -71,18 +133,14 @@ pub struct Decoded {
 }
 
 fn rgb_to_bgra(rgb: &[u8], nw: u32, nh: u32) -> Result<RgbaImage> {
+    let chunks = rgb.as_chunks::<3>().0;
     let total = nw as usize * nh as usize;
-    let mut bgra = vec![0u8; total * 4];
-    for (src, dst) in rgb
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .zip(bgra.as_chunks_mut::<4>().0)
-    {
-        dst[0] = src[2];
-        dst[1] = src[1];
-        dst[2] = src[0];
-        dst[3] = 255;
+    if chunks.len() < total {
+        bail!("rgb buffer smaller than nw * nh * 3");
+    }
+    let mut bgra = Vec::with_capacity(total * 4);
+    for src in &chunks[..total] {
+        bgra.extend_from_slice(&[src[2], src[1], src[0], 255]);
     }
     RgbaImage::from_raw(nw, nh, bgra).context("failed to create bgra buffer from raw bytes")
 }
@@ -95,6 +153,9 @@ fn decode_jpeg_fit_bgra(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Decoded>
         .map_err(|e| anyhow::anyhow!("failed to decode JPEG headers: {e:?}"))?;
     let (w, h) = decoder.dimensions().context("missing JPEG dimensions")?;
     let (w, h) = (w as u32, h as u32);
+    if w == 0 || h == 0 {
+        bail!("zero dimension image");
+    }
     if u64::from(w) * u64::from(h) > MAX_PIXELS {
         bail!("image is too large ({w}x{h})");
     }
@@ -106,12 +167,17 @@ fn decode_jpeg_fit_bgra(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Decoded>
     let image = if scale < 1.0 {
         let nw = ((w as f32 * scale).round() as u32).max(1);
         let nh = ((h as f32 * scale).round() as u32).max(1);
-        let src = FirImage::from_vec_u8(w, h, pixels, PixelType::U8x4)?;
-        let mut dst = FirImage::new(nw, nh, PixelType::U8x4);
-        let resize_options =
-            ResizeOptions::new().resize_alg(ResizeAlg::Convolution(ResizeFilter::CatmullRom));
-        RESIZER.with(|resizer| resizer.borrow_mut().resize(&src, &mut dst, &resize_options))?;
-        RgbaImage::from_raw(nw, nh, dst.into_vec()).context("resized buffer has the wrong size")?
+        if (nw, nh) == (w, h) {
+            RgbaImage::from_raw(w, h, pixels).context("raw JPEG buffer has the wrong size")?
+        } else {
+            let src = FirImage::from_vec_u8(w, h, pixels, PixelType::U8x4)?;
+            let mut dst = FirImage::new(nw, nh, PixelType::U8x4);
+            let resize_options =
+                ResizeOptions::new().resize_alg(ResizeAlg::Convolution(ResizeFilter::CatmullRom));
+            RESIZER.with(|resizer| resizer.borrow_mut().resize(&src, &mut dst, &resize_options))?;
+            RgbaImage::from_raw(nw, nh, dst.into_vec())
+                .context("resized buffer has the wrong size")?
+        }
     } else {
         RgbaImage::from_raw(w, h, pixels).context("raw JPEG buffer has the wrong size")?
     };
@@ -129,14 +195,22 @@ fn decode_jpeg_fit_bgra(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Decoded>
 ///
 /// The returned buffer is already **BGRA**, the channel order gpui expects.
 pub fn decode_fit_bgra(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Decoded> {
-    if bytes.starts_with(&[0xff, 0xd8])
-        && let Ok(decoded) = decode_jpeg_fit_bgra(bytes, max_w, max_h)
-    {
-        return Ok(decoded);
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        match decode_jpeg_fit_bgra(bytes, max_w, max_h) {
+            Ok(decoded) => return Ok(decoded),
+            Err(e) => {
+                if e.to_string().contains("image is too large") {
+                    return Err(e);
+                }
+            }
+        }
     }
 
     let img = decode(bytes)?;
     let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        bail!("zero dimension image");
+    }
     let alpha = img.color().has_alpha();
     let scale = (max_w as f32 / w as f32).min(max_h as f32 / h as f32);
 
@@ -145,7 +219,9 @@ pub fn decode_fit_bgra(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Decoded> 
         if scale < 1.0 {
             let nw = ((w as f32 * scale).round() as u32).max(1);
             let nh = ((h as f32 * scale).round() as u32).max(1);
-            rgba = resize_rgba(rgba, nw, nh, ResizeFilter::CatmullRom, true)?;
+            if (nw, nh) != (w, h) {
+                rgba = resize_rgba(rgba, nw, nh, ResizeFilter::CatmullRom, true)?;
+            }
         }
         for px in rgba.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
@@ -156,8 +232,12 @@ pub fn decode_fit_bgra(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Decoded> 
         if scale < 1.0 {
             let nw = ((w as f32 * scale).round() as u32).max(1);
             let nh = ((h as f32 * scale).round() as u32).max(1);
-            let resized = resize_rgb(rgb, nw, nh, ResizeFilter::CatmullRom)?;
-            rgb_to_bgra(resized.as_raw(), nw, nh)?
+            if (nw, nh) != (w, h) {
+                let resized = resize_rgb(rgb, nw, nh, ResizeFilter::CatmullRom)?;
+                rgb_to_bgra(resized.as_raw(), nw, nh)?
+            } else {
+                rgb_to_bgra(rgb.as_raw(), w, h)?
+            }
         } else {
             rgb_to_bgra(rgb.as_raw(), w, h)?
         }
@@ -207,6 +287,9 @@ fn make_jpeg_cover(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Vec<u8>> {
         .map_err(|e| anyhow::anyhow!("failed to decode JPEG headers: {e:?}"))?;
     let (w, h) = decoder.dimensions().context("missing JPEG dimensions")?;
     let (w, h) = (w as u32, h as u32);
+    if w == 0 || h == 0 {
+        bail!("zero dimension image");
+    }
     if u64::from(w) * u64::from(h) > MAX_PIXELS {
         bail!("image is too large ({w}x{h})");
     }
@@ -239,14 +322,22 @@ fn make_jpeg_cover(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Vec<u8>> {
 
 /// Encode a JPEG thumbnail that fits inside `max_w` x `max_h`, keeping the aspect ratio.
 pub fn make_cover_jpeg(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Vec<u8>> {
-    if bytes.starts_with(&[0xff, 0xd8])
-        && let Ok(cover) = make_jpeg_cover(bytes, max_w, max_h)
-    {
-        return Ok(cover);
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        match make_jpeg_cover(bytes, max_w, max_h) {
+            Ok(cover) => return Ok(cover),
+            Err(e) => {
+                if e.to_string().contains("image is too large") {
+                    return Err(e);
+                }
+            }
+        }
     }
 
     let img = decode(bytes)?;
     let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        bail!("zero dimension image");
+    }
     let alpha = img.color().has_alpha();
     // Fit inside the box, keep the aspect ratio, never enlarge.
     let scale = (max_w as f32 / w as f32)
@@ -477,12 +568,203 @@ mod tests {
 
     #[test]
     fn test_probe_dimensions() {
-        let bytes = rgb_bytes(120, 80, image::Rgb([255, 0, 0]));
-        let dims = probe_dimensions(&bytes).unwrap();
+        let bytes_jpg = rgb_bytes(120, 80, image::Rgb([255, 0, 0]));
+        let dims = probe_dimensions(&bytes_jpg).unwrap();
         assert_eq!(dims, (120, 80));
+
+        let bytes_png = png(340, 220, Rgba([0, 255, 0, 255]));
+        let dims_png = probe_dimensions(&bytes_png).unwrap();
+        assert_eq!(dims_png, (340, 220));
+
+        let img = RgbaImage::from_pixel(150, 90, Rgba([0, 0, 255, 255]));
+        let mut out = Cursor::new(Vec::new());
+        img.write_to(&mut out, ImageFormat::WebP).unwrap();
+        let bytes_webp = out.into_inner();
+        let dims_webp = probe_dimensions(&bytes_webp).unwrap();
+        assert_eq!(dims_webp, (150, 90));
 
         // Invalid / empty bytes
         assert!(probe_dimensions(&[]).is_err());
         assert!(probe_dimensions(&[1, 2, 3, 4]).is_err());
+        // Truncated PNG signature
+        assert!(probe_dimensions(b"\x89PNG\r\n\x1a\n").is_err());
+    }
+
+    fn calculate_psnr_and_mae(a: &RgbaImage, b: &RgbaImage) -> (f64, f64, u8) {
+        assert_eq!(a.dimensions(), b.dimensions());
+        let (w, h) = a.dimensions();
+        let total_channels = (w as f64) * (h as f64) * 4.0;
+        let mut sum_sq_err = 0.0;
+        let mut sum_abs_err = 0.0;
+        let mut max_err = 0u8;
+
+        for (pa, pb) in a.pixels().zip(b.pixels()) {
+            for i in 0..4 {
+                let diff = pa.0[i].abs_diff(pb.0[i]);
+                if diff > max_err {
+                    max_err = diff;
+                }
+                sum_sq_err += (diff as f64).powi(2);
+                sum_abs_err += diff as f64;
+            }
+        }
+
+        let mse = sum_sq_err / total_channels;
+        let mae = sum_abs_err / total_channels;
+        let psnr = if mse < 1e-10 {
+            99.0
+        } else {
+            10.0 * (255.0 * 255.0 / mse).log10()
+        };
+        (psnr, mae, max_err)
+    }
+
+    #[test]
+    fn test_manga_screentone_and_line_art_psnr_metrics() {
+        // 1. High-contrast 1px black line art on white canvas (400x400)
+        let mut line_art = RgbaImage::from_pixel(400, 400, Rgba([255, 255, 255, 255]));
+        for y in 0..400 {
+            for x in 0..400 {
+                // Horizontal lines every 40px, vertical lines every 40px, 1px main diagonal
+                if y % 40 == 0 || x % 40 == 0 || x == y {
+                    line_art.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+                }
+            }
+        }
+
+        // Compare fast_image_resize Catmull-Rom downscaling to 200x200 against image crate reference
+        let ref_line_art = DynamicImage::ImageRgba8(line_art.clone())
+            .resize_exact(200, 200, image::imageops::FilterType::CatmullRom)
+            .to_rgba8();
+        let fir_line_art =
+            resize_rgba(line_art, 200, 200, ResizeFilter::CatmullRom, false).unwrap();
+
+        let (psnr, mae, max_err) = calculate_psnr_and_mae(&fir_line_art, &ref_line_art);
+        // SIMD 16-bit fixed point vs 32-bit float produces imperceptible variance (PSNR > 50 dB)
+        assert!(
+            psnr > 42.0,
+            "Line art PSNR should exceed 42 dB, got {psnr:.2} dB"
+        );
+        assert!(
+            mae < 1.0,
+            "Line art MAE should be sub-pixel (<1.0), got {mae:.3}"
+        );
+        assert!(
+            max_err <= 12,
+            "Max per-channel error should be <= 12 LSBs, got {max_err}"
+        );
+
+        // 2. High-frequency manga screentone (checkerboard 1px alternating dots)
+        let mut screentone = RgbaImage::from_pixel(400, 400, Rgba([255, 255, 255, 255]));
+        for y in 0..400 {
+            for x in 0..400 {
+                if (x + y) % 2 == 0 {
+                    screentone.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+                }
+            }
+        }
+
+        let ref_screen = DynamicImage::ImageRgba8(screentone.clone())
+            .resize_exact(200, 200, image::imageops::FilterType::CatmullRom)
+            .to_rgba8();
+        let fir_screen =
+            resize_rgba(screentone, 200, 200, ResizeFilter::CatmullRom, false).unwrap();
+
+        let (psnr_st, mae_st, max_err_st) = calculate_psnr_and_mae(&fir_screen, &ref_screen);
+        assert!(
+            psnr_st > 40.0,
+            "Screentone PSNR should exceed 40 dB, got {psnr_st:.2} dB"
+        );
+        assert!(
+            mae_st < 1.5,
+            "Screentone MAE should be < 1.5, got {mae_st:.3}"
+        );
+        assert!(
+            max_err_st <= 12,
+            "Max screentone error should be <= 12 LSBs, got {max_err_st}"
+        );
+    }
+
+    #[test]
+    fn test_extreme_aspect_ratios_and_sizes() {
+        // 1. Single-pixel 1x1 image
+        let tiny = png(1, 1, Rgba([42, 84, 126, 255]));
+        let out = decode_fit_bgra(&tiny, 1000, 1000).unwrap();
+        assert_eq!(out.image.dimensions(), (1, 1));
+        assert_eq!(out.orig, (1, 1));
+        // Verify BGRA channel swap (B=126, G=84, R=42, A=255)
+        let px = out.image.get_pixel(0, 0).0;
+        assert_eq!(px, [126, 84, 42, 255]);
+
+        // 2. Extreme panorama: 8000x400 (20:1 aspect ratio) fitting 1920x1080
+        let pano = png(8000, 400, Rgba([100, 150, 200, 255]));
+        let out_pano = decode_fit_bgra(&pano, 1920, 1080).unwrap();
+        let (pw, ph) = out_pano.image.dimensions();
+        assert_eq!(pw, 1920);
+        assert_eq!(ph, 96);
+        assert_eq!(out_pano.orig, (8000, 400));
+
+        // 3. Extreme vertical webtoon strip: 400x12000 (1:30 aspect ratio) fitting 1920x1080
+        let strip = png(400, 12000, Rgba([50, 100, 150, 255]));
+        let out_strip = decode_fit_bgra(&strip, 1920, 1080).unwrap();
+        let (sw, sh) = out_strip.image.dimensions();
+        assert_eq!(sw, 36);
+        assert_eq!(sh, 1080);
+        assert_eq!(out_strip.orig, (400, 12000));
+
+        // 4. Non-integer scale ratio: 1920x1080 downscaled to fit 1366x768
+        let non_int = png(1920, 1080, Rgba([20, 40, 60, 255]));
+        let out_ni = decode_fit_bgra(&non_int, 1366, 768).unwrap();
+        let (nw, nh) = out_ni.image.dimensions();
+        assert!(nw <= 1366 && nh <= 768);
+        assert_eq!((nw, nh), (1365, 768));
+    }
+
+    #[test]
+    fn test_decompression_bomb_and_corrupt_guards() {
+        // 1. Synthesize PNG header claiming 20,000 x 20,000 = 400M pixels (exceeds MAX_PIXELS)
+        let mut bomb_png = Vec::new();
+        bomb_png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        bomb_png.extend_from_slice(&13u32.to_be_bytes()); // chunk length
+        bomb_png.extend_from_slice(b"IHDR");
+        bomb_png.extend_from_slice(&20_000u32.to_be_bytes()); // width
+        bomb_png.extend_from_slice(&20_000u32.to_be_bytes()); // height
+        bomb_png.extend_from_slice(&[8, 2, 0, 0, 0]); // bit depth, color type, etc.
+        bomb_png.extend_from_slice(&[0, 0, 0, 0]); // CRC
+
+        // probe_dimensions must reject it as too large
+        let probe_err = probe_dimensions(&bomb_png).unwrap_err();
+        assert!(probe_err.to_string().contains("image is too large"));
+
+        // decode_fit_bgra must reject it without allocating
+        let decode_err = decode_fit_bgra(&bomb_png, 800, 600).unwrap_err();
+        assert!(
+            decode_err.to_string().contains("too large")
+                || decode_err.to_string().contains("Format error")
+        );
+
+        // 2. Corrupt / truncated byte streams
+        let truncated_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00";
+        assert!(probe_dimensions(truncated_png).is_err());
+        assert!(decode_fit_bgra(truncated_png, 800, 600).is_err());
+
+        let truncated_jpg = &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10];
+        assert!(probe_dimensions(truncated_jpg).is_err());
+        assert!(decode_fit_bgra(truncated_jpg, 800, 600).is_err());
+
+        let random_junk = &[0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04];
+        assert!(probe_dimensions(random_junk).is_err());
+        assert!(decode_fit_bgra(random_junk, 800, 600).is_err());
+    }
+
+    #[test]
+    fn test_simd_cpu_features_and_portable_dispatch() {
+        RESIZER.with(|resizer| {
+            let extensions = resizer.borrow().cpu_extensions();
+            assert!(
+                extensions.is_supported(),
+                "Detected CPU extensions {extensions:?} must be supported on current host"
+            );
+        });
     }
 }

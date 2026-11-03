@@ -245,45 +245,49 @@ impl Yomu {
                 format!("main-view-fade-{}", view_key),
             );
 
-        div()
+        gpui_kit::image_cache(self.cover_cache.clone())
             .size_full()
-            .flex()
-            .flex_row()
-            .bg(colors.background)
-            .child(sidebar)
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
+                    .size_full()
                     .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .child(toolbar)
+                    .flex_row()
+                    .bg(colors.background)
+                    .child(sidebar)
                     .child(
                         div()
-                            .id("main-view-content")
                             .flex_1()
                             .min_w_0()
-                            .min_h_0()
+                            .h_full()
+                            .flex()
+                            .flex_col()
                             .overflow_hidden()
-                            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
-                                let scroll_handle = this.current_scroll_handle();
-                                if this
-                                    .library_scroll_controller
-                                    .handle_wheel(event, &scroll_handle)
-                                {
-                                    this.wake();
-                                    cx.notify();
-                                }
-                            }))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.library_scroll_controller.cancel_inertia();
-                                }),
-                            )
-                            .child(animated_content),
+                            .child(toolbar)
+                            .child(
+                                div()
+                                    .id("main-view-content")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+                                        let scroll_handle = this.current_scroll_handle();
+                                        if this
+                                            .library_scroll_controller
+                                            .handle_wheel(event, &scroll_handle)
+                                        {
+                                            this.wake();
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, _| {
+                                            this.library_scroll_controller.cancel_inertia();
+                                        }),
+                                    )
+                                    .child(animated_content),
+                            ),
                     ),
             )
             .into_any_element()
