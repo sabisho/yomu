@@ -1042,8 +1042,8 @@ impl Library {
             return Err(err);
         }
 
-        // 4. Atomically replace destination
-        if let Err(err) = fs::rename(&tmp, &file) {
+        // 4. Atomically replace destination with bounded retry for transient locks (antivirus/indexing)
+        if let Err(err) = atomic_replace(&tmp, &file) {
             let _ = fs::remove_file(&tmp);
             return Err(err).with_context(|| format!("replacing {}", file.display()));
         }
@@ -1058,7 +1058,75 @@ impl Library {
 
         Ok(())
     }
+}
 
+/// Delays in milliseconds for transient filesystem rename retries.
+pub(crate) const PERSISTENCE_RETRY_DELAYS_MS: [u64; 3] = [10, 25, 50];
+
+/// Atomically replaces destination with source.
+///
+/// On Windows, destination files can experience transient locks from antivirus scanners,
+/// search indexers, or background utilities (e.g. `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32)).
+/// To prevent spurious save failures or abandoned temporary files, this function performs bounded retries
+/// with exponential backoff on transient errors while immediately returning permanent errors.
+pub(crate) fn atomic_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    atomic_replace_with_retry(
+        from,
+        to,
+        |src, dst| fs::rename(src, dst),
+        std::thread::sleep,
+        &PERSISTENCE_RETRY_DELAYS_MS,
+    )
+}
+
+/// Generalized atomic replace implementation allowing injection of custom rename and sleep functions for testing.
+pub(crate) fn atomic_replace_with_retry<F, S>(
+    from: &Path,
+    to: &Path,
+    mut rename_fn: F,
+    mut sleep_fn: S,
+    delays_ms: &[u64],
+) -> std::io::Result<()>
+where
+    F: FnMut(&Path, &Path) -> std::io::Result<()>,
+    S: FnMut(std::time::Duration),
+{
+    let mut attempt = 0;
+    loop {
+        match rename_fn(from, to) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                if !is_transient_fs_error(&err) || attempt >= delays_ms.len() {
+                    return Err(err);
+                }
+                sleep_fn(std::time::Duration::from_millis(delays_ms[attempt]));
+                attempt += 1;
+            }
+        }
+    }
+}
+
+/// Identifies whether an I/O error indicates a transient condition suitable for bounded retry.
+pub(crate) fn is_transient_fs_error(err: &std::io::Error) -> bool {
+    // Check raw OS error codes for Windows
+    if let Some(code) = err.raw_os_error() {
+        // Windows system error codes:
+        // ERROR_ACCESS_DENIED = 5
+        // ERROR_SHARING_VIOLATION = 32
+        // ERROR_LOCK_VIOLATION = 33
+        if code == 5 || code == 32 || code == 33 {
+            return true;
+        }
+    }
+
+    // Check cross-platform ErrorKind
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
+    )
+}
+
+impl Library {
     pub fn books(&self) -> &[Book] {
         &self.books
     }
@@ -2468,5 +2536,170 @@ mod tests {
         // Library file must be valid, parseable JSON and load cleanly
         let loaded = Library::load(&dirs).expect("concurrent saves must not leave corrupted file");
         assert_eq!(loaded.books().len(), 10);
+    }
+
+    #[test]
+    fn test_first_time_library_creation() {
+        let tmp = temp_dir("persistence-first-time-library");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let lib_path = dirs.library_file();
+        assert!(!lib_path.exists());
+
+        let mut lib = Library::default();
+        let mut b = sample_book();
+        b.id = "book_initial".into();
+        b.title = "First Library Book".into();
+        lib.add(b);
+
+        lib.save(&dirs).expect("first-time save should succeed");
+        assert!(lib_path.exists());
+
+        let loaded = Library::load(&dirs).expect("load should succeed");
+        assert_eq!(loaded.books().len(), 1);
+        assert_eq!(loaded.books()[0].title, "First Library Book");
+    }
+
+    #[test]
+    fn test_replacing_existing_library_file() {
+        let tmp = temp_dir("persistence-replace-library");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let lib_path = dirs.library_file();
+
+        let mut lib = Library::default();
+        let mut b1 = sample_book();
+        b1.id = "b1".into();
+        b1.title = "Book 1".into();
+        lib.add(b1);
+        lib.save(&dirs).unwrap();
+
+        // Mutate and replace
+        let mut b2 = sample_book();
+        b2.id = "b2".into();
+        b2.title = "Book 2".into();
+        lib.add(b2);
+        lib.save(&dirs).expect("replace save should succeed");
+
+        let loaded = Library::load(&dirs).expect("load replaced library");
+        assert_eq!(loaded.books().len(), 2);
+        assert_eq!(loaded.books()[1].title, "Book 2");
+
+        // Ensure no temporary files remained
+        let parent = lib_path.parent().unwrap();
+        let tmp_files: Vec<_> = fs::read_dir(parent)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("library.tmp."))
+            .collect();
+        assert!(tmp_files.is_empty(), "temporary files must be cleaned up");
+    }
+
+    #[test]
+    fn test_atomic_replace_transient_retry_success() {
+        use std::cell::RefCell;
+        use std::io::{Error, ErrorKind};
+        use std::time::Duration;
+
+        let attempt_count = RefCell::new(0);
+        let slept_delays = RefCell::new(Vec::new());
+
+        let mock_rename = |_from: &Path, _to: &Path| -> std::io::Result<()> {
+            let mut count = attempt_count.borrow_mut();
+            *count += 1;
+            if *count < 3 {
+                // Fail twice with transient permission denied
+                Err(Error::new(ErrorKind::PermissionDenied, "locked by scanner"))
+            } else {
+                // Succeed on 3rd attempt
+                Ok(())
+            }
+        };
+
+        let mock_sleep = |d: Duration| {
+            slept_delays.borrow_mut().push(d);
+        };
+
+        let delays = [10, 25, 50];
+        let p1 = Path::new("dummy_from");
+        let p2 = Path::new("dummy_to");
+
+        let result = atomic_replace_with_retry(p1, p2, mock_rename, mock_sleep, &delays);
+        assert!(result.is_ok(), "should succeed after retries");
+        assert_eq!(*attempt_count.borrow(), 3);
+        assert_eq!(
+            *slept_delays.borrow(),
+            vec![Duration::from_millis(10), Duration::from_millis(25)]
+        );
+    }
+
+    #[test]
+    fn test_atomic_replace_retry_exhaustion() {
+        use std::cell::RefCell;
+        use std::io::{Error, ErrorKind};
+        use std::time::Duration;
+
+        let attempt_count = RefCell::new(0);
+        let slept_delays = RefCell::new(Vec::new());
+
+        let mock_rename = |_from: &Path, _to: &Path| -> std::io::Result<()> {
+            let mut count = attempt_count.borrow_mut();
+            *count += 1;
+            Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "persistently locked",
+            ))
+        };
+
+        let mock_sleep = |d: Duration| {
+            slept_delays.borrow_mut().push(d);
+        };
+
+        let delays = [10, 25, 50];
+        let p1 = Path::new("dummy_from");
+        let p2 = Path::new("dummy_to");
+
+        let result = atomic_replace_with_retry(p1, p2, mock_rename, mock_sleep, &delays);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
+        // Initial try + 3 retries = 4 total attempts
+        assert_eq!(*attempt_count.borrow(), 4);
+        assert_eq!(
+            *slept_delays.borrow(),
+            vec![
+                Duration::from_millis(10),
+                Duration::from_millis(25),
+                Duration::from_millis(50)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_atomic_replace_permanent_error_no_retry() {
+        use std::cell::RefCell;
+        use std::io::{Error, ErrorKind};
+        use std::time::Duration;
+
+        let attempt_count = RefCell::new(0);
+        let slept_delays = RefCell::new(Vec::new());
+
+        let mock_rename = |_from: &Path, _to: &Path| -> std::io::Result<()> {
+            let mut count = attempt_count.borrow_mut();
+            *count += 1;
+            Err(Error::new(ErrorKind::NotFound, "file not found"))
+        };
+
+        let mock_sleep = |d: Duration| {
+            slept_delays.borrow_mut().push(d);
+        };
+
+        let delays = [10, 25, 50];
+        let p1 = Path::new("dummy_from");
+        let p2 = Path::new("dummy_to");
+
+        let result = atomic_replace_with_retry(p1, p2, mock_rename, mock_sleep, &delays);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::NotFound);
+        // Permanent error aborts immediately on first try with 0 sleeps
+        assert_eq!(*attempt_count.borrow(), 1);
+        assert!(slept_delays.borrow().is_empty());
     }
 }

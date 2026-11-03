@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **372 active tests** passing (160 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 18 opt-in performance benchmarks; 390 total).
+- **Test Baseline:** **378 active tests** passing (166 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 18 opt-in performance benchmarks; 396 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `devenv shell cargo check --all-targets` and `devenv shell cargo clippy --all-targets --all-features -- -D warnings`, fully formatted under `devenv shell cargo fmt --all -- --check`.
 
 ---
@@ -135,6 +135,15 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **6 Unit & Adversarial Tests Added:** Verified exact limit matching, 1-byte overflow abort, byte-spoofed local header abort, session worker recovery after extraction failure, repeated consecutive failures resilience, and integer overflow boundary conditions.
 - **Comprehensive Technical Report:** Authored [`docs/audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md`](audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md).
 
+### Phase 16: Stage 8B Windows Persistence Hardening & Dependency / Licensing Audit (Completed)
+- **Windows Atomic Persistence Hardening (`src/library.rs`, `src/progress.rs`):** Implemented `atomic_replace` and `atomic_replace_with_retry` with exponential backoff (10 ms, 25 ms, 50 ms) targeting transient Windows lock errors (`ERROR_ACCESS_DENIED`, `ERROR_SHARING_VIOLATION`, `ERROR_LOCK_VIOLATION`) caused by background virus scanners or indexing services.
+- **Fail-Safe Atomicity & Invariant Preservation:** The destination file is never deleted prior to replacement. Permanent errors abort immediately on attempt 0 with zero sleep delay. Leftover temporary files from prior crashes are automatically cleaned up on startup.
+- **UnRAR Licensing & Distribution Audit:** Completed legal analysis of Alexander Roshal's UnRAR 7.1.0 freeware license and the Rust `unrar` wrapper. Verified full compliance for GitHub Releases, Flatpak, AppImage, macOS, and Windows MSI. Documented Debian/Fedora non-free repository requirements.
+- **Bounded Cover Cache Review (`src/ui/cover_cache.rs`):** Verified that the 256-entry LRU cache reliably bounds memory to 138–297 MB across pre-scaled thumbnails without incurring blocking synchronous UI thread I/O or asynchronous loader race conditions.
+- **Dependency Security Audit (`devenv.nix`, `.cargo/audit.toml`):** Added `pkgs.cargo-audit` to `devenv.nix` resolving the prior exit code 101. Audited all 829 crate dependencies against RustSec database. Confirmed that 4 reported advisories in `zip` 2.6.1 apply exclusively to `ZipArchive::extract` to disk (never used by Yomu). Configured `.cargo/audit.toml`, achieving a clean exit code 0 scan.
+- **8 Dedicated Unit Tests Added:** Added tests covering first-time file creation, existing file replacement, mock transient retry success, retry exhaustion, permanent error fast-abort, and stale temporary file cleanup (378 active tests).
+- **Comprehensive Technical Report:** Authored [`docs/audits/PRE_RELEASE_HARDENING_STAGE_8B.md`](audits/PRE_RELEASE_HARDENING_STAGE_8B.md).
+
 ---
 
 ## 3. Active Known Limitations & Technical Debt
@@ -145,20 +154,18 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 2. **Cross-Platform Momentum Scrolling:**
    - Linux and Windows rely on `PlatformScrollController`'s kinetic inertia glide loop because GPUI does not yet synthesize momentum events on non-macOS platforms.
    - *Action required:* Monitor official GPUI Kit releases for native upstream cross-platform momentum support.
-3. **Windows Atomic Rename Retries (ISSUE-8-02):**
-   - Transient file locks by Windows Defender or search indexers can intermittently fail `std::fs::rename`.
-   - *Action required:* Add exponential backoff retry loop (3 attempts, 20 ms) on Windows.
+3. **Physical Multi-Platform Testing:**
+   - Linux tests run inside NixOS/devenv. Windows and macOS testing requires physical testing on native host environments.
 
 ---
 
 ## 4. Next Recommended Engineering Tasks
 
-Refer to [docs/audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md](audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md) for the Stage 8A report, [docs/audits/PRODUCTION_READINESS_AUDIT_STAGE_8.md](audits/PRODUCTION_READINESS_AUDIT_STAGE_8.md) for Stage 8, [docs/audits/ANIMATION_SCROLLING_RENDERING_OPTIMIZATION_STAGE_7.md](audits/ANIMATION_SCROLLING_RENDERING_OPTIMIZATION_STAGE_7.md) for Stage 7, and [ROADMAP.md](../ROADMAP.md):
+Refer to [docs/audits/PRE_RELEASE_HARDENING_STAGE_8B.md](audits/PRE_RELEASE_HARDENING_STAGE_8B.md) for the Stage 8B report, [docs/audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md](audits/RAR_DECOMPRESSION_HARDENING_STAGE_8A.md) for Stage 8A, [docs/audits/PRODUCTION_READINESS_AUDIT_STAGE_8.md](audits/PRODUCTION_READINESS_AUDIT_STAGE_8.md) for Stage 8, and [ROADMAP.md](../ROADMAP.md):
 
-1. **Stage 8B — Interactive Multi-Platform & Packaging Qualification:**
-   - Perform physical interactive verification on Wayland (Niri/Hyprland/GNOME Mutter), Windows 11, and macOS.
-   - Add Windows atomic rename retry backoff in `src/library.rs` and `src/progress.rs`.
-   - Verify distribution packaging (AppImage, Flatpak, Nix flake, Windows MSI).
+1. **Stage 8C — Multi-Platform Packaging & Desktop Qualification:**
+   - Verify AppImage, Flatpak manifest, Nix flake, and Windows MSI package recipes.
+   - Perform interactive smoke testing on Wayland (Niri/Hyprland/GNOME Mutter), Windows 11, and macOS.
 2. **CB7 / 7z Archive Support (Phase 7):**
    - Support `.cb7` and `.7z` archives using a pure Rust LZMA/7z decoder.
    - Maintain the standard archive interface and background thread isolation.
@@ -181,11 +188,12 @@ devenv shell cargo fmt --all -- --check
 devenv shell cargo check --all-targets
 devenv shell cargo clippy --all-targets --all-features -- -D warnings
 devenv shell cargo test --all-targets
+devenv shell cargo audit
 ```
 
 ### Reporting Standards
 When completing a task, provide a concise, factual report:
 1. Exact files modified, created, or deleted.
 2. Architectural responsibilities changed.
-3. Exact command exit codes and test counts (372 active tests).
+3. Exact command exit codes and test counts (378 active tests).
 4. Status of manual visual checks (explicitly report Wayland appearance as UNVERIFIED if tested headlessly).

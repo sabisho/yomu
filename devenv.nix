@@ -39,6 +39,7 @@ in
   packages = [
     pkgs.pkg-config
     pkgs.cmake
+    pkgs.cargo-audit
   ] ++ runtimeLibs;
 
   # Without this, gpui cannot find libwayland / libvulkan at runtime on NixOS.

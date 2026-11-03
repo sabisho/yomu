@@ -253,8 +253,8 @@ impl ProgressStore {
             return Err(err);
         }
 
-        // 4. Atomically replace destination
-        if let Err(err) = fs::rename(&tmp, &file) {
+        // 4. Atomically replace destination with bounded retry for transient locks (antivirus/indexing)
+        if let Err(err) = crate::library::atomic_replace(&tmp, &file) {
             let _ = fs::remove_file(&tmp);
             return Err(err).with_context(|| format!("replacing {}", file.display()));
         }
@@ -308,5 +308,99 @@ mod tests {
         assert_eq!(store.len(), 0);
         assert_eq!(store.mutation_seq(), 3);
         assert!(!store.remove("book_1"));
+    }
+
+    #[test]
+    fn test_first_time_progress_creation() {
+        let tmp = std::env::temp_dir().join(format!("yomu-progress-test-1-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let progress_file = dirs.progress_file();
+        assert!(!progress_file.exists());
+
+        let mut store = ProgressStore::new();
+        store.set("manga_alpha", 12, true, Some(1700000000));
+        store.save(&dirs).expect("first-time save must succeed");
+        assert!(progress_file.exists());
+
+        let loaded = ProgressStore::load(&dirs).expect("load should parse progress.json");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded.get("manga_alpha"),
+            Some(&BookProgress {
+                current_page: 12,
+                opened: true,
+                last_read: Some(1700000000),
+            })
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_replacing_existing_progress_file() {
+        let tmp = std::env::temp_dir().join(format!("yomu-progress-test-2-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let progress_file = dirs.progress_file();
+
+        let mut store = ProgressStore::new();
+        store.set("manga_beta", 1, true, Some(100));
+        store.save(&dirs).unwrap();
+
+        // Mutate and replace
+        store.set("manga_beta", 25, true, Some(200));
+        store.save(&dirs).expect("replace save must succeed");
+
+        let loaded = ProgressStore::load(&dirs).unwrap();
+        assert_eq!(loaded.get("manga_beta").unwrap().current_page, 25);
+
+        // Ensure no temporary files remained
+        let parent = progress_file.parent().unwrap();
+        let tmp_files: Vec<_> = fs::read_dir(parent)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("progress.tmp."))
+            .collect();
+        assert!(
+            tmp_files.is_empty(),
+            "temporary progress files must be cleaned up"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_progress_cleanup_stale_temporary_files_on_load() {
+        let tmp = std::env::temp_dir().join(format!("yomu-progress-test-3-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+        let progress_file = dirs.progress_file();
+        let parent = progress_file.parent().unwrap();
+        fs::create_dir_all(parent).unwrap();
+
+        // Simulate leftover temp files from prior interrupted processes
+        let stale1 = parent.join("progress.tmp.1234.5678.9");
+        let stale2 = parent.join("progress.json.tmp");
+        fs::write(&stale1, b"abandoned write 1").unwrap();
+        fs::write(&stale2, b"abandoned write 2").unwrap();
+        assert!(stale1.exists());
+        assert!(stale2.exists());
+
+        // Save a valid progress store
+        let mut store = ProgressStore::new();
+        store.set("book_gamma", 42, true, None);
+        store.save(&dirs).unwrap();
+
+        // Loading should clean up both stale temp files
+        let loaded = ProgressStore::load(&dirs).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(
+            !stale1.exists(),
+            "stale temp file 1 must be cleaned up on load"
+        );
+        assert!(
+            !stale2.exists(),
+            "stale temp file 2 must be cleaned up on load"
+        );
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

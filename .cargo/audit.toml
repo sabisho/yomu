@@ -1,0 +1,9 @@
+[advisories]
+ignore = [
+    # Yomu never calls ZipArchive::extract or ZipStreamReader::extract to extract files to the filesystem;
+    # it only streams image bytes in-memory via archive.by_index() and io::copy into bounded RAM buffers.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0429",
+]
