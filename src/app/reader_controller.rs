@@ -620,9 +620,9 @@ impl Yomu {
         self.save_library(cx);
         self.show_hud(
             if next {
-                "remember zoom on"
+                "Remember Zoom On"
             } else {
-                "remember zoom off"
+                "Remember Zoom Off"
             },
             cx,
         );
@@ -638,7 +638,7 @@ impl Yomu {
             reader.arrive = Some(Arrive::Start);
         }
         self.save_library(cx);
-        self.show_hud("zoom reset (100%)", cx);
+        self.show_hud("Zoom Reset (100%)", cx);
         cx.notify();
     }
 
@@ -663,11 +663,11 @@ impl Yomu {
         let webcomics = self.library.settings().webcomics;
         self.show_hud(
             if webcomics {
-                "webcomics mode"
+                "Webcomics Mode"
             } else if next {
-                "continuous scrolling"
+                "Continuous Scrolling"
             } else {
-                "single page"
+                "Single Page"
             },
             cx,
         );
@@ -694,11 +694,11 @@ impl Yomu {
         self.save_library(cx);
         self.show_hud(
             if next {
-                "webcomics mode"
+                "Webcomics Mode"
             } else if self.library.settings().continuous {
-                "continuous scrolling"
+                "Continuous Scrolling"
             } else {
-                "single page"
+                "Single Page"
             },
             cx,
         );

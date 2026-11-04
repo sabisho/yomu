@@ -16,7 +16,7 @@ use gpui_kit::{
 use yomu::archive::SourceKind;
 use yomu::library::Book;
 
-use super::components::{genre_tag, with_alpha};
+use super::components::{control_icon, genre_tag, with_alpha};
 use super::theme::UiColors;
 
 pub struct MangaDetailsProps<'a> {
@@ -232,7 +232,7 @@ pub fn render_manga_details(
                                         .with_size(Size::Size(px(32.)))
                                         .rounded(ButtonRounded::Size(props.radius))
                                         .tooltip("More options")
-                                        .icon(IconName::Ellipsis)
+                                        .icon(control_icon(IconName::Ellipsis))
                                         .dropdown_menu_with_anchor(
                                             Anchor::TopRight,
                                             move |menu, window, cx| {

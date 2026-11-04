@@ -19,7 +19,7 @@ use gpui_kit::{
 };
 use yomu::library::Book;
 
-use super::components::{genre_tag, with_alpha};
+use super::components::{control_icon, genre_tag, with_alpha};
 use super::theme::UiColors;
 
 pub struct ContinueReadingItem<'a> {
@@ -87,7 +87,7 @@ pub fn render_continue_reading_view(
                                 .child(
                                     Button::new("empty-import-files-btn")
                                         .primary()
-                                        .icon(IconName::FilePlus)
+                                        .icon(control_icon(IconName::FilePlus))
                                         .label("Import Files")
                                         .accessibility_label("Import manga files")
                                         .rounded(ButtonRounded::Medium)
@@ -102,7 +102,7 @@ pub fn render_continue_reading_view(
                                 .child(
                                     Button::new("empty-import-folder-btn")
                                         .outline()
-                                        .icon(IconName::FolderPlus)
+                                        .icon(control_icon(IconName::FolderPlus))
                                         .label("Import Folder")
                                         .accessibility_label("Import manga folder")
                                         .rounded(ButtonRounded::Medium)
@@ -270,7 +270,7 @@ pub fn render_continue_reading_view(
                                                         .with_size(Size::Size(px(32.)))
                                                         .rounded(ButtonRounded::Size(props.radius))
                                                         .tooltip("More options")
-                                                        .icon(IconName::Ellipsis)
+                                                        .icon(control_icon(IconName::Ellipsis))
                                                         .dropdown_menu_with_anchor(
                                                             Anchor::TopRight,
                                                             move |menu, window, cx| {

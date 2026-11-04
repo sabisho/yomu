@@ -308,7 +308,7 @@ impl Yomu {
                                 .child(
                                     Button::new("empty-import-files-btn")
                                         .primary()
-                                        .icon(IconName::FilePlus)
+                                        .icon(ui::components::control_icon(IconName::FilePlus))
                                         .label("Import Files")
                                         .accessibility_label("Import manga files")
                                         .with_size(Size::Size(
@@ -328,7 +328,7 @@ impl Yomu {
                                 .child(
                                     Button::new("empty-import-folder-btn")
                                         .outline()
-                                        .icon(IconName::FolderPlus)
+                                        .icon(ui::components::control_icon(IconName::FolderPlus))
                                         .label("Import Folder")
                                         .accessibility_label("Import manga folder")
                                         .with_size(Size::Size(

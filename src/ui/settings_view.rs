@@ -21,7 +21,8 @@ use gpui_kit::{
 };
 
 use super::components::{
-    CONTROL_HEIGHT_TOOLBAR, open_shortcut_str, settings_shortcut_str, with_alpha, zoom_shortcut_str,
+    CONTROL_HEIGHT_TOOLBAR, control_icon, open_shortcut_str, settings_shortcut_str, with_alpha,
+    zoom_shortcut_str,
 };
 use super::overlays::SettingsTab;
 use super::theme::{UiColors, is_standalone_scheme};
@@ -273,97 +274,55 @@ fn render_tab_general(
     on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_set_thumbnail_size: std::rc::Rc<dyn Fn(ThumbnailSize, &mut Window, &mut App)>,
 ) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap_4()
-        .child(
-            settings_card(colors)
-                .child(
-                    settings_row(
-                        "Default Reading Layout",
-                        "Toggle between single-page book turns and continuous vertical strip.",
-                        colors,
-                    )
-                    .child(
-                        Switch::new("gen-continuous-mode-switch")
-                            .accessibility_label("Continuous vertical reading mode")
-                            .small()
-                            .checked(settings.continuous)
-                            .on_click(move |val, window, cx| on_toggle_continuous(*val, window, cx)),
-                    ),
-                )
-                .child(settings_divider(colors))
-                .child(
-                    settings_row(
-                        "Folder & Series Grouping",
-                        "Group volumes sharing a common directory or series name into single cards.",
-                        colors,
-                    )
-                    .child(
-                        Switch::new("group-series-switch")
-                            .accessibility_label("Folder grouping")
-                            .small()
-                            .checked(settings.group_series)
-                            .on_click(move |val, window, cx| on_toggle_group_series(*val, window, cx)),
-                    ),
-                )
-                .child(settings_divider(colors))
-                .child(
-                    settings_row(
-                        "Thumbnail Size",
-                        "Size of book covers in the library grid view.",
-                        colors,
-                    )
-                    .child(macos_dropdown_button(
-                        "cycle-thumb-btn-lib",
-                        settings.thumbnail_size.label(),
-                        ThumbnailSize::ALL
-                            .into_iter()
-                            .map(|s| (s.label().to_string(), s, s == settings.thumbnail_size))
-                            .collect(),
-                        on_set_thumbnail_size,
-                    )),
-                ),
-        )
-        .child(
-            settings_card(colors).child(
+    div().flex().flex_col().gap_4().child(
+        settings_card(colors)
+            .child(
                 settings_row(
-                    "About Yomu",
-                    "Yomu v26.10.0 · High performance desktop comic reader built with GPUI Kit and Rust.",
+                    "Default Reading Layout",
+                    "Toggle between single-page book turns and continuous vertical strip.",
                     colors,
                 )
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(Tag::secondary().child("v26.10.0"))
-                        .child(
-                            Button::new("about-github-repo-btn")
-                                .icon(IconName::Github)
-                                .with_size(Size::Size(px(28.)))
-                                .rounded(ButtonRounded::Size(px(6.)))
-                                .outline()
-                                .tooltip("GitHub Repository")
-                                .on_click(|_, _, cx| {
-                                    cx.open_url("https://github.com/sabisho/yomu");
-                                }),
-                        )
-                        .child(
-                            Button::new("about-github-profile-btn")
-                                .icon(IconName::User)
-                                .with_size(Size::Size(px(28.)))
-                                .rounded(ButtonRounded::Size(px(6.)))
-                                .outline()
-                                .tooltip("sabisho on GitHub")
-                                .on_click(|_, _, cx| {
-                                    cx.open_url("https://github.com/sabisho");
-                                }),
-                        ),
+                    Switch::new("gen-continuous-mode-switch")
+                        .accessibility_label("Continuous vertical reading mode")
+                        .small()
+                        .checked(settings.continuous)
+                        .on_click(move |val, window, cx| on_toggle_continuous(*val, window, cx)),
                 ),
+            )
+            .child(settings_divider(colors))
+            .child(
+                settings_row(
+                    "Folder & Series Grouping",
+                    "Group volumes sharing a common directory or series name into single cards.",
+                    colors,
+                )
+                .child(
+                    Switch::new("group-series-switch")
+                        .accessibility_label("Folder grouping")
+                        .small()
+                        .checked(settings.group_series)
+                        .on_click(move |val, window, cx| on_toggle_group_series(*val, window, cx)),
+                ),
+            )
+            .child(settings_divider(colors))
+            .child(
+                settings_row(
+                    "Thumbnail Size",
+                    "Size of book covers in the library grid view.",
+                    colors,
+                )
+                .child(macos_dropdown_button(
+                    "cycle-thumb-btn-lib",
+                    settings.thumbnail_size.label(),
+                    ThumbnailSize::ALL
+                        .into_iter()
+                        .map(|s| (s.label().to_string(), s, s == settings.thumbnail_size))
+                        .collect(),
+                    on_set_thumbnail_size,
+                )),
             ),
-        )
+    )
 }
 
 fn render_tab_appearance(
@@ -963,7 +922,7 @@ fn render_tab_about(colors: UiColors) -> Div {
                     Button::new("about-author-link-btn")
                         .secondary()
                         .outline()
-                        .icon(IconName::Github)
+                        .icon(control_icon(IconName::Github))
                         .label("sabisho")
                         .small()
                         .rounded(ButtonRounded::Size(px(6.)))
@@ -979,7 +938,7 @@ fn render_tab_about(colors: UiColors) -> Div {
                     Button::new("about-repo-link-btn")
                         .secondary()
                         .outline()
-                        .icon(IconName::ExternalLink)
+                        .icon(control_icon(IconName::ExternalLink))
                         .label("sabisho/yomu")
                         .small()
                         .rounded(ButtonRounded::Size(px(6.)))

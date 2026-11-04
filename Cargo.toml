@@ -1,6 +1,6 @@
 [package]
 name = "yomu"
-version = "26.10.0"
+version = "26.11.0"
 edition = "2024"
 rust-version = "1.92"
 description = "A minimal, GPU-accelerated, Wayland-native manga reader with a library"

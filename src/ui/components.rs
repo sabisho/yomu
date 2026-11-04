@@ -55,6 +55,12 @@ pub const ICON_SIZE_LARGE: Pixels = px(20.);
 #[allow(dead_code)]
 pub const ICON_SIZE_EMPTY: Pixels = px(48.);
 
+/// Standard icon for buttons and controls, independent of the button's outer size.
+#[inline]
+pub fn control_icon(icon: impl Into<IconName>) -> Icon {
+    Icon::new(icon.into()).size(ICON_SIZE_STANDARD)
+}
+
 // ============================================================================
 // 3. Desktop Semantic Spacing Scale
 // ============================================================================

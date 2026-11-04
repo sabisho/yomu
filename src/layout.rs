@@ -108,10 +108,10 @@ pub enum FitMode {
 impl FitMode {
     pub fn label(self) -> &'static str {
         match self {
-            FitMode::Page => "fit page",
-            FitMode::Width => "fit width",
-            FitMode::Height => "fit height",
-            FitMode::Original => "original size",
+            FitMode::Page => "Fit Page",
+            FitMode::Width => "Fit Width",
+            FitMode::Height => "Fit Height",
+            FitMode::Original => "Original Size",
         }
     }
 

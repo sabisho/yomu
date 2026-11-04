@@ -18,7 +18,7 @@ use gpui_kit::{
 
 use super::components::{
     CONTROL_HEIGHT_TOOLBAR, ICON_SIZE_COMPACT, SPACE_SM, TOOLBAR_HEIGHT, button_radius,
-    toolbar_icon_button, with_alpha,
+    control_icon, toolbar_icon_button, with_alpha,
 };
 use super::theme::UiColors;
 use yomu::library::{SortBy, SortDirection};
@@ -267,7 +267,7 @@ pub fn render_main_toolbar(
                                                 Button::new("mode-groups")
                                                     .ghost()
                                                     .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
-                                                    .icon(IconName::Folder)
+                                                    .icon(control_icon(IconName::Folder))
                                                     .selected(props.is_group_series)
                                                     .tooltip("Groups view")
                                                     .accessibility_label("Groups view")
@@ -283,7 +283,7 @@ pub fn render_main_toolbar(
                                                 Button::new("mode-volumes")
                                                     .ghost()
                                                     .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
-                                                    .icon(IconName::BookOpen)
+                                                    .icon(control_icon(IconName::BookOpen))
                                                     .selected(!props.is_group_series)
                                                     .tooltip("Volumes view")
                                                     .accessibility_label("Volumes view")
@@ -330,7 +330,7 @@ pub fn render_main_toolbar(
                             this.child(
                                 div().debug_selector(|| "toolbar-sort".into()).child(
                                     Button::new("toolbar-sort")
-                                        .icon(IconName::ArrowUpDown)
+                                        .icon(control_icon(IconName::ArrowUpDown))
                                         .ghost()
                                         .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                         .rounded(ButtonRounded::Size(button_radius))

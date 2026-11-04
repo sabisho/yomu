@@ -8872,7 +8872,7 @@ dependencies = [
 
 [[package]]
 name = "yomu"
-version = "26.10.0"
+version = "26.11.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",

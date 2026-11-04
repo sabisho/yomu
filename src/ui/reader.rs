@@ -36,7 +36,8 @@ use yomu::{
 };
 
 use super::components::{
-    CONTROL_HEIGHT_TOOLBAR, SPACE_MD, SPACE_SM, TOOLBAR_HEIGHT, button_radius, pill, with_alpha,
+    CONTROL_HEIGHT_TOOLBAR, ICON_SIZE_LARGE, SPACE_MD, SPACE_SM, TOOLBAR_HEIGHT, button_radius,
+    control_icon, pill, with_alpha,
 };
 use super::theme::UiColors;
 
@@ -267,7 +268,7 @@ pub fn reader_header(
                         .child(
                             Button::new("reader-back-btn")
                                 .ghost()
-                                .icon(IconName::ArrowLeft)
+                                .icon(control_icon(IconName::ArrowLeft))
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .label("Library")
@@ -299,7 +300,7 @@ pub fn reader_header(
                             };
                             Button::new("reader-header-prev-btn")
                                 .ghost()
-                                .icon(IconName::ChevronLeft)
+                                .icon(control_icon(IconName::ChevronLeft))
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .tooltip(prev_tooltip)
@@ -317,7 +318,7 @@ pub fn reader_header(
                             };
                             Button::new("reader-header-next-btn")
                                 .ghost()
-                                .icon(IconName::ChevronRight)
+                                .icon(control_icon(IconName::ChevronRight))
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .tooltip(next_tooltip)
@@ -416,7 +417,7 @@ pub fn reader_header(
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .dropdown_caret(true)
-                                .tooltip("Display fit mode (Tab)")
+                                .tooltip("Fit mode (Tab)")
                                 .accessibility_label(format!("Fit mode: {}", fit_mode.label()))
                                 .label(fit_mode.label())
                                 .dropdown_menu_with_anchor(Anchor::TopRight, {
@@ -446,7 +447,7 @@ pub fn reader_header(
                         .child(
                             Button::new("reader-fullscreen-toggle")
                                 .ghost()
-                                .icon(IconName::Maximize)
+                                .icon(control_icon(IconName::Maximize))
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .tooltip("Toggle fullscreen (F11)")
@@ -477,7 +478,7 @@ pub fn lateral_turners(
     };
 
     let left_btn = Button::new("reader-prev-chevron")
-        .icon(IconName::ChevronLeft)
+        .icon(Icon::new(IconName::ChevronLeft).size(ICON_SIZE_LARGE))
         .with_size(ComponentSize::Size(px(40.)))
         .rounded(ButtonRounded::Size(radius))
         .secondary()
@@ -489,7 +490,7 @@ pub fn lateral_turners(
         });
 
     let right_btn = Button::new("reader-next-chevron")
-        .icon(IconName::ChevronRight)
+        .icon(Icon::new(IconName::ChevronRight).size(ICON_SIZE_LARGE))
         .with_size(ComponentSize::Size(px(40.)))
         .rounded(ButtonRounded::Size(radius))
         .secondary()
@@ -743,13 +744,13 @@ pub fn render_reader(
                 reader.fit.label(),
                 (reader.zoom * 100.0).round() as i32,
                 if reader.webcomics {
-                    "webcomics"
+                    "Webcomics"
                 } else if reader.continuous {
-                    "continuous"
+                    "Continuous"
                 } else if reader.is_double_page_active() {
-                    "double page"
+                    "Double Page"
                 } else {
-                    "single page"
+                    "Single Page"
                 }
             ),
             props.colors,
