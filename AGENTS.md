@@ -17,7 +17,7 @@ Yomu is a minimal, keyboard-first, high-performance desktop manga and comic read
   1. *Core Domain Layer (`src/lib.rs` and `src/*.rs`):* GUI-independent Rust combining pure algorithms (layout geometry, animation physics, Vim token parsing, search filtering, selection state machines) with filesystem and persistence operations (archive unpacking, SIMD image decoding, JSON storage). See [src/AGENTS.md](src/AGENTS.md).
   2. *UI Presentation Layer (`src/ui/`):* Reusable GPUI Kit views, components, dialogs, and overlays. See [src/ui/AGENTS.md](src/ui/AGENTS.md).
   3. *Application Orchestration (`src/app/` and `src/main.rs`):* Window lifecycle, state routing, async background scheduling, input dispatch, and persistence coordination. See [src/app/AGENTS.md](src/app/AGENTS.md).
-- **Test Baseline:** **378 active tests** passing (166 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 18 opt-in performance benchmarks; 396 total).
+- **Test Baseline:** **380 active tests** passing (168 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 16 opt-in performance benchmarks; 396 total).
 - **User-Owned Files:** `problems.md` is user-owned. **Never edit, modify, or delete it.**
 
 ---
@@ -159,6 +159,7 @@ Every agent must follow this exact sequence:
 - **Persistence Model:** `$XDG_DATA_HOME/yomu/library.json` (format version 3). Lenient Serde parsing with fallback defaults and automatic timestamped `.corrupt` backups.
 - **Safety Invariant:** Deleting books, folders, or collections from the UI **never** deletes comic files from user storage.
 - **Reading Order Invariant:** Archive entry indices are strictly zero-based and ordered physically. Reading direction (LTR vs RTL) alters only visual motion and navigation mapping, never archive indexing or caching logic.
+- **Global Allocator Policy:** Linux GNU targets use `tikv-jemallocator = "0.6.1"` (`cfg(all(target_os = "linux", target_env = "gnu"))`) to eliminate multi-threaded glibc arena memory retention and actively purge unused pages via `madvise(MADV_DONTNEED)`. Windows and macOS deliberately retain their platform-native system allocators. The global allocator is declared strictly once in `src/main.rs`. Never remove, duplicate, or unconditionally enable jemalloc on non-Linux platforms without explicit justification.
 
 ---
 
@@ -176,7 +177,7 @@ devenv shell cargo check --all-targets
 # 3. Strict Clippy lint check with warnings as errors
 devenv shell cargo clippy --all-targets --all-features -- -D warnings
 
-# 4. Full test suite across all targets (378 active tests)
+# 4. Full test suite across all targets (380 active tests)
 devenv shell cargo test --all-targets
 ```
 

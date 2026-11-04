@@ -1,0 +1,24 @@
+=== BEFORE malloc_trim(0) (timestamp: 1793771794) ===
+arena:    665538560 bytes (634 MiB) [non-mmap space allocated from system]
+ordblks:  507 [number of free chunks]
+smblks:   0 [number of fastbin blocks]
+hblks:    2 [number of mmapped regions]
+hblkhd:   2105344 bytes (2 MiB) [space in mmapped regions]
+usmblks:  0
+fsmblks:  0
+uordblks: 477073616 bytes (454 MiB) [total allocated/in-use space]
+fordblks: 188464944 bytes (179 MiB) [total free space]
+keepcost: 26535968 bytes (25 MiB) [top-most, releasable space]
+
+=== AFTER malloc_trim(0) (timestamp: 1793771794) ===
+arena:    639004672 bytes (609 MiB) [non-mmap space allocated from system]
+ordblks:  510 [number of free chunks]
+smblks:   0 [number of fastbin blocks]
+hblks:    2 [number of mmapped regions]
+hblkhd:   2105344 bytes (2 MiB) [space in mmapped regions]
+usmblks:  0
+fsmblks:  0
+uordblks: 468909472 bytes (447 MiB) [total allocated/in-use space]
+fordblks: 170095200 bytes (162 MiB) [total free space]
+keepcost: 2080 bytes (0 MiB) [top-most, releasable space]
+

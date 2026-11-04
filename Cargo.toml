@@ -34,6 +34,9 @@ zune-core = { version = "0.5", default-features = false, features = ["std"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 unrar = "0.5.8"
 
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+tikv-jemallocator = "0.6.1"
+
 [dev-dependencies]
 
 [profile.release]
@@ -68,6 +71,10 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.fast_image_resize]
 opt-level = 3
+[profile.dev.package.tikv-jemalloc-sys]
+opt-level = 2
+[profile.test.package.tikv-jemalloc-sys]
+opt-level = 2
 
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }

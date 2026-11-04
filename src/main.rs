@@ -2,6 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use std::{
     cell::RefCell,
     path::PathBuf,

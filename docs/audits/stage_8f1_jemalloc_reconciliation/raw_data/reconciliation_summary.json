@@ -1,0 +1,20 @@
+{
+  "stage_8e_diagnostic": {
+    "baseline_rss_mib": 191.51171875,
+    "after_open_rss_mib": 335.81640625,
+    "peak_reading_rss_mib": 412.04296875,
+    "post_close_30s_rss_mib": 406.6640625,
+    "post_close_60s_rss_mib": 406.6640625,
+    "peak_anon_mib": 282.42578125,
+    "post_close_60s_anon_mib": 277.046875
+  },
+  "stage_8f_production": {
+    "baseline_rss_mib": 184.96484375,
+    "after_open_rss_mib": 327.6640625,
+    "peak_reading_rss_mib": 430.25,
+    "post_close_30s_rss_mib": 427.69921875,
+    "post_close_60s_rss_mib": 427.69921875,
+    "peak_anon_mib": 300.53515625,
+    "post_close_60s_anon_mib": 297.984375
+  }
+}

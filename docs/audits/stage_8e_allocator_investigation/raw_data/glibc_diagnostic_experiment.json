@@ -1,0 +1,232 @@
+{
+  "baseline": {
+    "59d83f048000-7ffec22ce000 ---p 00000000 00": 0,
+    "Rss": 180576,
+    "Pss": 122616,
+    "Pss_Dirty": 49724,
+    "Pss_Anon": 49708,
+    "Pss_File": 72876,
+    "Pss_Shmem": 32,
+    "Shared_Clean": 73260,
+    "Shared_Dirty": 16,
+    "Private_Clean": 57584,
+    "Private_Dirty": 49716,
+    "Referenced": 180576,
+    "Anonymous": 49708,
+    "KSM": 0,
+    "LazyFree": 0,
+    "AnonHugePages": 0,
+    "ShmemPmdMapped": 0,
+    "FilePmdMapped": 0,
+    "Shared_Hugetlb": 0,
+    "Private_Hugetlb": 0,
+    "Swap": 0,
+    "SwapPss": 0,
+    "Locked": 0
+  },
+  "peak": {
+    "59d83f048000-7ffec22ce000 ---p 00000000 00": 0,
+    "Rss": 180576,
+    "Pss": 122617,
+    "Pss_Dirty": 49724,
+    "Pss_Anon": 49708,
+    "Pss_File": 72877,
+    "Pss_Shmem": 32,
+    "Shared_Clean": 73260,
+    "Shared_Dirty": 16,
+    "Private_Clean": 57584,
+    "Private_Dirty": 49716,
+    "Referenced": 180576,
+    "Anonymous": 49708,
+    "KSM": 0,
+    "LazyFree": 0,
+    "AnonHugePages": 0,
+    "ShmemPmdMapped": 0,
+    "FilePmdMapped": 0,
+    "Shared_Hugetlb": 0,
+    "Private_Hugetlb": 0,
+    "Swap": 0,
+    "SwapPss": 0,
+    "Locked": 0
+  },
+  "post_close": {
+    "59d83f048000-7ffec22ce000 ---p 00000000 00": 0,
+    "Rss": 814392,
+    "Pss": 756433,
+    "Pss_Dirty": 681940,
+    "Pss_Anon": 681924,
+    "Pss_File": 74477,
+    "Pss_Shmem": 32,
+    "Shared_Clean": 73260,
+    "Shared_Dirty": 16,
+    "Private_Clean": 59184,
+    "Private_Dirty": 681932,
+    "Referenced": 814392,
+    "Anonymous": 681924,
+    "KSM": 0,
+    "LazyFree": 0,
+    "AnonHugePages": 0,
+    "ShmemPmdMapped": 0,
+    "FilePmdMapped": 0,
+    "Shared_Hugetlb": 0,
+    "Private_Hugetlb": 0,
+    "Swap": 0,
+    "SwapPss": 0,
+    "Locked": 0
+  },
+  "after_trim": {
+    "59d83f048000-7ffec22ce000 ---p 00000000 00": 0,
+    "Rss": 790484,
+    "Pss": 732525,
+    "Pss_Dirty": 658032,
+    "Pss_Anon": 658016,
+    "Pss_File": 74477,
+    "Pss_Shmem": 32,
+    "Shared_Clean": 73260,
+    "Shared_Dirty": 16,
+    "Private_Clean": 59184,
+    "Private_Dirty": 658024,
+    "Referenced": 790484,
+    "Anonymous": 658016,
+    "KSM": 0,
+    "LazyFree": 0,
+    "AnonHugePages": 0,
+    "ShmemPmdMapped": 0,
+    "FilePmdMapped": 0,
+    "Shared_Hugetlb": 0,
+    "Private_Hugetlb": 0,
+    "Swap": 0,
+    "SwapPss": 0,
+    "Locked": 0
+  },
+  "arenas_peak": [
+    {
+      "addr": "718214021000-718218000000",
+      "perms": "---p",
+      "size_kb": 65404,
+      "rss_kb": 0,
+      "pss_kb": 0,
+      "anon_kb": 0
+    },
+    {
+      "addr": "71821c290000-718220000000",
+      "perms": "---p",
+      "size_kb": 62912,
+      "rss_kb": 0,
+      "pss_kb": 0,
+      "anon_kb": 0
+    },
+    {
+      "addr": "71822029b000-718224000000",
+      "perms": "---p",
+      "size_kb": 62868,
+      "rss_kb": 0,
+      "pss_kb": 0,
+      "anon_kb": 0
+    },
+    {
+      "addr": "718224021000-718228000000",
+      "perms": "---p",
+      "size_kb": 65404,
+      "rss_kb": 0,
+      "pss_kb": 0,
+      "anon_kb": 0
+    },
+    {
+      "addr": "7182282a3000-71822c000000",
+      "perms": "---p",
+      "size_kb": 62836,
+      "rss_kb": 0,
+      "pss_kb": 0,
+      "anon_kb": 0
+    },
+    {
+      "addr": "71822c2a9000-718230000000",
+      "perms": "---p",
+      "size_kb": 62812,
+      "rss_kb": 0,
+      "pss_kb": 0,
+      "anon_kb": 0
+    },
+    {
+      "addr": "718230021000-718234000000",
+      "perms": "---p",
+      "size_kb": 65404,
+      "rss_kb": 0,
+      "pss_kb": 0,
+      "anon_kb": 0
+    }
+  ],
+  "arenas_post_close": [
+    {
+      "addr": "718214000000-718217be0000",
+      "perms": "rw-p",
+      "size_kb": 61312,
+      "rss_kb": 61300,
+      "pss_kb": 61300,
+      "anon_kb": 61300
+    },
+    {
+      "addr": "71821c000000-71821fd7a000",
+      "perms": "rw-p",
+      "size_kb": 62952,
+      "rss_kb": 62948,
+      "pss_kb": 62948,
+      "anon_kb": 62948
+    },
+    {
+      "addr": "718224000000-718227e3a000",
+      "perms": "rw-p",
+      "size_kb": 63720,
+      "rss_kb": 62500,
+      "pss_kb": 62500,
+      "anon_kb": 62500
+    },
+    {
+      "addr": "718228000000-71822bd8c000",
+      "perms": "rw-p",
+      "size_kb": 63024,
+      "rss_kb": 63016,
+      "pss_kb": 63016,
+      "anon_kb": 63016
+    }
+  ],
+  "arenas_after_trim": [
+    {
+      "addr": "718214000000-718217be0000",
+      "perms": "rw-p",
+      "size_kb": 61312,
+      "rss_kb": 58460,
+      "pss_kb": 58460,
+      "anon_kb": 58460
+    },
+    {
+      "addr": "71821c000000-71821fd7a000",
+      "perms": "rw-p",
+      "size_kb": 62952,
+      "rss_kb": 60532,
+      "pss_kb": 60532,
+      "anon_kb": 60532
+    },
+    {
+      "addr": "718224000000-718227e3a000",
+      "perms": "rw-p",
+      "size_kb": 63720,
+      "rss_kb": 60220,
+      "pss_kb": 60220,
+      "anon_kb": 60220
+    },
+    {
+      "addr": "718228000000-71822bd8c000",
+      "perms": "rw-p",
+      "size_kb": 63024,
+      "rss_kb": 61772,
+      "pss_kb": 61772,
+      "anon_kb": 61772
+    }
+  ],
+  "reclaimed_rss_mib": 23.34765625,
+  "reclaimed_pss_mib": 23.34765625,
+  "reclaimed_anon_mib": 23.34765625,
+  "reclaimed_dirty_mib": 23.34765625
+}

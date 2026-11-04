@@ -6,6 +6,10 @@ devenv.local.nix
 devenv.local.yaml
 .pre-commit-config.yaml
 
+__pycache__/
+*.pyc
+*.so
+
 # Verification and runtime screenshots
 /Screenshots/*
 !/Screenshots/Before-UI-Redisign.jpg

@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **378 active tests** passing (166 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 18 opt-in performance benchmarks; 396 total).
+- **Test Baseline:** **380 active tests** passing (168 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 16 opt-in performance benchmarks; 396 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `devenv shell cargo check --all-targets` and `devenv shell cargo clippy --all-targets --all-features -- -D warnings`, fully formatted under `devenv shell cargo fmt --all -- --check`.
 
 ---
@@ -144,6 +144,29 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **8 Dedicated Unit Tests Added:** Added tests covering first-time file creation, existing file replacement, mock transient retry success, retry exhaustion, permanent error fast-abort, and stale temporary file cleanup (378 active tests).
 - **Comprehensive Technical Report:** Authored [`docs/audits/PRE_RELEASE_HARDENING_STAGE_8B.md`](audits/PRE_RELEASE_HARDENING_STAGE_8B.md).
 
+### Phase 17: Stage 8D Comprehensive Memory Retention & Leak Investigation (Completed)
+- **Application Heap Leak Disproven:** Evaluated live application memory lifecycle with Valgrind DHAT dynamic heap profiling. Verified that upon reader closure, total live heap allocations across the entire application were only 3.43 MiB (dominated by GPUI font glyph caches and UI render scratchpads), with zero bytes of decoded images or decompressed page buffers remaining.
+- **glibc Allocator Arena Retention Identified:** Smaps analysis revealed that elevated RSS post-reader was held in seven 64 MiB (`0x4000000`-aligned) secondary thread arenas managed by glibc's `ptmalloc3` allocator, which failed to unmap or release free subheaps back to the OS.
+- **Comprehensive Technical Report:** Authored [`docs/audits/MEMORY_RETENTION_INVESTIGATION_STAGE_8D.md`](audits/MEMORY_RETENTION_INVESTIGATION_STAGE_8D.md).
+
+### Phase 18: Stage 8E Allocator Diagnosis & Comparative Benchmarking (Completed)
+- **glibc Trimming Inefficiency Proven:** Built dynamic diagnostic helper (`diag_glibc_helper.so`) intercepting `SIGUSR1`. Proved that while `malloc_trim(0)` in glibc 2.44 reclaimed 25.3 MiB from Arena 0 (main `sbrk`), it reclaimed exactly 0 bytes from secondary arenas (Arenas 1–7) because tiny residual allocations pinned the subheap boundaries.
+- **Three-Way Allocator Benchmark Matrix (Tests A–G):** Compared `glibc 2.44`, `tikv-jemallocator 0.6.1`, and `mimalloc 0.1.52` across real Wayland GUI sessions. Jemalloc demonstrated a 44% lower peak RSS (359.8M vs 640.4M), 46% lower post-close retention (344.5M vs 640.5M), zero memory creep across repeated cycles, and the fastest average page turn latency (162.7 ms).
+- **Comprehensive Technical Report:** Authored [`docs/audits/ALLOCATOR_DIAGNOSIS_AND_COMPARISON_STAGE_8E.md`](audits/ALLOCATOR_DIAGNOSIS_AND_COMPARISON_STAGE_8E.md).
+
+### Phase 19: Stage 8F Production Jemalloc Integration & Memory Remediation (Completed)
+- **Target-Specific Global Allocator Integration:** Configured `tikv-jemallocator = "0.6.1"` strictly for Linux GNU targets (`cfg(all(target_os = "linux", target_env = "gnu"))`) in `Cargo.toml` and `src/main.rs`. Windows and macOS deliberately retain their platform-native system allocators.
+- **NixOS Build Fortification Fix:** Configured `[profile.dev.package.tikv-jemalloc-sys]` and `[profile.test.package.tikv-jemalloc-sys]` with `opt-level = 2` to satisfy NixOS's `-D_FORTIFY_SOURCE` requirement across all profiles without modifying Nix packages or linker wrappers.
+- **Native Symbol & Allocator Coverage Verification:** Verified embedded `_rjem_` symbols and `madvise(MADV_DONTNEED)` purge handling. Verified that 100% of Rust heap allocations (page vectors, SIMD resampler buffers, cover caches, GPUI views) route through jemalloc.
+- **Production Wayland Benchmark Verification (Tests A–G):** Peak reading RSS dropped from 640.4 MiB to 484.9 MiB (-155.5 MiB / -24.3%); 300s post-close retention dropped from 640.5 MiB to 473.5 MiB (-167.0 MiB / -26.1%); direct switch memory dropped from 559.0 MiB to 423.5 MiB (-135.5 MiB / -24.2%); average page navigation latency remained identical at 164.6 ms (zero regression). All 380 active tests pass.
+- **Comprehensive Technical Report:** Authored [`docs/audits/PRODUCTION_JEMALLOC_INTEGRATION_STAGE_8F.md`](audits/PRODUCTION_JEMALLOC_INTEGRATION_STAGE_8F.md).
+
+### Phase 20: Stage 8F.1 Jemalloc Benchmark Reconciliation & Memory Stability Verification (Completed)
+- **Stage 8E vs 8F Discrepancy Reconciled:** Side-by-side evaluation of the Stage 8E diagnostic binary (`yomu-jemalloc`) vs Stage 8F production binary (`target/release/yomu`) under identical clean-state conditions revealed virtually identical memory footprints (Peak: 412.0M vs 430.2M; Post-Close: 406.7M vs 427.7M). Proved that prior ~125 MiB variance was an artifact of test harness sequencing in Stage 8E and reading window sampling timing.
+- **Extended 15-Cycle Memory Plateau Proven:** Conducted a 15-cycle consecutive reader soak test. Post-close RSS fluctuated strictly within a 395–445 MiB envelope with an average of 419.0 MiB. Cycle 15 closed RSS was 413.0 MiB (23.7 MiB lower than Cycle 1). Settled at 412.9 MiB across a 180s extended post-soak idle window, conclusively proving zero unbounded memory growth.
+- **High-Sample Latency Profiling:** Evaluated 30 page-turn events, measuring Mean: 167.0 ms, Median: 165.8 ms, P95: 176.2 ms, P99: 177.7 ms with standard deviation <5 ms.
+- **Comprehensive Technical Report:** Authored [`docs/audits/JEMALLOC_RECONCILIATION_STAGE_8F1.md`](audits/JEMALLOC_RECONCILIATION_STAGE_8F1.md).
+
 ---
 
 ## 3. Active Known Limitations & Technical Debt
@@ -195,5 +218,5 @@ devenv shell cargo audit
 When completing a task, provide a concise, factual report:
 1. Exact files modified, created, or deleted.
 2. Architectural responsibilities changed.
-3. Exact command exit codes and test counts (378 active tests).
+3. Exact command exit codes and test counts (380 active tests).
 4. Status of manual visual checks (explicitly report Wayland appearance as UNVERIFIED if tested headlessly).
