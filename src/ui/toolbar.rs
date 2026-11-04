@@ -81,10 +81,12 @@ pub fn render_main_toolbar(
         } else {
             colors.border.opacity(0.0)
         })
-        // Left: Sidebar toggle + Back navigation + View title / count
+        // The three equal-width regions keep search centered in the main pane.
         .child(
             div()
                 .flex()
+                .flex_1()
+                .min_w_0()
                 .items_center()
                 .gap(SPACE_SM)
                 .child(toolbar_icon_button(
@@ -123,12 +125,11 @@ pub fn render_main_toolbar(
                     )
                 }),
         )
-        // Center: Search input (adaptive, flexible, centered in available space)
+        // Center: Search input, responsive up to the preferred reading width.
         .child(
             div()
                 .flex_1()
-                .min_w(px(140.))
-                .mx_3()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -138,8 +139,7 @@ pub fn render_main_toolbar(
                             div()
                                 .w_full()
                                 .max_w(px(400.))
-                                .min_w(px(140.))
-                                .flex_shrink_0()
+                                .min_w_0()
                                 .rounded(props.radius)
                                 .border_1()
                                 .border_color(colors.border)
@@ -171,7 +171,10 @@ pub fn render_main_toolbar(
         .child(
             div()
                 .flex()
+                .flex_1()
+                .min_w_0()
                 .items_center()
+                .justify_end()
                 .gap(SPACE_SM)
                 .when(props.selection_count > 0, |this| {
                     let on_select_all = props.on_select_all.clone();

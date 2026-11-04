@@ -62,7 +62,7 @@ pub fn render_sidebar(
     Sidebar::new("app-sidebar")
         .side(Side::Left)
         .w(px(240.))
-        .collapsible(SidebarCollapsible::Icon)
+        .collapsible(SidebarCollapsible::Offcanvas)
         .collapsed(props.collapsed)
         .header(
             h_flex()
