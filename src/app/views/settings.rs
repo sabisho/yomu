@@ -195,9 +195,8 @@ impl Yomu {
         );
 
         div()
-            .w(px(840.))
-            .h(px(520.))
-            .size_full()
+            .w(px(838.))
+            .h(px(518.))
             .overflow_hidden()
             .child(view)
             .into_any_element()

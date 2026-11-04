@@ -389,9 +389,7 @@ impl Yomu {
             ui::components::list_row_height(thumb_size)
         };
         let row_slot_h = row_height + gap;
-        let content_w = (f32::from(window.viewport_size().width)
-            - if !sidebar_collapsed { 240.0 } else { 0.0 })
-        .max(200.0);
+        let content_w = grid.content_w;
 
         let mutation_seq = self.library.mutation_seq();
         let save_seq = self.save_seq;

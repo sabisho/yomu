@@ -13,8 +13,8 @@ use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{Icon, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, ClickEvent, Context, ElementId, FontWeight, InteractiveElement, ObjectFit, Pixels,
-    SharedString, Styled, Window, div, img, px, relative,
+    AnyElement, ClickEvent, Context, Div, ElementId, FontWeight, Hsla, InteractiveElement,
+    ObjectFit, Pixels, SharedString, Styled, Window, div, img, px, relative,
 };
 
 use crate::library::{Book, SortBy, SortDirection, ThumbnailSize};
@@ -39,6 +39,34 @@ pub fn book_format_label(book: &Book) -> &'static str {
     } else {
         "ARC"
     }
+}
+
+fn library_grid_card(
+    id: impl Into<ElementId>,
+    card_w: f32,
+    radius: Pixels,
+    border_px: f32,
+    is_selected: bool,
+    background: Hsla,
+    border_color: Hsla,
+) -> gpui_kit::Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(card_w))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .rounded(radius)
+        .bg(background)
+        .border(px(if is_selected {
+            border_px.max(1.5)
+        } else if border_px > 0.0 {
+            border_px
+        } else {
+            0.0
+        }))
+        .border_color(border_color)
+        .overflow_hidden()
 }
 
 /// The selection state of a group or series folder card, derived from its member volumes.
@@ -365,183 +393,179 @@ pub fn render_book_card(
     };
     let format_label = book_format_label(book);
 
-    div()
-        .id((ElementId::from("manga-item"), book.id.as_str()))
-        .w(px(card_w))
-        .flex_none()
-        .flex()
-        .flex_col()
-        .rounded(radius)
-        .bg(if is_selected {
-            with_alpha(colors.accent, 0.12)
+    library_grid_card(
+        (ElementId::from("manga-item"), book.id.as_str()),
+        card_w,
+        radius,
+        border_px,
+        is_selected,
+        if is_selected {
+            with_alpha(colors.accent, 0.12).into()
         } else {
-            with_alpha(colors.surface, 0.85)
-        })
-        .when(border_px > 0.0 || is_selected, |s| {
-            let w = if is_selected {
-                border_px.max(1.5)
-            } else {
-                border_px
-            };
-            s.border(px(w)).border_color(if is_selected {
-                colors.accent
-            } else {
-                colors.border
-            })
-        })
-        .overflow_hidden()
-        .cursor_pointer()
-        .hover(|s| s.border_color(colors.accent).shadow_md().bg(colors.surface))
-        .on_click(on_click)
-        .context_menu(context_menu)
-        .child(
-            div()
-                .id((ElementId::from("manga-cover"), book.id.as_str()))
-                .relative()
-                .w_full()
-                .h(px(cover_h))
-                .rounded_t(inner_radius)
-                .bg(with_alpha(colors.foreground, 0.04))
-                .overflow_hidden()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    img(props.cover_path)
-                        .size_full()
-                        .object_fit(ObjectFit::Cover)
-                        .rounded_t(inner_radius),
-                )
-                // 1. Format tag overlay (top-left of cover)
-                .child(
-                    div()
-                        .absolute()
-                        .top_2()
-                        .left_2()
-                        .px_1p5()
-                        .py(px(1.))
-                        .rounded(px(4.))
-                        .bg(with_alpha(colors.background, 0.8))
-                        .border_1()
-                        .border_color(with_alpha(colors.border, 0.6))
-                        .text_color(colors.muted)
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .child(format_label),
-                )
-                // 2. Selection indicator (top-right of cover)
-                .children(is_selected.then(|| {
-                    div()
-                        .absolute()
-                        .top_2()
-                        .right_2()
-                        .size(px(20.))
-                        .rounded(px(4.))
-                        .bg(colors.accent)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            Icon::new(IconName::Check)
-                                .size(px(12.))
-                                .text_color(colors.accent_foreground),
-                        )
-                }))
-                // 3. Selection tint over cover
-                .children(is_selected.then(|| {
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .bg(with_alpha(colors.accent, 0.15))
-                }))
-                // 4. In-progress bottom accent bar & page indicator pill on cover
-                .children((book.opened && total > 0).then(|| {
-                    div()
-                        .absolute()
-                        .bottom_0()
-                        .left_0()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div().w_full().flex().justify_end().p_1p5().child(
-                                div()
-                                    .px_1p5()
-                                    .py(px(1.))
-                                    .rounded(px(4.))
-                                    .bg(with_alpha(colors.background, 0.85))
-                                    .text_color(colors.foreground)
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(format!("{current}/{total}")),
-                            ),
-                        )
-                        .child(
+            with_alpha(colors.surface, 0.85).into()
+        },
+        if is_selected {
+            colors.accent
+        } else {
+            colors.border
+        },
+    )
+    .cursor_pointer()
+    .hover(|this| {
+        this.border_color(colors.accent)
+            .shadow_md()
+            .bg(colors.surface)
+    })
+    .on_click(on_click)
+    .context_menu(context_menu)
+    .child(
+        div()
+            .id((ElementId::from("manga-cover"), book.id.as_str()))
+            .relative()
+            .w_full()
+            .h(px(cover_h))
+            .rounded_t(inner_radius)
+            .bg(with_alpha(colors.foreground, 0.04))
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                img(props.cover_path)
+                    .size_full()
+                    .object_fit(ObjectFit::Cover)
+                    .rounded_t(inner_radius),
+            )
+            // 1. Format tag overlay (top-left of cover)
+            .child(
+                div()
+                    .absolute()
+                    .top_2()
+                    .left_2()
+                    .px_1p5()
+                    .py(px(1.))
+                    .rounded(px(4.))
+                    .bg(with_alpha(colors.background, 0.8))
+                    .border_1()
+                    .border_color(with_alpha(colors.border, 0.6))
+                    .text_color(colors.muted)
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .child(format_label),
+            )
+            // 2. Selection indicator (top-right of cover)
+            .children(is_selected.then(|| {
+                div()
+                    .absolute()
+                    .top_2()
+                    .right_2()
+                    .size(px(20.))
+                    .rounded(px(4.))
+                    .bg(colors.accent)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::new(IconName::Check)
+                            .size(px(12.))
+                            .text_color(colors.accent_foreground),
+                    )
+            }))
+            // 3. Selection tint over cover
+            .children(is_selected.then(|| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .bg(with_alpha(colors.accent, 0.15))
+            }))
+            // 4. In-progress bottom accent bar & page indicator pill on cover
+            .children((book.opened && total > 0).then(|| {
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div().w_full().flex().justify_end().p_1p5().child(
                             div()
-                                .w_full()
-                                .h(px(3.))
-                                .bg(with_alpha(colors.background, 0.5))
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .w(relative(progress.clamp(0.0, 1.0)))
-                                        .bg(colors.accent),
-                                ),
-                        )
-                })),
-        )
-        .child(
-            div()
-                .p_3()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.foreground)
-                        .truncate()
-                        .child(book.title.clone()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(div().text_xs().text_color(colors.muted).truncate().child(
-                            if let Some(series) = book.series.as_deref() {
-                                format!("{series} · {total} pages")
-                            } else if book.opened {
-                                format!("Ch. {current} of {total}")
-                            } else {
-                                format!("{total} pages")
-                            },
-                        ))
-                        .children(book.opened.then(|| {
-                            div()
+                                .px_1p5()
+                                .py(px(1.))
+                                .rounded(px(4.))
+                                .bg(with_alpha(colors.background, 0.85))
+                                .text_color(colors.foreground)
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(colors.accent)
-                                .child(format!("{:.0}%", progress * 100.0))
-                        })),
-                )
-                .children(book.opened.then(|| {
-                    div().w_full().pt_1().child(
-                        Progress::new(ElementId::from(SharedString::from(format!(
-                            "card-prog-{}",
-                            book.id
-                        ))))
-                        .value(progress * 100.0)
-                        .h(px(3.))
-                        .rounded(radius),
+                                .child(format!("{current}/{total}")),
+                        ),
                     )
-                })),
-        )
-        .into_any_element()
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(3.))
+                            .bg(with_alpha(colors.background, 0.5))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(relative(progress.clamp(0.0, 1.0)))
+                                    .bg(colors.accent),
+                            ),
+                    )
+            })),
+    )
+    .child(
+        div()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(colors.foreground)
+                    .truncate()
+                    .child(book.title.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(div().text_xs().text_color(colors.muted).truncate().child(
+                        if let Some(series) = book.series.as_deref() {
+                            format!("{series} · {total} pages")
+                        } else if book.opened {
+                            format!("Ch. {current} of {total}")
+                        } else {
+                            format!("{total} pages")
+                        },
+                    ))
+                    .children(book.opened.then(|| {
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(colors.accent)
+                            .child(format!("{:.0}%", progress * 100.0))
+                    })),
+            )
+            .children(book.opened.then(|| {
+                div().w_full().pt_1().child(
+                    Progress::new(ElementId::from(SharedString::from(format!(
+                        "card-prog-{}",
+                        book.id
+                    ))))
+                    .value(progress * 100.0)
+                    .h(px(3.))
+                    .rounded(radius),
+                )
+            })),
+    )
+    .into_any_element()
 }
 
 /// Renders a single book list row.
@@ -732,168 +756,164 @@ pub fn render_folder_card(
     let inner_radius = (radius - px(border_px)).max(px(0.));
     let is_selected = selection_state != GroupSelectionState::Unselected;
 
-    div()
-        .id((ElementId::from("folder"), group_key))
-        .w(px(card_w))
-        .flex_none()
-        .flex()
-        .flex_col()
-        .rounded(radius)
-        .bg(match selection_state {
-            GroupSelectionState::FullySelected => with_alpha(colors.accent, 0.12),
-            GroupSelectionState::PartiallySelected => with_alpha(colors.accent, 0.08),
-            GroupSelectionState::Unselected => with_alpha(colors.surface, 0.85),
-        })
-        .when(border_px > 0.0 || is_selected, |s| {
-            let w = if is_selected {
-                border_px.max(1.5)
-            } else {
-                border_px
-            };
-            s.border(px(w)).border_color(if is_selected {
-                colors.accent
-            } else {
-                colors.border
-            })
-        })
-        .overflow_hidden()
-        .cursor_pointer()
-        .hover(|s| s.border_color(colors.accent).shadow_md().bg(colors.surface))
-        .on_click(on_click)
-        .context_menu(context_menu)
-        // Cover container
-        .child(
-            div()
-                .relative()
-                .w_full()
-                .h(px(cover_h))
-                .rounded_t(inner_radius)
-                .bg(with_alpha(colors.foreground, 0.04))
-                .overflow_hidden()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    img(cover_path)
+    library_grid_card(
+        (ElementId::from("folder"), group_key),
+        card_w,
+        radius,
+        border_px,
+        is_selected,
+        match selection_state {
+            GroupSelectionState::FullySelected => with_alpha(colors.accent, 0.12).into(),
+            GroupSelectionState::PartiallySelected => with_alpha(colors.accent, 0.08).into(),
+            GroupSelectionState::Unselected => with_alpha(colors.surface, 0.85).into(),
+        },
+        if is_selected {
+            colors.accent
+        } else {
+            colors.border
+        },
+    )
+    .cursor_pointer()
+    .hover(|this| {
+        this.border_color(colors.accent)
+            .shadow_md()
+            .bg(colors.surface)
+    })
+    .on_click(on_click)
+    .context_menu(context_menu)
+    // Cover container
+    .child(
+        div()
+            .relative()
+            .w_full()
+            .h(px(cover_h))
+            .rounded_t(inner_radius)
+            .bg(with_alpha(colors.foreground, 0.04))
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                img(cover_path)
+                    .size_full()
+                    .rounded_t(inner_radius)
+                    .object_fit(ObjectFit::Cover),
+            )
+            // Selection tint over cover
+            .children(match selection_state {
+                GroupSelectionState::FullySelected => Some(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
                         .size_full()
-                        .rounded_t(inner_radius)
-                        .object_fit(ObjectFit::Cover),
-                )
-                // Selection tint over cover
-                .children(match selection_state {
-                    GroupSelectionState::FullySelected => Some(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full()
-                            .bg(with_alpha(colors.accent, 0.15)),
-                    ),
-                    GroupSelectionState::PartiallySelected => Some(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full()
-                            .bg(with_alpha(colors.accent, 0.08)),
-                    ),
-                    GroupSelectionState::Unselected => None,
-                })
-                // Top-left folder badge
-                .child(
+                        .bg(with_alpha(colors.accent, 0.15)),
+                ),
+                GroupSelectionState::PartiallySelected => Some(
                     div()
                         .absolute()
-                        .top_2()
-                        .left_2()
-                        .px_2()
-                        .py(px(1.5))
-                        .rounded(px(4.))
-                        .bg(with_alpha(colors.background, 0.8))
-                        .border_1()
-                        .border_color(with_alpha(colors.border, 0.6))
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            Icon::new(IconName::Folder)
-                                .size(px(12.))
-                                .text_color(colors.accent),
-                        )
-                        .child(
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .bg(with_alpha(colors.accent, 0.08)),
+                ),
+                GroupSelectionState::Unselected => None,
+            })
+            // Top-left folder badge
+            .child(
+                div()
+                    .absolute()
+                    .top_2()
+                    .left_2()
+                    .px_2()
+                    .py(px(1.5))
+                    .rounded(px(4.))
+                    .bg(with_alpha(colors.background, 0.8))
+                    .border_1()
+                    .border_color(with_alpha(colors.border, 0.6))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .size(px(12.))
+                            .text_color(colors.accent),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(colors.foreground)
+                            .child("SERIES"),
+                    ),
+            )
+            // Top-right volume count badge + selection indicator
+            .child(
+                div()
+                    .absolute()
+                    .top_2()
+                    .right_2()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(stat_badge(count, false, colors, radius))
+                    .children(match selection_state {
+                        GroupSelectionState::FullySelected => Some(
                             div()
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(colors.foreground)
-                                .child("SERIES"),
+                                .size(px(20.))
+                                .rounded(px(4.))
+                                .bg(colors.accent)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    Icon::new(IconName::Check)
+                                        .size(px(12.))
+                                        .text_color(colors.accent_foreground),
+                                ),
                         ),
-                )
-                // Top-right volume count badge + selection indicator
-                .child(
-                    div()
-                        .absolute()
-                        .top_2()
-                        .right_2()
-                        .flex()
-                        .items_center()
-                        .gap_1p5()
-                        .child(stat_badge(count, false, colors, radius))
-                        .children(match selection_state {
-                            GroupSelectionState::FullySelected => Some(
-                                div()
-                                    .size(px(20.))
-                                    .rounded(px(4.))
-                                    .bg(colors.accent)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        Icon::new(IconName::Check)
-                                            .size(px(12.))
-                                            .text_color(colors.accent_foreground),
-                                    ),
-                            ),
-                            GroupSelectionState::PartiallySelected => Some(
-                                div()
-                                    .size(px(20.))
-                                    .rounded(px(4.))
-                                    .bg(colors.accent)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        Icon::new(IconName::Minus)
-                                            .size(px(12.))
-                                            .text_color(colors.accent_foreground),
-                                    ),
-                            ),
-                            GroupSelectionState::Unselected => None,
-                        }),
-                ),
-        )
-        // Metadata container below cover
-        .child(
-            div()
-                .p_3()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(colors.foreground)
-                        .truncate()
-                        .child(group_name.to_string()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(colors.muted)
-                        .truncate()
-                        .child(format!("{count} volumes · Series")),
-                ),
-        )
-        .into_any_element()
+                        GroupSelectionState::PartiallySelected => Some(
+                            div()
+                                .size(px(20.))
+                                .rounded(px(4.))
+                                .bg(colors.accent)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    Icon::new(IconName::Minus)
+                                        .size(px(12.))
+                                        .text_color(colors.accent_foreground),
+                                ),
+                        ),
+                        GroupSelectionState::Unselected => None,
+                    }),
+            ),
+    )
+    // Metadata container below cover
+    .child(
+        div()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(colors.foreground)
+                    .truncate()
+                    .child(group_name.to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted)
+                    .truncate()
+                    .child(format!("{count} volumes · Series")),
+            ),
+    )
+    .into_any_element()
 }
 
 /// Renders a series or directory folder list row.

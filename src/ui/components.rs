@@ -179,6 +179,7 @@ pub fn segmented_button(
 
 #[derive(Clone, Copy, Debug)]
 pub struct ResponsiveGrid {
+    pub content_w: f32,
     #[allow(dead_code)]
     pub cols: usize,
     pub card_w: f32,
@@ -205,7 +206,7 @@ pub fn compute_responsive_grid(
     sidebar_visible: bool,
     thumb_size: ThumbnailSize,
 ) -> ResponsiveGrid {
-    let sidebar_w = if sidebar_visible { 240.0 } else { 48.0 };
+    let sidebar_w = if sidebar_visible { 240.0 } else { 0.0 };
     let content_w = (viewport_width - sidebar_w).max(200.0);
 
     let base_card_w = thumb_size.card_width();
@@ -225,6 +226,7 @@ pub fn compute_responsive_grid(
     let cover_h = (card_w * aspect_ratio).round();
 
     ResponsiveGrid {
+        content_w,
         cols,
         card_w,
         cover_h,

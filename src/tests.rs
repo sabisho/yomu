@@ -3788,6 +3788,50 @@ fn test_shortcuts_tab_adapts_to_vim_mode(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn settings_reader_and_shortcuts_tabs_scroll_inside_the_dialog(cx: &mut TestAppContext) {
+    let fx = fixture("settings-scroll-bounds");
+    let (view, cx) = launch(&fx, cx);
+    cx.simulate_keystrokes("ctrl-,");
+
+    let dialog_bounds = cx
+        .debug_bounds("dialog-0")
+        .expect("Settings dialog should be mounted");
+
+    for tab in [
+        ui::overlays::SettingsTab::Reader,
+        ui::overlays::SettingsTab::Shortcuts,
+    ] {
+        view.update_in(cx, |this, _, cx| {
+            this.settings_tab = tab;
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let scroll = view.read_with(cx, |this, _| this.settings_scroll.clone());
+        let viewport = scroll.bounds();
+        assert!(
+            scroll.max_offset().y > gpui_kit::px(0.0),
+            "{tab:?} tab should scroll within the dialog"
+        );
+        let rendered_viewport = scroll.bounds();
+        assert_eq!(
+            rendered_viewport, viewport,
+            "{tab:?} viewport should remain fixed inside the dialog"
+        );
+        assert!(
+            rendered_viewport.origin.y + rendered_viewport.size.height
+                <= dialog_bounds.origin.y + dialog_bounds.size.height,
+            "{tab:?} scroll viewport {rendered_viewport:?} should stay inside dialog {dialog_bounds:?}"
+        );
+        assert!(
+            rendered_viewport.origin.x + rendered_viewport.size.width
+                <= dialog_bounds.origin.x + dialog_bounds.size.width,
+            "{tab:?} scroll viewport {rendered_viewport:?} should stay inside dialog {dialog_bounds:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn test_volume_count_badge_is_numeric_only(cx: &mut TestAppContext) {
     let fx = fixture("badge");
     let (view, cx) = launch(&fx, cx);
@@ -4179,7 +4223,7 @@ fn test_fixed_library_card_dimensions_and_responsive_columns(_cx: &mut TestAppCo
         "columns must increase with width"
     );
 
-    // 3. Wide window (e.g. 1920px) with collapsed sidebar (48px)
+    // 3. Wide window (e.g. 1920px) with the off-canvas sidebar collapsed
     let grid_wide = ui::components::compute_responsive_grid(1920.0, false, thumb_size);
     assert!(
         (grid_wide.card_w - expected_card_w).abs() < 40.0,
@@ -6902,8 +6946,12 @@ fn test_responsive_grid_distribution_no_dead_space(cx: &mut TestAppContext) {
             assert!(grid.card_w >= 140.0);
 
             // Total width filled by cards + gaps + padding equals the available content width
-            let sidebar_w = if sidebar_visible { 240.0 } else { 48.0 };
+            let sidebar_w = if sidebar_visible { 240.0 } else { 0.0 };
             let content_w = (viewport_w - sidebar_w).max(200.0);
+            assert!(
+                (grid.content_w - content_w).abs() < 1.0,
+                "Grid row width must account for the expanded or collapsed sidebar"
+            );
             let total_filled = grid.cols as f32 * grid.card_w
                 + (grid.cols - 1) as f32 * grid.gap
                 + 2.0 * grid.pad_x;
@@ -9383,8 +9431,12 @@ fn test_responsive_grid_space_utilization_and_padding(cx: &mut TestAppContext) {
                 "Gap must remain consistent"
             );
 
-            let sidebar_w = if sidebar_visible { 240.0 } else { 48.0 };
+            let sidebar_w = if sidebar_visible { 240.0 } else { 0.0 };
             let content_w = (viewport_w - sidebar_w).max(200.0);
+            assert!(
+                (grid.content_w - content_w).abs() < 1.0,
+                "Grid row width must account for the expanded or collapsed sidebar"
+            );
             let total_filled = grid.cols as f32 * grid.card_w
                 + (grid.cols - 1) as f32 * grid.gap
                 + 2.0 * grid.pad_x;
