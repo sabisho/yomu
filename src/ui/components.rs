@@ -137,12 +137,14 @@ pub fn toolbar_icon_button(
     app_radius: Pixels,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
+    let tooltip: SharedString = tooltip.into();
     let radius = button_radius(app_radius, CONTROL_HEIGHT_TOOLBAR);
     Button::new(id)
         .ghost()
         .size(CONTROL_HEIGHT_TOOLBAR)
         .rounded(ButtonRounded::Size(radius))
-        .tooltip(tooltip)
+        .tooltip(tooltip.clone())
+        .accessibility_label(tooltip)
         .icon(Icon::new(icon).size(px(16.)))
         .on_click(on_click)
 }
@@ -157,11 +159,13 @@ pub fn segmented_button(
     inner_radius: Pixels,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
+    let tooltip: SharedString = tooltip.into();
     Button::new(id)
         .ghost()
         .with_size(Size::Size(CONTROL_HEIGHT_SEGMENT))
         .rounded(ButtonRounded::Size(inner_radius))
-        .tooltip(tooltip)
+        .tooltip(tooltip.clone())
+        .accessibility_label(tooltip)
         .selected(selected)
         .icon(icon)
         .on_click(on_click)

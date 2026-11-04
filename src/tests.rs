@@ -486,7 +486,9 @@ fn right_click_opens_the_menu_and_never_opens_the_book(cx: &mut TestAppContext) 
     // a left click on a book (no menu) still opens it
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    std::thread::sleep(Duration::from_millis(350));
+    cx.executor().advance_clock(Duration::from_millis(350));
+    view.update(cx, |this, _| this.overlay_closed_at = None);
+    cx.run_until_parked();
     click(cx, card(1), MouseButton::Left);
     assert_eq!(reading(&view, cx), Some(0));
 }
@@ -1329,7 +1331,9 @@ fn right_click_on_a_selected_book_offers_bulk_actions(cx: &mut TestAppContext) {
     assert_eq!(book_count(&view, cx), 3);
 
     // (clicks right after a menu closes are ignored on purpose)
-    std::thread::sleep(Duration::from_millis(350));
+    cx.executor().advance_clock(Duration::from_millis(350));
+    view.update(cx, |this, _| this.overlay_closed_at = None);
+    cx.run_until_parked();
     ctrl_click(cx, 0);
     ctrl_click(cx, 2);
     click(cx, card(2), MouseButton::Right);
@@ -1355,7 +1359,9 @@ fn right_click_on_an_unselected_book_drops_the_selection(cx: &mut TestAppContext
 
     // a single selected book also gets the normal menu, not a "1 book" bulk menu
     close(&view, cx);
-    std::thread::sleep(Duration::from_millis(350));
+    cx.executor().advance_clock(Duration::from_millis(350));
+    view.update(cx, |this, _| this.overlay_closed_at = None);
+    cx.run_until_parked();
     ctrl_click(cx, 0);
     click(cx, card(0), MouseButton::Right);
     assert_eq!(menu_labels(&view, cx)[0], "Start Reading");
@@ -9451,4 +9457,19 @@ fn test_toolbar_grouping_segmented_control_states(cx: &mut TestAppContext) {
     view.read_with(cx, |this, _| {
         assert!(!this.library.settings().group_series);
     });
+}
+
+#[gpui_kit::test]
+fn test_close_book_purges_allocator(cx: &mut TestAppContext) {
+    let fx = fixture("purge");
+    let (view, cx) = launch(&fx, cx);
+    let id = fx.ids[0].clone();
+    act(&view, cx, &id, BookAction::Open);
+    assert_eq!(reading(&view, cx), Some(0));
+
+    view.update_in(cx, |this, window, cx| {
+        this.close_book(window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(reading(&view, cx), None);
 }

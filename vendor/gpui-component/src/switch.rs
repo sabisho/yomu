@@ -225,10 +225,7 @@ impl RenderOnce for Switch {
             cx,
         );
 
-        div()
-            .refine_style(&self.style)
-            .when(!self.disabled, |this| this.cursor_pointer())
-            .child(
+        div().refine_style(&self.style).child(
             BaseSwitch::new(self.id.clone())
                 .checked(checked)
                 .disabled(self.disabled)

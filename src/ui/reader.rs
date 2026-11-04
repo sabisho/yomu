@@ -272,6 +272,7 @@ pub fn reader_header(
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .label("Library")
                                 .tooltip("Back to library (Esc)")
+                                .accessibility_label("Back to library (Esc)")
                                 .on_click(move |event, window, cx| {
                                     on_back(event, window, cx);
                                 }),
@@ -290,37 +291,41 @@ pub fn reader_header(
                         .flex()
                         .items_center()
                         .gap(SPACE_SM)
-                        .child(
+                        .child({
+                            let prev_tooltip = if reading_direction.is_rtl() {
+                                "Next page (Left or J)"
+                            } else {
+                                "Previous page (Left or K)"
+                            };
                             Button::new("reader-header-prev-btn")
                                 .ghost()
                                 .icon(IconName::ChevronLeft)
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
-                                .tooltip(if reading_direction.is_rtl() {
-                                    "Next page (Left or J)"
-                                } else {
-                                    "Previous page (Left or K)"
-                                })
+                                .tooltip(prev_tooltip)
+                                .accessibility_label(prev_tooltip)
                                 .on_click(move |event, window, cx| {
                                     on_turn_prev(event, window, cx);
-                                }),
-                        )
+                                })
+                        })
                         .child(Tag::secondary().rounded(btn_radius).child(current_page_str))
-                        .child(
+                        .child({
+                            let next_tooltip = if reading_direction.is_rtl() {
+                                "Previous page (Right or K)"
+                            } else {
+                                "Next page (Right or J)"
+                            };
                             Button::new("reader-header-next-btn")
                                 .ghost()
                                 .icon(IconName::ChevronRight)
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
-                                .tooltip(if reading_direction.is_rtl() {
-                                    "Previous page (Right or K)"
-                                } else {
-                                    "Next page (Right or J)"
-                                })
+                                .tooltip(next_tooltip)
+                                .accessibility_label(next_tooltip)
                                 .on_click(move |event, window, cx| {
                                     on_turn_next(event, window, cx);
-                                }),
-                        ),
+                                })
+                        }),
                 )
                 .child(
                     div()
@@ -334,6 +339,10 @@ pub fn reader_header(
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .dropdown_caret(true)
                                 .tooltip("Page layout & reading direction")
+                                .accessibility_label(format!(
+                                    "Page layout: {}",
+                                    page_layout.label()
+                                ))
                                 .label(page_layout.label())
                                 .dropdown_menu_with_anchor(Anchor::TopRight, {
                                     let on_set_layout = on_set_layout.clone();
@@ -408,6 +417,7 @@ pub fn reader_header(
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .dropdown_caret(true)
                                 .tooltip("Display fit mode (Tab)")
+                                .accessibility_label(format!("Fit mode: {}", fit_mode.label()))
                                 .label(fit_mode.label())
                                 .dropdown_menu_with_anchor(Anchor::TopRight, {
                                     let on_set_fit = on_set_fit.clone();
@@ -440,6 +450,7 @@ pub fn reader_header(
                                 .with_size(ComponentSize::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(btn_radius))
                                 .tooltip("Toggle fullscreen (F11)")
+                                .accessibility_label("Toggle fullscreen (F11)")
                                 .on_click(move |_, window, _| window.toggle_fullscreen()),
                         ),
                 ),
@@ -472,6 +483,7 @@ pub fn lateral_turners(
         .secondary()
         .outline()
         .tooltip(left_tooltip)
+        .accessibility_label(left_tooltip)
         .on_click(move |event, window, cx| {
             on_left(event, window, cx);
         });
@@ -483,6 +495,7 @@ pub fn lateral_turners(
         .secondary()
         .outline()
         .tooltip(right_tooltip)
+        .accessibility_label(right_tooltip)
         .on_click(move |event, window, cx| {
             on_right(event, window, cx);
         });

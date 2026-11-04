@@ -222,6 +222,8 @@ pub fn render_main_toolbar(
                                 .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(button_radius))
                                 .label("Remove")
+                                .tooltip("Remove selected books from library")
+                                .accessibility_label("Remove selected books from library")
                                 .on_click(move |e, window, cx| {
                                     if let Some(f) = on_remove_selected.as_ref() {
                                         f(e, window, cx);
@@ -236,6 +238,8 @@ pub fn render_main_toolbar(
                                 .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(button_radius))
                                 .label("Cancel")
+                                .tooltip("Cancel selection (Esc)")
+                                .accessibility_label("Cancel selection (Esc)")
                                 .on_click(move |e, window, cx| {
                                     if let Some(f) = on_cancel_selection.as_ref() {
                                         f(e, window, cx);
@@ -328,6 +332,11 @@ pub fn render_main_toolbar(
                                         .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                         .rounded(ButtonRounded::Size(button_radius))
                                         .tooltip(format!(
+                                            "Sort: {} ({})",
+                                            current_by.label(),
+                                            current_dir.label(current_by)
+                                        ))
+                                        .accessibility_label(format!(
                                             "Sort: {} ({})",
                                             current_by.label(),
                                             current_dir.label(current_by)

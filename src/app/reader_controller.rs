@@ -230,6 +230,7 @@ impl Yomu {
         }
         self.cleanup_current_reader();
         self.drain_garbage(window);
+        jemalloc_purge();
         self.last_frame = None;
         self.hud = None;
         self.cursor_pos = None;
@@ -1420,3 +1421,13 @@ impl Yomu {
         cx.notify();
     }
 }
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn jemalloc_purge() {
+    use tikv_jemalloc_ctl::{background_thread, epoch};
+    let _ = epoch::mib().and_then(|e| e.advance());
+    let _ = background_thread::write(true);
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn jemalloc_purge() {}

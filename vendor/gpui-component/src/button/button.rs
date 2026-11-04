@@ -659,19 +659,23 @@ impl RenderOnce for Button {
 
         let rounding = match self.rounded {
             ButtonRounded::Small => cx.theme().radius * 0.5,
-            ButtonRounded::Medium => gpui::px(6.0).min(cx.theme().radius),
+            ButtonRounded::Medium => cx.theme().radius,
             ButtonRounded::Large => cx.theme().radius * 2.0,
             ButtonRounded::Size(px) => px,
             ButtonRounded::None => Pixels::ZERO,
         };
 
         let root = base
+            .cursor_default()
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .when(interactive, |this| this.cursor_pointer())
-            .when(!interactive, |this| this.cursor_default())
+            .cursor_default()
+            .when(
+                interactive && (self.variant.is_link() || self.variant.is_text()),
+                |this| this.cursor_pointer(),
+            )
             .when(
                 !disabled && cx.theme().shadow && normal_style.shadow,
                 |this| this.shadow_xs(),
@@ -688,7 +692,7 @@ impl RenderOnce for Button {
                 } else {
                     // Normal Button
                     match self.size {
-                        Size::Size(size) => this.h(size).px(size * 0.35),
+                        Size::Size(size) => this.px(size * 0.2),
                         Size::XSmall => this.h_5().px_1().when(self.compact, |this| this.min_w_5()),
                         Size::Small => this
                             .h_6()
@@ -765,6 +769,8 @@ impl RenderOnce for Button {
             .accessibility_label
             .clone()
             .or_else(|| self.label.clone());
+        // Like an HTML `title`, the tooltip describes the button.
+        let description = self.tooltip.as_ref().map(|(tooltip, _)| tooltip.clone());
         let content = h_flex()
             .id("label")
             .size_full()
@@ -832,6 +838,9 @@ impl RenderOnce for Button {
         })
         .when_some(accessibility_label, |this, label| {
             this.accessibility_label(label)
+        })
+        .when_some(description, |this, description| {
+            this.aria_description(description)
         })
         .when_some(self.toggled, |this, toggled| {
             this.aria_toggled(if toggled {
