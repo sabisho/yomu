@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Context, Decorations, MouseButton, ScrollEvent, SharedString, Window, div, px,
@@ -147,8 +148,6 @@ impl Yomu {
         let search_input = self.search_input.as_ref();
         let toolbar_props = ui::toolbar::MainToolbarProps {
             can_go_back: self.open_group.is_some(),
-            view_title,
-            item_count,
             sidebar_collapsed: is_collapsed,
             is_scrolled: self.is_current_view_scrolled(),
             show_search,
@@ -235,6 +234,41 @@ impl Yomu {
             },
         );
 
+        let status_detail = if !is_library_view || self.selection.is_empty() {
+            item_count
+        } else {
+            Some(SharedString::from(format!(
+                "{} selected",
+                self.selection.len()
+            )))
+        };
+        let status_bar = self.library.settings().show_status_bar.then(|| {
+            div()
+                .debug_selector(|| "main-status-bar".into())
+                .w_full()
+                .flex_shrink_0()
+                .child(
+                    StatusBar::new()
+                        .child(
+                            div()
+                                .debug_selector(|| "status-view-title".into())
+                                .w_full()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(colors.foreground)
+                                .child(view_title.unwrap_or_default()),
+                        )
+                        .when_some(status_detail, |bar, detail| {
+                            bar.right(
+                                div()
+                                    .debug_selector(|| "status-detail".into())
+                                    .truncate()
+                                    .child(detail),
+                            )
+                        }),
+                )
+        });
+
         // 3. Main Content
         let content: AnyElement = match &self.active_view {
             ui::sidebar::MainView::ContinueReading => self.render_continue_reading_view(window, cx),
@@ -303,7 +337,8 @@ impl Yomu {
                                         }),
                                     )
                                     .child(animated_content),
-                            ),
+                            )
+                            .when_some(status_bar, |pane, status_bar| pane.child(status_bar)),
                     ),
             )
             .into_any_element()

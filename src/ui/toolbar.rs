@@ -3,17 +3,16 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonGroup, ButtonRounded, ButtonVariants};
-use gpui_kit::component::h_flex;
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Icon, Selectable, Side, Sizable, Size};
+use gpui_kit::component::{Icon, Side, Sizable, Size};
 use gpui_kit::gpui::Anchor;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Entity, FontWeight, InteractiveElement, Keystroke, Pixels,
-    SharedString, Styled, Window, div, px,
+    AnyElement, App, ClickEvent, Entity, FontWeight, InteractiveElement, Keystroke, Pixels, Styled,
+    Window, div, px,
 };
 
 use super::components::{
@@ -25,8 +24,6 @@ use yomu::library::{SortBy, SortDirection};
 
 pub struct MainToolbarProps<'a> {
     pub can_go_back: bool,
-    pub view_title: Option<SharedString>,
-    pub item_count: Option<SharedString>,
     pub sidebar_collapsed: bool,
     pub is_scrolled: bool,
     pub show_search: bool,
@@ -106,23 +103,6 @@ pub fn render_main_toolbar(
                             on_back,
                         ),
                     ))
-                })
-                .when_some(props.view_title, |this, title| {
-                    this.child(
-                        h_flex()
-                            .items_baseline()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(colors.foreground)
-                                    .child(title),
-                            )
-                            .when_some(props.item_count, |this, count| {
-                                this.child(div().text_xs().text_color(colors.muted).child(count))
-                            }),
-                    )
                 }),
         )
         // Center: Search input, responsive up to the preferred reading width.
@@ -195,6 +175,7 @@ pub fn render_main_toolbar(
                                 .ghost()
                                 .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(button_radius))
+                                .icon(control_icon(IconName::ListX))
                                 .label("Unselect all")
                                 .tooltip("Clear selection")
                                 .on_click(move |e, window, cx| {
@@ -209,6 +190,7 @@ pub fn render_main_toolbar(
                                 .ghost()
                                 .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(button_radius))
+                                .icon(control_icon(IconName::ListChecks))
                                 .label("Select all")
                                 .tooltip("Select all in view")
                                 .on_click(move |e, window, cx| {
@@ -224,6 +206,7 @@ pub fn render_main_toolbar(
                                 .ghost()
                                 .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(button_radius))
+                                .icon(control_icon(IconName::Trash))
                                 .label("Remove")
                                 .tooltip("Remove selected books from library")
                                 .accessibility_label("Remove selected books from library")
@@ -240,6 +223,7 @@ pub fn render_main_toolbar(
                                 .ghost()
                                 .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
                                 .rounded(ButtonRounded::Size(button_radius))
+                                .icon(control_icon(IconName::X))
                                 .label("Cancel")
                                 .tooltip("Cancel selection (Esc)")
                                 .accessibility_label("Cancel selection (Esc)")
@@ -253,48 +237,33 @@ pub fn render_main_toolbar(
                 })
                 .when(props.selection_count == 0, |this| {
                     this
-                        // 1. Folder Grouping segmented control: switches between Groups view and Volumes view
+                        // 1. Grouping mode toggle, matching the single-button grid/list switch.
                         .when(props.show_grouping, |this| {
                             let on_toggle_group_series = on_toggle_group_series.clone();
+                            let (icon, tooltip, next_is_group_series) = if props.is_group_series {
+                                (IconName::BookOpen, "Switch to Volumes View", false)
+                            } else {
+                                (IconName::Folder, "Switch to Groups View", true)
+                            };
 
                             this.child(
                                 div()
                                     .debug_selector(|| "grouping-mode-toggle".into())
                                     .child(
-                                        ButtonGroup::new("grouping-mode-segmented")
-                                            .compact()
-                                            .child(
-                                                Button::new("mode-groups")
-                                                    .ghost()
-                                                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
-                                                    .icon(control_icon(IconName::Folder))
-                                                    .selected(props.is_group_series)
-                                                    .tooltip("Groups view")
-                                                    .accessibility_label("Groups view")
-                                                    .on_click({
-                                                        let on_toggle =
-                                                            on_toggle_group_series.clone();
-                                                        move |_, window, cx| {
-                                                            on_toggle(true, window, cx)
-                                                        }
-                                                    }),
-                                            )
-                                            .child(
-                                                Button::new("mode-volumes")
-                                                    .ghost()
-                                                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
-                                                    .icon(control_icon(IconName::BookOpen))
-                                                    .selected(!props.is_group_series)
-                                                    .tooltip("Volumes view")
-                                                    .accessibility_label("Volumes view")
-                                                    .on_click({
-                                                        let on_toggle =
-                                                            on_toggle_group_series.clone();
-                                                        move |_, window, cx| {
-                                                            on_toggle(false, window, cx)
-                                                        }
-                                                    }),
-                                            ),
+                                        Button::new("grouping-mode-toggle")
+                                            .ghost()
+                                            .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                            .rounded(ButtonRounded::Size(button_radius))
+                                            .icon(control_icon(icon))
+                                            .tooltip(tooltip)
+                                            .accessibility_label(tooltip)
+                                            .on_click(move |_, window, cx| {
+                                                on_toggle_group_series(
+                                                    next_is_group_series,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
                                     ),
                             )
                         })

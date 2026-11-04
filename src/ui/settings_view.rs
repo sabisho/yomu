@@ -54,6 +54,7 @@ pub fn render_settings_view(
     on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_remember_zoom: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_vim_mode: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_toggle_status_bar: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_set_theme_mode: impl Fn(ThemeModePreference, &mut Window, &mut App) + 'static,
     on_set_color_scheme: impl Fn(String, &mut Window, &mut App) + 'static,
     on_set_thumbnail_size: impl Fn(ThumbnailSize, &mut Window, &mut App) + 'static,
@@ -146,6 +147,7 @@ pub fn render_settings_view(
                             on_toggle_continuous,
                             on_toggle_group_series,
                             on_set_thumbnail_size,
+                            on_toggle_status_bar,
                         ),
                         SettingsTab::Appearance => render_tab_appearance(
                             props.settings,
@@ -274,6 +276,7 @@ fn render_tab_general(
     on_toggle_continuous: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_set_thumbnail_size: std::rc::Rc<dyn Fn(ThumbnailSize, &mut Window, &mut App)>,
+    on_toggle_status_bar: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> Div {
     div().flex().flex_col().gap_4().child(
         settings_card(colors)
@@ -289,6 +292,27 @@ fn render_tab_general(
                         .small()
                         .checked(settings.continuous)
                         .on_click(move |val, window, cx| on_toggle_continuous(*val, window, cx)),
+                ),
+            )
+            .child(settings_divider(colors))
+            .child(
+                settings_row(
+                    "Status Bar",
+                    "Show contextual view and selection information at the bottom of the main pane.",
+                    colors,
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "status-bar-switch".into())
+                        .child(
+                            Switch::new("status-bar-switch-control")
+                                .accessibility_label("Show status bar")
+                                .small()
+                                .checked(settings.show_status_bar)
+                                .on_click(move |val, window, cx| {
+                                    on_toggle_status_bar(*val, window, cx)
+                                }),
+                        ),
                 ),
             )
             .child(settings_divider(colors))

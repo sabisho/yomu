@@ -712,6 +712,9 @@ pub struct Settings {
     /// Whether Vim keyboard navigation is enabled. Disabled by default.
     #[serde(default)]
     pub vim_mode: bool,
+    /// Show contextual view and selection information in the main pane status bar.
+    #[serde(default = "default_true")]
+    pub show_status_bar: bool,
     /// Library sorting mode (Default, Title, DateAdded, LastRead, Progress).
     #[serde(default)]
     pub sort_by: SortBy,
@@ -757,6 +760,7 @@ impl Default for Settings {
             corner_rounding: CornerRounding::Standard,
             view_mode_grid: true,
             vim_mode: false,
+            show_status_bar: true,
             sort_by: SortBy::Default,
             sort_direction: SortDirection::Ascending,
             opacity: OPACITY_MAX,
@@ -841,6 +845,9 @@ impl Settings {
         }
         if let Some(vim_mode) = object.get("vim_mode").and_then(|v| v.as_bool()) {
             settings.vim_mode = vim_mode;
+        }
+        if let Some(show_status_bar) = object.get("show_status_bar").and_then(|v| v.as_bool()) {
+            settings.show_status_bar = show_status_bar;
         }
         if let Some(sort_by) = object
             .get("sort_by")
@@ -1799,8 +1806,20 @@ mod tests {
         let loaded = Library::load(&dirs).unwrap();
         assert_eq!(loaded.books().len(), 1);
         assert!(loaded.settings().animate);
+        assert!(loaded.settings().show_status_bar);
         assert_eq!(loaded.settings().fit, FitMode::Page);
         assert!(loaded.get("x").unwrap().marks.is_empty());
+    }
+
+    #[test]
+    fn status_bar_setting_defaults_on_and_round_trips_off() {
+        let default = Settings::from_value(&serde_json::json!({}));
+        assert!(default.show_status_bar);
+
+        let disabled = Settings::from_value(&serde_json::json!({ "show_status_bar": false }));
+        assert!(!disabled.show_status_bar);
+        let serialized = serde_json::to_value(disabled).unwrap();
+        assert_eq!(serialized["show_status_bar"], false);
     }
 
     fn sample_book() -> Book {

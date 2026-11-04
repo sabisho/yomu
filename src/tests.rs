@@ -4844,6 +4844,38 @@ fn test_toolbar_sort_button_exists_in_library_view(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn status_bar_keeps_long_titles_inside_main_pane(cx: &mut TestAppContext) {
+    let fx = fixture("toolbar-title-layout");
+    let (view, cx) = launch(&fx, cx);
+    view.update(cx, |this, cx| {
+        this.open_group = Some(format!(
+            "series:{}",
+            "A remarkably long comic series title ".repeat(8)
+        ));
+        this.selection.select_many(fx.ids.iter());
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("toolbar-view-title").is_none());
+    let title = cx
+        .debug_bounds("status-view-title")
+        .expect("status bar title is rendered");
+    let status_bar = cx
+        .debug_bounds("main-status-bar")
+        .expect("native status bar is rendered");
+    assert!(
+        cx.debug_bounds("status-detail").is_some(),
+        "selection state should replace the normal item count with selection context"
+    );
+
+    assert!(
+        title.origin.x + title.size.width <= status_bar.origin.x + status_bar.size.width,
+        "status bar title must stay within the main pane: title={title:?}, status_bar={status_bar:?}"
+    );
+}
+
+#[gpui_kit::test]
 fn test_continue_reading_ordering_unaffected_by_sort(cx: &mut TestAppContext) {
     let fx = fixture("cr-sort");
     let (view, cx) = launch(&fx, cx);

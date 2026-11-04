@@ -125,6 +125,17 @@ impl Yomu {
             },
             {
                 let yomu = yomu.clone();
+                move |checked, window, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.library.settings_mut().show_status_bar = checked;
+                        this.save_library(cx);
+                        cx.notify();
+                    });
+                    window.refresh();
+                }
+            },
+            {
+                let yomu = yomu.clone();
                 move |mode, window, cx| {
                     yomu.update(cx, |this, cx| {
                         this.set_theme_mode(mode, cx);
