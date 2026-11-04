@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::list::ListItem;
@@ -19,6 +20,7 @@ use gpui_kit::{
 use crate::library::{Book, SortBy, SortDirection};
 use crate::ui::components::{stat_badge, with_alpha};
 use crate::ui::theme::UiColors;
+use yomu::selection::Selection;
 use yomu::util::natural_cmp;
 
 /// Returns a concise uppercase archive format or source label (e.g. "CBZ", "CBR", "ZIP", "DIR").
@@ -39,6 +41,39 @@ pub fn book_format_label(book: &Book) -> &'static str {
     }
 }
 
+/// The selection state of a group or series folder card, derived from its member volumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupSelectionState {
+    /// No member volumes are selected.
+    Unselected,
+    /// Some, but not all, member volumes are selected.
+    PartiallySelected,
+    /// All member volumes are selected.
+    FullySelected,
+}
+
+/// Derives the selection state of a group card from its member volume IDs.
+pub fn compute_group_selection_state<'a>(
+    member_ids: impl IntoIterator<Item = &'a str>,
+    selection: &Selection,
+) -> GroupSelectionState {
+    let mut total = 0;
+    let mut selected = 0;
+    for id in member_ids {
+        total += 1;
+        if selection.contains(id) {
+            selected += 1;
+        }
+    }
+    if total == 0 || selected == 0 {
+        GroupSelectionState::Unselected
+    } else if selected == total {
+        GroupSelectionState::FullySelected
+    } else {
+        GroupSelectionState::PartiallySelected
+    }
+}
+
 /// A displayable item in the virtualized library view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryItem {
@@ -47,6 +82,7 @@ pub enum LibraryItem {
         name: String,
         count: usize,
         cover_id: String,
+        member_ids: Arc<[String]>,
     },
     Book {
         id: String,
@@ -175,7 +211,7 @@ pub fn directory_groups<'a>(books: impl IntoIterator<Item = &'a Book>) -> Vec<Li
     let mut groups: Vec<_> = buckets
         .into_values()
         .filter_map(|(key, name, first_seen, members)| {
-            if members.len() < 2 {
+            if members.len() < 2 && !key.starts_with("series:") {
                 return None;
             }
             Some(LibraryGroup {
@@ -658,11 +694,13 @@ pub fn render_folder_card(
     cover_h: f32,
     radius: Pixels,
     border_px: f32,
+    selection_state: GroupSelectionState,
     colors: UiColors,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
     context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
     let inner_radius = (radius - px(border_px)).max(px(0.));
+    let is_selected = selection_state != GroupSelectionState::Unselected;
 
     div()
         .id((ElementId::from("folder"), group_key))
@@ -671,9 +709,22 @@ pub fn render_folder_card(
         .flex()
         .flex_col()
         .rounded(radius)
-        .bg(with_alpha(colors.surface, 0.85))
-        .when(border_px > 0.0, |s| {
-            s.border(px(border_px)).border_color(colors.border)
+        .bg(match selection_state {
+            GroupSelectionState::FullySelected => with_alpha(colors.accent, 0.12),
+            GroupSelectionState::PartiallySelected => with_alpha(colors.accent, 0.08),
+            GroupSelectionState::Unselected => with_alpha(colors.surface, 0.85),
+        })
+        .when(border_px > 0.0 || is_selected, |s| {
+            let w = if is_selected {
+                border_px.max(1.5)
+            } else {
+                border_px
+            };
+            s.border(px(w)).border_color(if is_selected {
+                colors.accent
+            } else {
+                colors.border
+            })
         })
         .overflow_hidden()
         .cursor_pointer()
@@ -698,6 +749,26 @@ pub fn render_folder_card(
                         .rounded_t(inner_radius)
                         .object_fit(ObjectFit::Cover),
                 )
+                // Selection tint over cover
+                .children(match selection_state {
+                    GroupSelectionState::FullySelected => Some(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .bg(with_alpha(colors.accent, 0.15)),
+                    ),
+                    GroupSelectionState::PartiallySelected => Some(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .bg(with_alpha(colors.accent, 0.08)),
+                    ),
+                    GroupSelectionState::Unselected => None,
+                })
                 // Top-left folder badge
                 .child(
                     div()
@@ -726,13 +797,47 @@ pub fn render_folder_card(
                                 .child("SERIES"),
                         ),
                 )
-                // Top-right volume count badge
+                // Top-right volume count badge + selection indicator
                 .child(
                     div()
                         .absolute()
                         .top_2()
                         .right_2()
-                        .child(stat_badge(count, false, colors, radius)),
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(stat_badge(count, false, colors, radius))
+                        .children(match selection_state {
+                            GroupSelectionState::FullySelected => Some(
+                                div()
+                                    .size(px(20.))
+                                    .rounded(px(4.))
+                                    .bg(colors.accent)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Icon::new(IconName::Check)
+                                            .size(px(12.))
+                                            .text_color(colors.accent_foreground),
+                                    ),
+                            ),
+                            GroupSelectionState::PartiallySelected => Some(
+                                div()
+                                    .size(px(20.))
+                                    .rounded(px(4.))
+                                    .bg(colors.accent)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Icon::new(IconName::Minus)
+                                            .size(px(12.))
+                                            .text_color(colors.accent_foreground),
+                                    ),
+                            ),
+                            GroupSelectionState::Unselected => None,
+                        }),
                 ),
         )
         // Metadata container below cover
@@ -769,17 +874,32 @@ pub fn render_folder_list_row(
     cover_path: PathBuf,
     radius: Pixels,
     border_px: f32,
+    selection_state: GroupSelectionState,
     colors: UiColors,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
     context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
+    let is_selected = selection_state != GroupSelectionState::Unselected;
     ListItem::new((ElementId::from("folder-item"), group_key))
         .h(px(64.))
         .px_3p5()
         .rounded(radius)
-        .bg(with_alpha(colors.surface, 0.85))
-        .border(px(border_px.max(1.0)))
-        .border_color(colors.border)
+        .selected(is_selected)
+        .bg(match selection_state {
+            GroupSelectionState::FullySelected => with_alpha(colors.accent, 0.12),
+            GroupSelectionState::PartiallySelected => with_alpha(colors.accent, 0.08),
+            GroupSelectionState::Unselected => with_alpha(colors.surface, 0.85),
+        })
+        .border(px(if is_selected {
+            border_px.max(1.5)
+        } else {
+            border_px.max(1.0)
+        }))
+        .border_color(if is_selected {
+            colors.accent
+        } else {
+            colors.border
+        })
         .on_click(on_click)
         .context_menu(context_menu)
         .child(
@@ -796,6 +916,37 @@ pub fn render_folder_list_row(
                         .gap_3()
                         .min_w_0()
                         .flex_1()
+                        .children(match selection_state {
+                            GroupSelectionState::FullySelected => Some(
+                                div()
+                                    .size(px(18.))
+                                    .rounded(px(4.))
+                                    .bg(colors.accent)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Icon::new(IconName::Check)
+                                            .size(px(12.))
+                                            .text_color(colors.accent_foreground),
+                                    ),
+                            ),
+                            GroupSelectionState::PartiallySelected => Some(
+                                div()
+                                    .size(px(18.))
+                                    .rounded(px(4.))
+                                    .bg(colors.accent)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Icon::new(IconName::Minus)
+                                            .size(px(12.))
+                                            .text_color(colors.accent_foreground),
+                                    ),
+                            ),
+                            GroupSelectionState::Unselected => None,
+                        })
                         .child(
                             div()
                                 .w(px(38.))

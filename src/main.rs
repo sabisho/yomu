@@ -784,6 +784,9 @@ impl Yomu {
                                     this.importing = false;
                                     this.importing_title = None;
                                     if this.imported_count > 0 && !this.is_quitting {
+                                        if report.added.iter().any(|b| b.series.is_some()) {
+                                            this.library.settings_mut().group_series = true;
+                                        }
                                         this.save_library(cx);
                                     }
                                 }
@@ -912,6 +915,23 @@ impl Yomu {
         handled
     }
 
+    pub(crate) fn toggle_group_selection(&mut self, member_ids: &[String], cx: &mut Context<Self>) {
+        let state = ui::library_view::compute_group_selection_state(
+            member_ids.iter().map(String::as_str),
+            &self.selection,
+        );
+        match state {
+            ui::library_view::GroupSelectionState::FullySelected => {
+                self.selection.deselect_many(member_ids);
+            }
+            ui::library_view::GroupSelectionState::PartiallySelected
+            | ui::library_view::GroupSelectionState::Unselected => {
+                self.selection.select_many(member_ids);
+            }
+        }
+        cx.notify();
+    }
+
     pub(crate) fn select_all(&mut self, cx: &mut Context<Self>) {
         let order = self.current_view_order();
         self.selection.select_all(&order);
@@ -930,13 +950,11 @@ impl Yomu {
     }
 
     fn enter_group_named(&mut self, key: String, name: String, cx: &mut Context<Self>) {
-        self.selection.clear();
         self.group_scroll.set_offset(Point::default());
         self.navigate_to_dest(NavDestination::Group { key, name }, cx);
     }
 
     pub(crate) fn exit_group(&mut self, cx: &mut Context<Self>) {
-        self.selection.clear();
         self.group_scroll.set_offset(Point::default());
         if matches!(
             self.nav_history.get(self.nav_history_idx),

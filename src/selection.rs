@@ -65,6 +65,20 @@ impl Selection {
         self.anchor = order.first().cloned();
     }
 
+    /// Selects multiple book IDs into the current selection.
+    pub fn select_many<S: AsRef<str>>(&mut self, ids: impl IntoIterator<Item = S>) {
+        for id in ids {
+            self.ids.insert(id.as_ref().to_string());
+        }
+    }
+
+    /// Deselects multiple book IDs from the current selection.
+    pub fn deselect_many<S: AsRef<str>>(&mut self, ids: impl IntoIterator<Item = S>) {
+        for id in ids {
+            self.remove(id.as_ref());
+        }
+    }
+
     /// Whether every item in the given order is selected.
     /// Returns false if `order` is empty.
     pub fn is_all_selected(&self, order: &[String]) -> bool {
@@ -278,5 +292,22 @@ mod tests {
         // Clear: false
         selection.clear();
         assert!(!selection.is_all_selected(&items));
+    }
+
+    #[test]
+    fn test_select_many_and_deselect_many() {
+        let mut selection = Selection::new();
+        selection.select_many(["b", "c", "d"]);
+        assert_eq!(selection.len(), 3);
+        assert!(selection.contains("b"));
+        assert!(selection.contains("c"));
+        assert!(selection.contains("d"));
+        assert!(!selection.contains("a"));
+
+        selection.deselect_many(["c", "e"]);
+        assert_eq!(selection.len(), 2);
+        assert!(selection.contains("b"));
+        assert!(!selection.contains("c"));
+        assert!(selection.contains("d"));
     }
 }

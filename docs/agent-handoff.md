@@ -11,7 +11,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **380 active tests** passing (168 core library unit tests in `src/lib.rs`, 212 binary-target UI tests in `src/main.rs`, plus 16 opt-in performance benchmarks; 396 total).
+- **Test Baseline:** **390 active tests** passing (171 core library unit tests in `src/lib.rs`, 219 binary-target UI tests in `src/main.rs`, plus 16 opt-in performance benchmarks; 406 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `devenv shell cargo check --all-targets` and `devenv shell cargo clippy --all-targets --all-features -- -D warnings`, fully formatted under `devenv shell cargo fmt --all -- --check`.
 
 ---
@@ -167,6 +167,22 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **High-Sample Latency Profiling:** Evaluated 30 page-turn events, measuring Mean: 167.0 ms, Median: 165.8 ms, P95: 176.2 ms, P99: 177.7 ms with standard deviation <5 ms.
 - **Comprehensive Technical Report:** Authored [`docs/audits/JEMALLOC_RECONCILIATION_STAGE_8F1.md`](audits/JEMALLOC_RECONCILIATION_STAGE_8F1.md).
 
+### Phase 21: Library Import UX, Folder Grouping & UI Regression Fixes (Completed)
+- **Dual Import Actions on Home Screen:** Replaced single generic import button on the empty Home/Continue Reading screen and Library empty state with two distinct, visually balanced actions: "Import Files" (`IconName::FilePlus`, primary) and "Import Folder" (`IconName::FolderPlus`, outline). Wired to native file and folder pickers with full cancellation safety.
+- **Automatic Folder Volume Grouping:** Enhanced archive discovery in `src/library.rs` (`Candidate::Archive`, `Candidate::Folder`) to detect parent folder context. Volumes imported directly from a folder are assigned to a series group named after the folder (`Book.series`), while container directories with nested manga subfolders preserve their individual subfolder groupings without flattening. Single-volume series groups are supported in `src/ui/library_view.rs`. Re-importing retains existing metadata and avoids duplication.
+- **Restored Toolbar Groups/Volumes Toggle:** Restored the 28px ghost grouping toggle button on the Library view toolbar (`show_grouping`). Bound to `is_group_series` with dynamic iconography (`IconName::Folder` vs `IconName::BookOpen`) and visual active state indication (`.selected(props.is_group_series)`). Controls presentation only without mutating underlying book data.
+- **Fixed Settings About Icon Blue Tint:** Resolved blue color cast on the embedded Yomu logo (`assets/logo.png`) in `src/app/desktop.rs` by swapping Red and Blue color channels (`px.swap(0, 2)`) to match GPUI's native BGRA byte texture requirements.
+- **6 New Regression Tests Added:** 3 unit tests (`test_app_logo_image_bgra_channel_order_and_no_blue_tint`, `test_folder_import_automatic_grouping_and_nested_structure`, `test_folder_import_empty_and_unsupported_files`) and 3 UI integration tests (`test_empty_library_import_actions_distinguishable_and_cancel_safe`, `test_library_toolbar_grouping_toggle_presentation_and_persistence`, `test_folder_import_automatic_grouping_and_reimport_behavior`) elevating the test suite to 386 active tests passing.
+- **Comprehensive Technical Report:** Authored [`docs/audits/LIBRARY_IMPORT_GROUPING_AND_UI_REGRESSION_FIXES.md`](audits/LIBRARY_IMPORT_GROUPING_AND_UI_REGRESSION_FIXES.md).
+
+### Phase 22: Library Selection State, Responsive Grid & Toolbar Consistency Refinement (Completed)
+- **Group-Card Selection Derived from Members:** Added `GroupSelectionState` (`Unselected`, `PartiallySelected`, `FullySelected`) and `compute_group_selection_state` in `src/ui/library_view.rs`. Added `member_ids` to `LibraryItem::Folder`. Rendered `IconName::Check` checkmark badge for full selection and `IconName::Minus` indeterminate badge for partial selection. Preserved selection across entering and exiting groups.
+- **Responsive Grid Space Utilization & Padding:** Refined `compute_responsive_grid` in `src/ui/components.rs` with rounded column sizing (`cols = ((avail_w + gap) / slot_w).round().max(1.0)`), bounded padding (`pad_x` 16–24px), restrained scaling within ±12%, and dynamic cover height strictly maintaining 1.5 aspect ratio. Eliminated dead horizontal space (116px outer margin).
+- **Consistent Segmented Toolbar Mode Control:** Replaced isolated toggle button in `src/ui/toolbar.rs` with native GPUI Kit 0.8.1 `ButtonGroup::new("grouping-mode-segmented").compact()` containing `mode-groups` (`IconName::Folder`) and `mode-volumes` (`IconName::BookOpen`) with `.selected(...)` styling and 28px height matching adjacent sort and view-mode controls.
+- **4 New/Updated Tests Added:** Added 1 core library unit test (`test_select_many_and_deselect_many` in `src/selection.rs`), 3 binary UI integration tests (`test_group_card_selection_states_and_ctrl_a`, `test_responsive_grid_space_utilization_and_padding`, `test_toolbar_grouping_segmented_control_states` in `src/tests.rs`), and updated `entering_and_exiting_group_preserves_selection`. Elevates the test baseline to 390 active tests passing.
+- **Wayland Visual Verification:** Captured native Wayland screenshots demonstrating Ctrl+A full selection (`library_selection_ctrl_a_groups.png`), partial selection with indeterminate minus badge (`library_selection_partial_group.png`), responsive grid spacing (`library_groups_mode.png`), and active segmented control states (`crop_toolbar_groups.png` and `crop_toolbar.png`).
+- **Comprehensive Technical Report:** Authored [`docs/audits/LIBRARY_SELECTION_GRID_AND_TOOLBAR_REFINEMENT.md`](audits/LIBRARY_SELECTION_GRID_AND_TOOLBAR_REFINEMENT.md).
+
 ---
 
 ## 3. Active Known Limitations & Technical Debt
@@ -218,5 +234,5 @@ devenv shell cargo audit
 When completing a task, provide a concise, factual report:
 1. Exact files modified, created, or deleted.
 2. Architectural responsibilities changed.
-3. Exact command exit codes and test counts (380 active tests).
+3. Exact command exit codes and test counts (390 active tests).
 4. Status of manual visual checks (explicitly report Wayland appearance as UNVERIFIED if tested headlessly).

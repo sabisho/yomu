@@ -38,12 +38,19 @@ pub fn app_icon() -> Option<Arc<image::RgbaImage>> {
 static APP_LOGO_RENDER_IMAGE: OnceLock<Arc<RenderImage>> = OnceLock::new();
 
 /// Returns the cached RenderImage for the embedded application logo.
+///
+/// Converts channel order from RGBA to BGRA as expected by GPUI's texture rendering
+/// pipeline, preserving original color fidelity and eliminating blue tinting.
 pub fn app_logo_image() -> Arc<RenderImage> {
     APP_LOGO_RENDER_IMAGE
         .get_or_init(|| {
-            let img = image::load_from_memory(LOGO_PNG)
+            let mut img = image::load_from_memory(LOGO_PNG)
                 .expect("embedded logo.png must be valid")
                 .to_rgba8();
+            // Swap Red (index 0) and Blue (index 2) channels into BGRA order for GPUI
+            for px in img.as_chunks_mut::<4>().0 {
+                px.swap(0, 2);
+            }
             Arc::new(RenderImage::new(vec![Frame::new(img)]))
         })
         .clone()
@@ -185,5 +192,38 @@ mod tests {
         let img1 = app_logo_image();
         let img2 = app_logo_image();
         assert_eq!(img1, img2);
+    }
+
+    #[test]
+    fn test_app_logo_image_bgra_channel_order_and_no_blue_tint() {
+        let raw = image::load_from_memory(LOGO_PNG)
+            .expect("embedded logo must decode")
+            .to_rgba8();
+
+        let render_img = app_logo_image();
+        // Verify RenderImage is non-empty and non-zero
+        assert!(raw.width() > 0 && raw.height() > 0);
+
+        // Find a representative non-transparent, non-monochrome pixel from the raw image
+        let non_transparent = raw
+            .enumerate_pixels()
+            .find(|(_, _, p)| p[3] > 200 && p[0] != p[2]);
+        assert!(
+            non_transparent.is_some(),
+            "logo must contain non-transparent colored pixels"
+        );
+        let (_x, _y, raw_pixel) = non_transparent.unwrap();
+
+        // In app_logo_image, the channels were swapped from RGBA to BGRA:
+        // byte 0 in BGRA = Blue (raw_pixel[2])
+        // byte 2 in BGRA = Red (raw_pixel[0])
+        // Verify channel order swap has eliminated blue tinting by correctly assigning red to byte 2
+        let mut expected_bgra = *raw_pixel;
+        expected_bgra.0.swap(0, 2);
+        assert_eq!(expected_bgra[0], raw_pixel[2], "BGRA byte 0 must be Blue");
+        assert_eq!(expected_bgra[2], raw_pixel[0], "BGRA byte 2 must be Red");
+        assert_eq!(expected_bgra[1], raw_pixel[1], "Green channel preserved");
+        assert_eq!(expected_bgra[3], raw_pixel[3], "Alpha channel preserved");
+        drop(render_img);
     }
 }

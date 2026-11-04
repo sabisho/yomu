@@ -1168,7 +1168,7 @@ fn select_all_button_in_group_header_only_selects_current_group(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn entering_and_exiting_group_clears_selection(cx: &mut TestAppContext) {
+fn entering_and_exiting_group_preserves_selection(cx: &mut TestAppContext) {
     let (fx, key1, key2) = multi_group_fixture("clrenterexit");
     let (view, cx) = launch(&fx, cx);
 
@@ -1184,17 +1184,25 @@ fn entering_and_exiting_group_clears_selection(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("ctrl-a");
     assert_eq!(selected(&view, cx).len(), 2);
 
-    // Exiting Group 1 clears selection
+    // Exiting Group 1 preserves selection
     view.update(cx, |this, cx| {
         this.exit_group(cx);
     });
-    assert!(selected(&view, cx).is_empty());
+    assert_eq!(selected(&view, cx).len(), 2);
 
-    // Entering Group 2 starts with empty selection
+    // Entering Group 2 preserves selection across the library (Group 2 itself has 0 selected)
     view.update(cx, |this, cx| {
         this.enter_group(key2.clone(), cx);
     });
-    assert!(selected(&view, cx).is_empty());
+    assert_eq!(selected(&view, cx).len(), 0);
+    assert_eq!(view.read_with(cx, |this, _| this.selection.len()), 2);
+
+    // Re-entering Group 1 preserves its 2 selected books
+    view.update(cx, |this, cx| {
+        this.exit_group(cx);
+        this.enter_group(key1.clone(), cx);
+    });
+    assert_eq!(selected(&view, cx).len(), 2);
 }
 
 #[gpui_kit::test]
@@ -4138,25 +4146,27 @@ fn prefetch_cancellation_race_condition_does_not_clobber_new_task(cx: &mut TestA
 fn test_fixed_library_card_dimensions_and_responsive_columns(_cx: &mut TestAppContext) {
     let thumb_size = yomu::library::ThumbnailSize::Medium;
     let expected_card_w = thumb_size.card_width();
-    let expected_cover_h = thumb_size.card_height();
 
     // 1. Narrow window (e.g. 700px) with expanded sidebar (240px)
     let grid_narrow = ui::components::compute_responsive_grid(700.0, true, thumb_size);
-    assert_eq!(
-        grid_narrow.card_w, expected_card_w,
-        "card width must be fixed"
+    assert!(
+        (grid_narrow.card_w - expected_card_w).abs() < 40.0,
+        "card width must remain close to baseline"
     );
-    assert_eq!(
-        grid_narrow.cover_h, expected_cover_h,
-        "cover height must be fixed"
+    assert!(
+        (grid_narrow.cover_h / grid_narrow.card_w - 1.5).abs() < 0.02,
+        "aspect ratio 1.5 must be strictly preserved"
     );
 
     // 2. Medium window (e.g. 1200px)
     let grid_med = ui::components::compute_responsive_grid(1200.0, true, thumb_size);
-    assert_eq!(grid_med.card_w, expected_card_w, "card width must be fixed");
-    assert_eq!(
-        grid_med.cover_h, expected_cover_h,
-        "cover height must be fixed"
+    assert!(
+        (grid_med.card_w - expected_card_w).abs() < 40.0,
+        "card width must remain close to baseline"
+    );
+    assert!(
+        (grid_med.cover_h / grid_med.card_w - 1.5).abs() < 0.02,
+        "aspect ratio 1.5 must be strictly preserved"
     );
     assert!(
         grid_med.cols >= grid_narrow.cols,
@@ -4165,27 +4175,27 @@ fn test_fixed_library_card_dimensions_and_responsive_columns(_cx: &mut TestAppCo
 
     // 3. Wide window (e.g. 1920px) with collapsed sidebar (48px)
     let grid_wide = ui::components::compute_responsive_grid(1920.0, false, thumb_size);
-    assert_eq!(
-        grid_wide.card_w, expected_card_w,
-        "card width must be fixed"
+    assert!(
+        (grid_wide.card_w - expected_card_w).abs() < 40.0,
+        "card width must remain close to baseline"
     );
-    assert_eq!(
-        grid_wide.cover_h, expected_cover_h,
-        "cover height must be fixed"
+    assert!(
+        (grid_wide.cover_h / grid_wide.card_w - 1.5).abs() < 0.02,
+        "aspect ratio 1.5 must be strictly preserved"
     );
     assert!(
         grid_wide.cols > grid_med.cols,
         "columns must adapt to available space"
     );
 
-    // 4. Centering padding is balanced and positive
+    // 4. Content padding is consistent and bounded
     assert!(
-        grid_wide.pad_x >= 16.0,
-        "grid padding must be at least min margin"
+        grid_wide.pad_x >= 16.0 && grid_wide.pad_x <= 24.0,
+        "grid padding must remain consistent"
     );
     assert!(
-        grid_med.pad_x >= 16.0,
-        "grid padding must be at least min margin"
+        grid_med.pad_x >= 16.0 && grid_med.pad_x <= 24.0,
+        "grid padding must remain consistent"
     );
 }
 
@@ -6404,6 +6414,7 @@ fn regression_phase6_cards_lists_and_empty_states(cx: &mut TestAppContext) {
             |_, _, _| {},
             |_, _, _| {},
             |_, menu, _, _| menu,
+            |_, _, _| {},
             |_, _, _| {},
         );
         drop(empty_continue);
@@ -8938,4 +8949,506 @@ fn perf_stage7_animation_scrolling_rendering_breakdown(cx: &mut TestAppContext) 
         );
     }
     println!("\n================================================================================");
+}
+
+fn empty_fixture(tag: &str) -> Fixture {
+    static EMPTY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = EMPTY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root =
+        std::env::temp_dir().join(format!("yomu-ui-empty-{tag}-{}-{seq}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let dirs = DataDirs::at(root.join("data")).unwrap();
+    let library = Library::default();
+    library.save(&dirs).unwrap();
+    Fixture {
+        dirs,
+        files: Vec::new(),
+        ids: Vec::new(),
+    }
+}
+
+#[gpui_kit::test]
+fn test_empty_library_import_actions_distinguishable_and_cancel_safe(cx: &mut TestAppContext) {
+    let fx = empty_fixture("empty-import-btns");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. In empty AllManga view: both buttons must be present
+    view.update(cx, |this, cx| {
+        this.navigate_to(ui::sidebar::MainView::AllManga, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("empty-import-files-btn").is_some(),
+        "Import Files button must be rendered on empty library state"
+    );
+    assert!(
+        cx.debug_bounds("empty-import-folder-btn").is_some(),
+        "Import Folder button must be rendered on empty library state"
+    );
+
+    // 2. In empty Continue Reading (Home) view: both buttons must be present
+    view.update(cx, |this, cx| {
+        this.navigate_to(ui::sidebar::MainView::ContinueReading, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("empty-import-files-btn").is_some(),
+        "Import Files button must be rendered on empty Home screen"
+    );
+    assert!(
+        cx.debug_bounds("empty-import-folder-btn").is_some(),
+        "Import Folder button must be rendered on empty Home screen"
+    );
+
+    // 3. Verify import cancellation safety
+    view.update(cx, |this, _| {
+        assert!(!this.importing);
+        assert!(this.import_cancel.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn test_library_toolbar_grouping_toggle_presentation_and_persistence(cx: &mut TestAppContext) {
+    let fx = fixture("tb-grouping");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Grouping toggle must be visible on Library toolbar
+    view.update(cx, |this, cx| {
+        this.navigate_to(ui::sidebar::MainView::AllManga, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("grouping-mode-toggle").is_some(),
+        "grouping-mode-toggle button must be present in library toolbar"
+    );
+
+    // 2. Initial state: verify default settings
+    let initial_grouped = view.read_with(cx, |this, _| this.library.settings().group_series);
+
+    // 3. Toggle grouping mode via view handler
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_group_series(!initial_grouped, cx);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.library.settings().group_series, !initial_grouped);
+    });
+
+    // 4. Persistence verification: reload from disk
+    let reloaded = Library::load(&fx.dirs).unwrap();
+    assert_eq!(reloaded.settings().group_series, !initial_grouped);
+
+    // 5. Toggle back
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_group_series(initial_grouped, cx);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.library.settings().group_series, initial_grouped);
+    });
+}
+
+#[gpui_kit::test]
+fn test_folder_import_automatic_grouping_and_reimport_behavior(cx: &mut TestAppContext) {
+    let fx = empty_fixture("folder-auto-group");
+    let (view, cx) = launch(&fx, cx);
+
+    // Create a folder with 2 volumes
+    let series_dir = fx.dirs.root().join("Berserk");
+    fs::create_dir_all(&series_dir).unwrap();
+    let v1 = series_dir.join("Berserk Vol 1.cbz");
+    let v2 = series_dir.join("Berserk Vol 2.cbz");
+    for path in [&v1, &v2] {
+        let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        zip.start_file("1.png", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&png_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    // Import the folder
+    view.update(cx, |this, cx| {
+        this.import_paths(vec![series_dir.clone()], cx);
+    });
+    for _ in 0..20 {
+        cx.background_executor
+            .advance_clock(std::time::Duration::from_millis(100));
+        cx.run_until_parked();
+        let done = view.read_with(cx, |this, _| {
+            !this.importing && this.library.books().len() == 2
+        });
+        if done {
+            break;
+        }
+    }
+
+    // Verify books were imported and automatically assigned to series "Berserk"
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.library.books().len(), 2);
+        for b in this.library.books() {
+            assert_eq!(
+                b.series.as_deref(),
+                Some("Berserk"),
+                "Imported folder volumes must be grouped under folder name"
+            );
+        }
+        assert!(
+            this.library.settings().group_series,
+            "Folder import enables grouping"
+        );
+    });
+
+    // Reimport the same folder: must skip without duplicates
+    view.update(cx, |this, cx| {
+        this.import_paths(vec![series_dir], cx);
+    });
+    for _ in 0..20 {
+        cx.background_executor
+            .advance_clock(std::time::Duration::from_millis(100));
+        cx.run_until_parked();
+        let done = view.read_with(cx, |this, _| !this.importing);
+        if done {
+            break;
+        }
+    }
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.library.books().len(),
+            2,
+            "No duplicate volumes on re-import"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn test_group_card_selection_states_and_ctrl_a(cx: &mut TestAppContext) {
+    let fx = empty_fixture("group-select-ctrl-a");
+    let (view, cx) = launch(&fx, cx);
+
+    // Populate library with 2 groups: Berserk (2 vols) and Kingdom (3 vols)
+    view.update_in(cx, |this, _, cx| {
+        let mut b1 = sample_test_book("b1", "Berserk 01");
+        b1.series = Some("Berserk".into());
+
+        let mut b2 = sample_test_book("b2", "Berserk 02");
+        b2.series = Some("Berserk".into());
+
+        let mut k1 = sample_test_book("k1", "Kingdom 01");
+        k1.series = Some("Kingdom".into());
+
+        let mut k2 = sample_test_book("k2", "Kingdom 02");
+        k2.series = Some("Kingdom".into());
+
+        let mut k3 = sample_test_book("k3", "Kingdom 03");
+        k3.series = Some("Kingdom".into());
+
+        this.library.add(b1);
+        this.library.add(b2);
+        this.library.add(k1);
+        this.library.add(k2);
+        this.library.add(k3);
+        this.library.settings_mut().group_series = true;
+        this.navigate_to(ui::sidebar::MainView::AllManga, cx);
+    });
+    cx.run_until_parked();
+
+    // 1. Initial state: unselected
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.selection.len(), 0);
+        let berserk_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Berserk"))
+            .map(|b| b.id.clone())
+            .collect();
+        let state = ui::library_view::compute_group_selection_state(
+            berserk_ids.iter().map(String::as_str),
+            &this.selection,
+        );
+        assert_eq!(state, ui::library_view::GroupSelectionState::Unselected);
+    });
+
+    // 2. Press Ctrl+A in Groups view: all 5 volumes selected across groups
+    view.update(cx, |this, cx| {
+        this.select_all(cx);
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.selection.len(),
+            5,
+            "Ctrl+A selects all 5 volumes in library"
+        );
+        let berserk_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Berserk"))
+            .map(|b| b.id.clone())
+            .collect();
+        let kingdom_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Kingdom"))
+            .map(|b| b.id.clone())
+            .collect();
+
+        let berserk_state = ui::library_view::compute_group_selection_state(
+            berserk_ids.iter().map(String::as_str),
+            &this.selection,
+        );
+        assert_eq!(
+            berserk_state,
+            ui::library_view::GroupSelectionState::FullySelected
+        );
+
+        let kingdom_state = ui::library_view::compute_group_selection_state(
+            kingdom_ids.iter().map(String::as_str),
+            &this.selection,
+        );
+        assert_eq!(
+            kingdom_state,
+            ui::library_view::GroupSelectionState::FullySelected
+        );
+    });
+
+    // 3. Enter Berserk group and deselect 1 volume -> Berserk becomes PartiallySelected
+    view.update(cx, |this, cx| {
+        this.enter_group("series:berserk".into(), cx);
+        let first_berserk = this
+            .library
+            .books()
+            .iter()
+            .find(|b| b.series.as_deref() == Some("Berserk"))
+            .unwrap()
+            .id
+            .clone();
+        this.selection.toggle(&first_berserk);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.selection.len(), 4);
+        let berserk_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Berserk"))
+            .map(|b| b.id.clone())
+            .collect();
+        let state = ui::library_view::compute_group_selection_state(
+            berserk_ids.iter().map(String::as_str),
+            &this.selection,
+        );
+        assert_eq!(
+            state,
+            ui::library_view::GroupSelectionState::PartiallySelected
+        );
+    });
+
+    // 4. Exit back to Groups view: selection preserved consistently
+    view.update(cx, |this, cx| {
+        this.exit_group(cx);
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        let berserk_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Berserk"))
+            .map(|b| b.id.clone())
+            .collect();
+        let kingdom_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Kingdom"))
+            .map(|b| b.id.clone())
+            .collect();
+
+        assert_eq!(
+            ui::library_view::compute_group_selection_state(
+                berserk_ids.iter().map(String::as_str),
+                &this.selection
+            ),
+            ui::library_view::GroupSelectionState::PartiallySelected
+        );
+        assert_eq!(
+            ui::library_view::compute_group_selection_state(
+                kingdom_ids.iter().map(String::as_str),
+                &this.selection
+            ),
+            ui::library_view::GroupSelectionState::FullySelected
+        );
+    });
+
+    // 5. Toggle group card: partially selected -> clicking selects all members
+    view.update(cx, |this, cx| {
+        let berserk_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Berserk"))
+            .map(|b| b.id.clone())
+            .collect();
+        this.toggle_group_selection(&berserk_ids, cx);
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(this.selection.len(), 5);
+        let berserk_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Berserk"))
+            .map(|b| b.id.clone())
+            .collect();
+        assert_eq!(
+            ui::library_view::compute_group_selection_state(
+                berserk_ids.iter().map(String::as_str),
+                &this.selection
+            ),
+            ui::library_view::GroupSelectionState::FullySelected
+        );
+    });
+
+    // 6. Toggle group card again: fully selected -> clicking deselects all members
+    view.update(cx, |this, cx| {
+        let berserk_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Berserk"))
+            .map(|b| b.id.clone())
+            .collect();
+        this.toggle_group_selection(&berserk_ids, cx);
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |this, _| {
+        assert_eq!(
+            this.selection.len(),
+            3,
+            "Berserk members deselected, Kingdom members remain selected"
+        );
+        let berserk_ids: Vec<String> = this
+            .library
+            .books()
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Berserk"))
+            .map(|b| b.id.clone())
+            .collect();
+        assert_eq!(
+            ui::library_view::compute_group_selection_state(
+                berserk_ids.iter().map(String::as_str),
+                &this.selection
+            ),
+            ui::library_view::GroupSelectionState::Unselected
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn test_responsive_grid_space_utilization_and_padding(cx: &mut TestAppContext) {
+    let thumb_size = yomu::library::ThumbnailSize::Medium;
+
+    // Verify across varied viewport widths that pad_x is strictly bounded (<= 24px)
+    // and total_filled exactly matches available content width without giant dead margins.
+    for viewport_w in [800.0, 1024.0, 1200.0, 1440.0, 1680.0, 1920.0, 2560.0] {
+        for sidebar_visible in [true, false] {
+            let grid =
+                ui::components::compute_responsive_grid(viewport_w, sidebar_visible, thumb_size);
+            assert!(
+                grid.pad_x <= 24.0,
+                "Content padding must never balloon (got {})",
+                grid.pad_x
+            );
+            assert!(
+                grid.gap >= 12.0 && grid.gap <= 16.0,
+                "Gap must remain consistent"
+            );
+
+            let sidebar_w = if sidebar_visible { 240.0 } else { 48.0 };
+            let content_w = (viewport_w - sidebar_w).max(200.0);
+            let total_filled = grid.cols as f32 * grid.card_w
+                + (grid.cols - 1) as f32 * grid.gap
+                + 2.0 * grid.pad_x;
+            assert!((total_filled - content_w).abs() < 1.0);
+
+            // Card aspect ratio is strictly 1.5 (2:3)
+            assert!((grid.cover_h / grid.card_w - 1.5).abs() < 0.02);
+        }
+    }
+
+    // Verify row partitioning with 2 groups does not stretch cards
+    let fx = empty_fixture("grid-two-groups");
+    let (view, cx) = launch(&fx, cx);
+    view.update(cx, |this, _| {
+        let mut b1 = sample_test_book("b1", "Berserk 01");
+        b1.series = Some("Berserk".into());
+        let mut b2 = sample_test_book("b2", "Berserk 02");
+        b2.series = Some("Berserk".into());
+
+        let mut k1 = sample_test_book("k1", "Kingdom 01");
+        k1.series = Some("Kingdom".into());
+        let mut k2 = sample_test_book("k2", "Kingdom 02");
+        k2.series = Some("Kingdom".into());
+
+        this.library.add(b1);
+        this.library.add(b2);
+        this.library.add(k1);
+        this.library.add(k2);
+        this.library.settings_mut().group_series = true;
+    });
+
+    view.update_in(cx, |this, window, cx| {
+        let _elem = this.render_all_manga_view(window, cx);
+    });
+    view.read_with(cx, |this, _| {
+        let cache = this.library_row_cache.borrow();
+        assert_eq!(cache.rows.len(), 1, "2 groups fit in 1 row");
+        assert_eq!(cache.rows[0].len(), 2, "Row contains exactly 2 group cards");
+        assert!(cache.card_w >= 180.0 && cache.card_w <= 260.0);
+    });
+}
+
+#[gpui_kit::test]
+fn test_toolbar_grouping_segmented_control_states(cx: &mut TestAppContext) {
+    let fx = empty_fixture("tb-segmented");
+    let (view, cx) = launch(&fx, cx);
+
+    // 1. Navigate to AllManga
+    view.update_in(cx, |this, _, cx| {
+        this.navigate_to(ui::sidebar::MainView::AllManga, cx);
+    });
+    cx.run_until_parked();
+
+    // 2. Both toolbar segmented buttons exist
+    assert!(cx.debug_bounds("grouping-mode-toggle").is_some());
+
+    // 3. Toggle between Groups and Volumes views
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_group_series(true, cx);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |this, _| {
+        assert!(this.library.settings().group_series);
+    });
+
+    view.update_in(cx, |this, _, cx| {
+        this.toggle_group_series(false, cx);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |this, _| {
+        assert!(!this.library.settings().group_series);
+    });
 }

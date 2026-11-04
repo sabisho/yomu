@@ -83,6 +83,7 @@ impl Yomu {
             && matches!(window.window_decorations(), Decorations::Client { .. });
         let is_library_view = matches!(self.active_view, ui::sidebar::MainView::AllManga);
         let show_search = is_library_view;
+        let show_grouping = is_library_view;
         let show_view_switches = is_library_view;
         let show_sort = is_library_view;
 
@@ -149,6 +150,8 @@ impl Yomu {
             search_input,
             show_view_switches,
             is_grid_mode: self.view_mode_grid,
+            show_grouping,
+            is_group_series: self.library.settings().group_series,
             show_sort,
             sort_by: self.library.settings().sort_by,
             sort_direction: self.library.settings().sort_direction,
@@ -200,6 +203,14 @@ impl Yomu {
                         this.library.settings_mut().view_mode_grid = grid;
                         this.save_library(cx);
                         cx.notify();
+                    })
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |group, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.toggle_group_series(group, cx);
                     })
                 }
             },

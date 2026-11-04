@@ -50,4 +50,4 @@ devenv shell cargo clippy --all-targets --all-features -- -D warnings
 devenv shell cargo test --all-targets
 ```
 
-All 380 active tests (168 lib unit tests, 212 binary UI tests, plus 16 benchmarks; 396 total) must pass with exit code 0.
+All 390 active tests (171 lib unit tests, 219 binary UI tests, plus 16 benchmarks; 406 total) must pass with exit code 0.

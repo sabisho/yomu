@@ -3,12 +3,12 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonRounded, ButtonVariants};
 use gpui_kit::component::h_flex;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Icon, Side, Sizable, Size};
+use gpui_kit::component::{Icon, Selectable, Side, Sizable, Size};
 use gpui_kit::gpui::Anchor;
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -33,6 +33,8 @@ pub struct MainToolbarProps<'a> {
     pub search_input: Option<&'a Entity<InputState>>,
     pub show_view_switches: bool,
     pub is_grid_mode: bool,
+    pub show_grouping: bool,
+    pub is_group_series: bool,
     pub show_sort: bool,
     pub sort_by: SortBy,
     pub sort_direction: SortDirection,
@@ -52,10 +54,12 @@ pub fn render_main_toolbar(
     on_toggle_sidebar: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_toggle_grid: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_toggle_group_series: impl Fn(bool, &mut Window, &mut App) + 'static,
     on_change_sort: impl Fn(SortBy, SortDirection, &mut Window, &mut App) + 'static,
     on_close_window: Option<std::rc::Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
 ) -> AnyElement {
     let on_toggle_grid = std::rc::Rc::new(on_toggle_grid);
+    let on_toggle_group_series = std::rc::Rc::new(on_toggle_group_series);
     let on_change_sort = std::rc::Rc::new(on_change_sort);
     let colors = props.colors;
     let button_radius = button_radius(props.radius, CONTROL_HEIGHT_TOOLBAR);
@@ -242,7 +246,52 @@ pub fn render_main_toolbar(
                 })
                 .when(props.selection_count == 0, |this| {
                     this
-                        // 1. Contextual view toggle: switches between Grid and List view
+                        // 1. Folder Grouping segmented control: switches between Groups view and Volumes view
+                        .when(props.show_grouping, |this| {
+                            let on_toggle_group_series = on_toggle_group_series.clone();
+
+                            this.child(
+                                div()
+                                    .debug_selector(|| "grouping-mode-toggle".into())
+                                    .child(
+                                        ButtonGroup::new("grouping-mode-segmented")
+                                            .compact()
+                                            .child(
+                                                Button::new("mode-groups")
+                                                    .ghost()
+                                                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                                    .icon(IconName::Folder)
+                                                    .selected(props.is_group_series)
+                                                    .tooltip("Groups view")
+                                                    .accessibility_label("Groups view")
+                                                    .on_click({
+                                                        let on_toggle =
+                                                            on_toggle_group_series.clone();
+                                                        move |_, window, cx| {
+                                                            on_toggle(true, window, cx)
+                                                        }
+                                                    }),
+                                            )
+                                            .child(
+                                                Button::new("mode-volumes")
+                                                    .ghost()
+                                                    .with_size(Size::Size(CONTROL_HEIGHT_TOOLBAR))
+                                                    .icon(IconName::BookOpen)
+                                                    .selected(!props.is_group_series)
+                                                    .tooltip("Volumes view")
+                                                    .accessibility_label("Volumes view")
+                                                    .on_click({
+                                                        let on_toggle =
+                                                            on_toggle_group_series.clone();
+                                                        move |_, window, cx| {
+                                                            on_toggle(false, window, cx)
+                                                        }
+                                                    }),
+                                            ),
+                                    ),
+                            )
+                        })
+                        // 2. Contextual view toggle: switches between Grid and List view
                         .when(props.show_view_switches, |this| {
                             let (icon, tooltip, next_is_grid) = if props.is_grid_mode {
                                 (IconName::List, "Switch to List View", false)

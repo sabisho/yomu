@@ -13,7 +13,7 @@ use gpui_kit::component::empty::{
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::v_virtual_list;
-use gpui_kit::component::{Icon, Sizable, Size};
+use gpui_kit::component::{Icon, Sizable, Size, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, ClickEvent, Context, Entity, Pixels, Window, div, px, size};
 
@@ -141,6 +141,8 @@ impl Yomu {
         radius: Pixels,
         colors: UiColors,
         border_px: f32,
+        selection_state: ui::library_view::GroupSelectionState,
+        member_ids: Arc<[String]>,
         yomu: &Entity<Self>,
     ) -> AnyElement {
         let key_arc: Arc<str> = Arc::from(group_key);
@@ -148,9 +150,15 @@ impl Yomu {
 
         let yomu_click = yomu.clone();
         let key_click = Arc::clone(&key_arc);
-        let on_click = move |_event: &ClickEvent, _window: &mut Window, cx: &mut App| {
-            let key = key_click.to_string();
+        let member_ids_click = Arc::clone(&member_ids);
+        let on_click = move |event: &ClickEvent, _window: &mut Window, cx: &mut App| {
+            let ctrl = event.modifiers().control || event.modifiers().platform;
             yomu_click.update(cx, |this, cx| {
+                if !this.selection.is_empty() || ctrl {
+                    this.toggle_group_selection(&member_ids_click, cx);
+                    return;
+                }
+                let key = key_click.to_string();
                 this.enter_group(key, cx);
             });
         };
@@ -175,6 +183,7 @@ impl Yomu {
             cover_path,
             radius,
             border_px,
+            selection_state,
             colors,
             on_click,
             context_menu,
@@ -191,6 +200,8 @@ impl Yomu {
         card_w: f32,
         cover_h: f32,
         radius: Pixels,
+        selection_state: ui::library_view::GroupSelectionState,
+        member_ids: Arc<[String]>,
         colors: UiColors,
         yomu: &Entity<Self>,
     ) -> AnyElement {
@@ -200,9 +211,15 @@ impl Yomu {
 
         let yomu_click = yomu.clone();
         let key_click = Arc::clone(&key_arc);
-        let on_click = move |_event: &ClickEvent, _window: &mut Window, cx: &mut App| {
-            let key = key_click.to_string();
+        let member_ids_click = Arc::clone(&member_ids);
+        let on_click = move |event: &ClickEvent, _window: &mut Window, cx: &mut App| {
+            let ctrl = event.modifiers().control || event.modifiers().platform;
             yomu_click.update(cx, |this, cx| {
+                if !this.selection.is_empty() || ctrl {
+                    this.toggle_group_selection(&member_ids_click, cx);
+                    return;
+                }
+                let key = key_click.to_string();
                 this.enter_group(key, cx);
             });
         };
@@ -229,6 +246,7 @@ impl Yomu {
             cover_h,
             radius,
             border_px,
+            selection_state,
             colors,
             on_click,
             context_menu,
@@ -273,22 +291,55 @@ impl Yomu {
                     .description(EmptyDescription::new().child(desc)),
             )
             .when(is_empty_library, |this| {
-                let yomu = yomu.clone();
+                let yomu1 = yomu.clone();
+                let yomu2 = yomu.clone();
+                let btn_r =
+                    ui::components::button_radius(radius, ui::components::CONTROL_HEIGHT_PRIMARY);
                 this.child(
-                    Button::new("empty-import-btn")
-                        .primary()
-                        .icon(IconName::Plus)
-                        .label("Import Manga")
-                        .with_size(Size::Size(ui::components::CONTROL_HEIGHT_PRIMARY))
-                        .rounded(ButtonRounded::Size(ui::components::button_radius(
-                            radius,
-                            ui::components::CONTROL_HEIGHT_PRIMARY,
-                        )))
-                        .on_click(move |_, _, cx| {
-                            yomu.update(cx, |this, cx| {
-                                this.import_dialog(false, cx);
-                            });
-                        }),
+                    h_flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .debug_selector(|| "empty-import-files-btn".into())
+                                .child(
+                                    Button::new("empty-import-files-btn")
+                                        .primary()
+                                        .icon(IconName::FilePlus)
+                                        .label("Import Files")
+                                        .accessibility_label("Import manga files")
+                                        .with_size(Size::Size(
+                                            ui::components::CONTROL_HEIGHT_PRIMARY,
+                                        ))
+                                        .rounded(ButtonRounded::Size(btn_r))
+                                        .on_click(move |_, _, cx| {
+                                            yomu1.update(cx, |this, cx| {
+                                                this.import_dialog(false, cx);
+                                            });
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "empty-import-folder-btn".into())
+                                .child(
+                                    Button::new("empty-import-folder-btn")
+                                        .outline()
+                                        .icon(IconName::FolderPlus)
+                                        .label("Import Folder")
+                                        .accessibility_label("Import manga folder")
+                                        .with_size(Size::Size(
+                                            ui::components::CONTROL_HEIGHT_PRIMARY,
+                                        ))
+                                        .rounded(ButtonRounded::Size(btn_r))
+                                        .on_click(move |_, _, cx| {
+                                            yomu2.update(cx, |this, cx| {
+                                                this.import_dialog(true, cx);
+                                            });
+                                        }),
+                                ),
+                        ),
                 )
             })
             .into_any_element()
@@ -426,11 +477,18 @@ impl Yomu {
                     }
                     let first = group.books[0];
                     let count = group.books.len();
+                    let member_ids: Arc<[String]> = group
+                        .books
+                        .iter()
+                        .map(|b| b.id.clone())
+                        .collect::<Vec<_>>()
+                        .into();
                     items.push(LibraryItem::Folder {
                         key: group.key.clone(),
                         name: group.name.clone(),
                         count,
                         cover_id: first.id.clone(),
+                        member_ids,
                     });
                 }
 
@@ -542,11 +600,26 @@ impl Yomu {
                                     name,
                                     count,
                                     cover_id,
+                                    member_ids,
                                 } => {
                                     let cover_path = this.dirs.cover_for_size(cover_id, thumb_size);
+                                    let selection_state =
+                                        ui::library_view::compute_group_selection_state(
+                                            member_ids.iter().map(String::as_str),
+                                            &this.selection,
+                                        );
                                     this.render_folder_card(
-                                        key, name, *count, cover_path, card_w, cover_h, radius,
-                                        colors, &yomu,
+                                        key,
+                                        name,
+                                        *count,
+                                        cover_path,
+                                        card_w,
+                                        cover_h,
+                                        radius,
+                                        selection_state,
+                                        Arc::clone(member_ids),
+                                        colors,
+                                        &yomu,
                                     )
                                 }
                                 LibraryItem::Book { id, index } => {
@@ -581,10 +654,24 @@ impl Yomu {
                                     name,
                                     count,
                                     cover_id,
+                                    member_ids,
                                 } => {
                                     let cover_path = this.dirs.cover_for_size(cover_id, thumb_size);
+                                    let selection_state =
+                                        ui::library_view::compute_group_selection_state(
+                                            member_ids.iter().map(String::as_str),
+                                            &this.selection,
+                                        );
                                     this.render_folder_list_row(
-                                        key, name, *count, cover_path, radius, colors, border_px,
+                                        key,
+                                        name,
+                                        *count,
+                                        cover_path,
+                                        radius,
+                                        colors,
+                                        border_px,
+                                        selection_state,
+                                        Arc::clone(member_ids),
                                         &yomu,
                                     )
                                 }

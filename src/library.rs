@@ -1177,9 +1177,19 @@ impl Library {
     }
 
     /// Returns `false` (and changes nothing) if a book with the same id already exists.
-    pub fn add(&mut self, book: Book) -> bool {
+    pub fn add(&mut self, mut book: Book) -> bool {
         if self.get(&book.id).is_some() {
             return false;
+        }
+        if let Some(s) = book.series.take() {
+            let matched = self
+                .books
+                .iter()
+                .filter_map(|b| b.series.as_ref())
+                .find(|existing| existing.eq_ignore_ascii_case(&s))
+                .cloned()
+                .unwrap_or(s);
+            book.series = Some(matched);
         }
         self.bump_mutation_seq();
         self.books.push(book);
@@ -1313,8 +1323,8 @@ impl ImportReport {
 }
 
 enum Candidate {
-    Archive(PathBuf),
-    Folder(PathBuf),
+    Archive(PathBuf, Option<String>),
+    Folder(PathBuf, Option<String>),
 }
 
 #[inline]
@@ -1371,7 +1381,15 @@ where
         if is_cancelled(cancel) {
             return report;
         }
-        collect(path, 0, true, &mut candidates, &mut report.errors, cancel);
+        collect(
+            path,
+            0,
+            true,
+            None,
+            &mut candidates,
+            &mut report.errors,
+            cancel,
+        );
     }
 
     if is_cancelled(cancel) {
@@ -1383,16 +1401,16 @@ where
         if is_cancelled(cancel) {
             return report;
         }
-        let (path, kind) = match &candidate {
-            Candidate::Archive(p) => (p.as_path(), SourceKind::Archive),
-            Candidate::Folder(p) => (p.as_path(), SourceKind::Folder),
+        let (path, kind, group) = match candidate {
+            Candidate::Archive(p, g) => (p, SourceKind::Archive, g),
+            Candidate::Folder(p, g) => (p, SourceKind::Folder, g),
         };
-        let id = book_id(path);
+        let id = book_id(&path);
         if !seen.insert(id) {
             report.skipped += 1;
             continue;
         }
-        match build_book(path, kind, dirs, cancel) {
+        match build_book(&path, kind, group, dirs, cancel) {
             Ok(book) => {
                 if is_cancelled(cancel) {
                     return report;
@@ -1406,7 +1424,7 @@ where
                 }
                 report
                     .errors
-                    .push(format!("{}: {err:#}", display_name(path)));
+                    .push(format!("{}: {err:#}", display_name(&path)));
             }
         }
     }
@@ -1417,6 +1435,7 @@ fn collect(
     path: &Path,
     depth: usize,
     explicit: bool,
+    group: Option<String>,
     out: &mut Vec<Candidate>,
     errors: &mut Vec<String>,
     cancel: Option<&AtomicBool>,
@@ -1442,7 +1461,7 @@ fn collect(
     if path.is_file() {
         let name = display_name(&path);
         if archive::is_archive_name(&name) {
-            out.push(Candidate::Archive(path));
+            out.push(Candidate::Archive(path, group));
         } else if explicit {
             errors.push(format!(
                 "{name}: unsupported file type (CBZ/CBR/ZIP/RAR archives and image folders only)"
@@ -1453,7 +1472,7 @@ fn collect(
             return;
         }
         if archive::folder_has_images(&path) {
-            out.push(Candidate::Folder(path));
+            out.push(Candidate::Folder(path, group));
         } else if depth < MAX_SCAN_DEPTH {
             let mut children: Vec<PathBuf> = match fs::read_dir(&path) {
                 Ok(entries) => entries.flatten().map(|e| e.path()).collect(),
@@ -1469,6 +1488,34 @@ fn collect(
                 return;
             }
             children.sort_by(|a, b| natural_cmp(&display_name(a), &display_name(b)));
+
+            let effective_group = if let Some(g) = group {
+                Some(g)
+            } else {
+                let has_direct_volumes = children.iter().any(|child| {
+                    if child.is_file() {
+                        archive::is_archive_name(&display_name(child))
+                    } else if child.is_dir() {
+                        archive::folder_has_images(child)
+                    } else {
+                        false
+                    }
+                });
+
+                if has_direct_volumes {
+                    Some(display_name(&path))
+                } else if explicit && depth == 0 {
+                    let sub_dirs: Vec<&PathBuf> = children.iter().filter(|c| c.is_dir()).collect();
+                    if sub_dirs.len() == 1 {
+                        Some(display_name(&path))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
             for child in children {
                 if is_cancelled(cancel) {
                     return;
@@ -1476,7 +1523,15 @@ fn collect(
                 if display_name(&child).starts_with('.') {
                     continue;
                 }
-                collect(&child, depth + 1, false, out, errors, cancel);
+                collect(
+                    &child,
+                    depth + 1,
+                    false,
+                    effective_group.clone(),
+                    out,
+                    errors,
+                    cancel,
+                );
             }
         }
     }
@@ -1485,6 +1540,7 @@ fn collect(
 fn build_book(
     path: &Path,
     kind: SourceKind,
+    group: Option<String>,
     dirs: &DataDirs,
     cancel: Option<&AtomicBool>,
 ) -> Result<Book> {
@@ -1552,7 +1608,7 @@ fn build_book(
     Ok(Book {
         id,
         title: title_for(path),
-        series: None,
+        series: group,
         path: path.to_path_buf(),
         kind,
         page_count: pages.len(),
@@ -2154,6 +2210,146 @@ mod tests {
 
         assert!(report.added.is_empty());
         assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn test_folder_import_automatic_grouping_and_nested_structure() {
+        let tmp = temp_dir("auto-group");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+
+        // 1. Folder with direct volumes: Berserk/ (v1.cbz, v2.cbz)
+        let berserk = tmp.join("Berserk");
+        fs::create_dir_all(&berserk).unwrap();
+        let b1 = berserk.join("Berserk Vol. 01.cbz");
+        let b2 = berserk.join("Berserk Vol. 02.cbz");
+        write_cbz(&b1, &["1.png"]);
+        write_cbz(&b2, &["1.png"]);
+
+        let report1 = import_paths(std::slice::from_ref(&berserk), &dirs, &HashSet::new());
+        assert!(report1.errors.is_empty(), "{:?}", report1.errors);
+        assert_eq!(report1.added.len(), 2);
+        for book in &report1.added {
+            assert_eq!(
+                book.series.as_deref(),
+                Some("Berserk"),
+                "Volumes under Berserk folder must be automatically grouped into 'Berserk'"
+            );
+        }
+
+        // 2. Individual file import: standalone.cbz must NOT be automatically grouped
+        let standalone = tmp.join("standalone.cbz");
+        write_cbz(&standalone, &["1.png"]);
+        let report_file = import_paths(&[standalone], &dirs, &HashSet::new());
+        assert!(report_file.errors.is_empty(), "{:?}", report_file.errors);
+        assert_eq!(report_file.added.len(), 1);
+        assert_eq!(
+            report_file.added[0].series, None,
+            "Individually imported file must not be grouped"
+        );
+
+        // 3. Container folder with nested manga structures: Manga/ containing Claymore/ and Vinland/
+        let manga_root = tmp.join("Manga");
+        let claymore = manga_root.join("Claymore");
+        let vinland = manga_root.join("Vinland Saga");
+        fs::create_dir_all(&claymore).unwrap();
+        fs::create_dir_all(&vinland).unwrap();
+        write_cbz(&claymore.join("c1.cbz"), &["1.png"]);
+        write_cbz(&claymore.join("c2.cbz"), &["1.png"]);
+        write_cbz(&vinland.join("v1.cbz"), &["1.png"]);
+
+        let report_nested = import_paths(&[manga_root], &dirs, &HashSet::new());
+        assert!(
+            report_nested.errors.is_empty(),
+            "{:?}",
+            report_nested.errors
+        );
+        assert_eq!(report_nested.added.len(), 3);
+        let claymore_books: Vec<_> = report_nested
+            .added
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Claymore"))
+            .collect();
+        assert_eq!(
+            claymore_books.len(),
+            2,
+            "Claymore books must be grouped as 'Claymore'"
+        );
+        let vinland_books: Vec<_> = report_nested
+            .added
+            .iter()
+            .filter(|b| b.series.as_deref() == Some("Vinland Saga"))
+            .collect();
+        assert_eq!(
+            vinland_books.len(),
+            1,
+            "Vinland Saga books must be grouped as 'Vinland Saga'"
+        );
+
+        // 4. Duplicate folder re-import
+        let existing_ids: HashSet<String> = report1.added.iter().map(|b| b.id.clone()).collect();
+        let report_reimport = import_paths(&[berserk], &dirs, &existing_ids);
+        assert_eq!(
+            report_reimport.skipped, 2,
+            "Reimporting must skip existing volumes"
+        );
+        assert_eq!(
+            report_reimport.added.len(),
+            0,
+            "No duplicate volumes added on reimport"
+        );
+
+        // 5. Existing group case-insensitive reuse in Library::add
+        let mut lib = Library::default();
+        lib.add(report1.added[0].clone());
+        let series_list: Vec<&str> = lib
+            .books()
+            .iter()
+            .filter_map(|b| b.series.as_deref())
+            .collect();
+        assert_eq!(series_list, vec!["Berserk"]);
+
+        // Add another book with lowercase series "berserk"
+        let mut lowercase_book = report1.added[1].clone();
+        lowercase_book.id = "different-id".into();
+        lowercase_book.series = Some("berserk".into());
+        lib.add(lowercase_book);
+        assert_eq!(
+            lib.get("different-id").unwrap().series.as_deref(),
+            Some("Berserk"),
+            "Library::add must normalize and reuse existing series casing"
+        );
+        let series_list2: Vec<&str> = lib
+            .books()
+            .iter()
+            .filter_map(|b| b.series.as_deref())
+            .collect();
+        assert_eq!(
+            series_list2,
+            vec!["Berserk", "Berserk"],
+            "Both books share normalized series"
+        );
+    }
+
+    #[test]
+    fn test_folder_import_empty_and_unsupported_files() {
+        let tmp = temp_dir("empty-unsupported");
+        let dirs = DataDirs::at(tmp.join("data")).unwrap();
+
+        // Empty folder
+        let empty_dir = tmp.join("EmptyFolder");
+        fs::create_dir_all(&empty_dir).unwrap();
+        let report_empty = import_paths(&[empty_dir], &dirs, &HashSet::new());
+        assert!(report_empty.errors.is_empty());
+        assert_eq!(report_empty.added.len(), 0);
+
+        // Folder with only unsupported files (e.g. text/pdf)
+        let unsupported_dir = tmp.join("UnsupportedFolder");
+        fs::create_dir_all(&unsupported_dir).unwrap();
+        fs::write(unsupported_dir.join("info.txt"), "hello").unwrap();
+        fs::write(unsupported_dir.join("doc.pdf"), "%PDF-1.4").unwrap();
+        let report_unsupported = import_paths(&[unsupported_dir], &dirs, &HashSet::new());
+        assert!(report_unsupported.errors.is_empty());
+        assert_eq!(report_unsupported.added.len(), 0);
     }
 
     #[test]

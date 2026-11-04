@@ -1,6 +1,7 @@
 //! Continue reading dashboard view presentation adapter.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use gpui_kit::{AnyElement, Context, Window, px};
 
@@ -137,6 +138,16 @@ impl Yomu {
                     RecentEntry::Group(group, _) => {
                         let first = group.books[0];
                         let cover_path = self.dirs.cover_for_size(&first.id, thumb_size);
+                        let member_ids: Arc<[String]> = group
+                            .books
+                            .iter()
+                            .map(|b| b.id.clone())
+                            .collect::<Vec<_>>()
+                            .into();
+                        let selection_state = ui::library_view::compute_group_selection_state(
+                            member_ids.iter().map(String::as_str),
+                            &self.selection,
+                        );
                         cards.push(self.render_folder_card(
                             &group.key,
                             &group.name,
@@ -145,6 +156,8 @@ impl Yomu {
                             card_w,
                             cover_h,
                             radius,
+                            selection_state,
+                            member_ids,
                             colors,
                             &yomu,
                         ));
@@ -212,6 +225,14 @@ impl Yomu {
                 move |_, _, cx| {
                     yomu.update(cx, |this, cx| {
                         this.import_dialog(false, cx);
+                    });
+                }
+            },
+            {
+                let yomu = yomu.clone();
+                move |_, _, cx| {
+                    yomu.update(cx, |this, cx| {
+                        this.import_dialog(true, cx);
                     });
                 }
             },

@@ -11,7 +11,7 @@ use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Icon, Sizable, Size};
+use gpui_kit::component::{Icon, Sizable, Size, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Anchor, AnyElement, App, ClickEvent, Context, ElementId, FontWeight, InteractiveElement,
@@ -49,7 +49,8 @@ pub fn render_continue_reading_view(
     on_open_details: impl Fn(&str, &mut Window, &mut App) + 'static,
     on_see_all: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_book_menu: impl Fn(&str, PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
-    on_import: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_import_files: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_import_folder: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let on_open_details = std::rc::Rc::new(on_open_details);
     let on_book_menu = std::rc::Rc::new(on_book_menu);
@@ -76,13 +77,38 @@ pub fn render_continue_reading_view(
             )
             .content(
                 EmptyContent::new().child(
-                    Button::new("empty-import-button")
-                        .primary()
-                        .label("+ Import Manga")
-                        .rounded(ButtonRounded::Medium)
-                        .bg(colors.accent)
-                        .text_color(colors.accent_foreground)
-                        .on_click(on_import),
+                    h_flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .debug_selector(|| "empty-import-files-btn".into())
+                                .child(
+                                    Button::new("empty-import-files-btn")
+                                        .primary()
+                                        .icon(IconName::FilePlus)
+                                        .label("Import Files")
+                                        .accessibility_label("Import manga files")
+                                        .rounded(ButtonRounded::Medium)
+                                        .bg(colors.accent)
+                                        .text_color(colors.accent_foreground)
+                                        .on_click(on_import_files),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "empty-import-folder-btn".into())
+                                .child(
+                                    Button::new("empty-import-folder-btn")
+                                        .outline()
+                                        .icon(IconName::FolderPlus)
+                                        .label("Import Folder")
+                                        .accessibility_label("Import manga folder")
+                                        .rounded(ButtonRounded::Medium)
+                                        .on_click(on_import_folder),
+                                ),
+                        ),
                 ),
             )
             .into_any_element();

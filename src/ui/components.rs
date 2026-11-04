@@ -185,20 +185,21 @@ pub fn compute_responsive_grid(
     let sidebar_w = if sidebar_visible { 240.0 } else { 48.0 };
     let content_w = (viewport_width - sidebar_w).max(200.0);
 
-    let card_w = thumb_size.card_width();
-    let cover_h = thumb_size.card_height();
+    let base_card_w = thumb_size.card_width();
+    let aspect_ratio = thumb_size.card_height() / thumb_size.card_width();
 
-    let min_margin = if content_w < 560.0 { 12.0 } else { 16.0 };
-    let gap = if content_w < 560.0 { 12.0 } else { 16.0 };
+    let pad_x = if content_w < 600.0 { 16.0 } else { 24.0 };
+    let gap = if content_w < 600.0 { 12.0 } else { 16.0 };
 
-    let cols = if content_w <= card_w + min_margin * 2.0 {
-        1
-    } else {
-        (((content_w - min_margin * 2.0 + gap) / (card_w + gap)).floor() as usize).max(1)
-    };
+    let avail_w = (content_w - 2.0 * pad_x).max(100.0);
+    let slot_w = base_card_w + gap;
 
-    let used_w = cols as f32 * card_w + (cols - 1) as f32 * gap;
-    let pad_x = ((content_w - used_w) / 2.0).max(min_margin);
+    // Calculate optimal column count to fill available content width
+    let cols = ((avail_w + gap) / slot_w).round().max(1.0) as usize;
+
+    // Distribute available width evenly among columns to eliminate dead margin space
+    let card_w = ((avail_w - (cols - 1) as f32 * gap) / cols as f32).max(120.0);
+    let cover_h = (card_w * aspect_ratio).round();
 
     ResponsiveGrid {
         cols,
