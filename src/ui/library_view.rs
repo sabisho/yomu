@@ -17,7 +17,7 @@ use gpui_kit::{
     SharedString, Styled, Window, div, img, px, relative,
 };
 
-use crate::library::{Book, SortBy, SortDirection};
+use crate::library::{Book, SortBy, SortDirection, ThumbnailSize};
 use crate::ui::components::{stat_badge, with_alpha};
 use crate::ui::theme::UiColors;
 use yomu::selection::Selection;
@@ -97,6 +97,7 @@ pub enum LibraryItem {
 pub struct LibraryRowCache {
     pub mutation_seq: u64,
     pub save_seq: u64,
+    pub progress_seq: u64,
     pub books_len: usize,
     pub search_query: String,
     pub sort_by: SortBy,
@@ -118,6 +119,7 @@ impl LibraryRowCache {
         &self,
         mutation_seq: u64,
         save_seq: u64,
+        progress_seq: u64,
         books_len: usize,
         search_query: &str,
         sort_by: SortBy,
@@ -133,6 +135,7 @@ impl LibraryRowCache {
     ) -> bool {
         self.mutation_seq == mutation_seq
             && self.save_seq == save_seq
+            && self.progress_seq == progress_seq
             && self.books_len == books_len
             && self.search_query == search_query
             && self.sort_by == sort_by
@@ -224,6 +227,30 @@ pub fn directory_groups<'a>(books: impl IntoIterator<Item = &'a Book>) -> Vec<Li
         .collect();
     groups.sort_by_key(|group| group.first_seen);
     groups
+}
+
+/// Checks group membership without constructing the full set of groups.
+pub fn book_belongs_to_group(book: &Book, key: &str) -> bool {
+    let manual_series = book
+        .series
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+
+    if let Some(series) = manual_series {
+        let Some(group_series) = key.strip_prefix("series:") else {
+            return false;
+        };
+        if series.chars().any(char::is_uppercase) {
+            series.to_lowercase() == group_series
+        } else {
+            series == group_series
+        }
+    } else {
+        let parent = book.path.parent().unwrap_or_else(|| Path::new("."));
+        key.strip_prefix("directory:")
+            .is_some_and(|group_path| parent.display().to_string() == group_path)
+    }
 }
 
 /// Sorts library folder groups according to the selected mode and direction.
@@ -521,6 +548,7 @@ pub fn render_book_card(
 pub fn render_book_list_row(
     book: &Book,
     cover_path: PathBuf,
+    thumb_size: ThumbnailSize,
     radius: Pixels,
     border_px: f32,
     is_selected: bool,
@@ -528,6 +556,8 @@ pub fn render_book_list_row(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
     context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
+    let (cover_w, cover_h) = crate::ui::components::list_thumbnail_dimensions(thumb_size);
+    let row_height = crate::ui::components::list_row_height(thumb_size);
     let progress = book.progress();
     let total = book.page_count;
     let current = if book.opened {
@@ -538,7 +568,7 @@ pub fn render_book_list_row(
     let display_title = book.title.clone();
 
     ListItem::new((ElementId::from("manga-item"), book.id.as_str()))
-        .h(px(64.))
+        .h(px(row_height))
         .px_3p5()
         .rounded(radius)
         .selected(is_selected)
@@ -590,8 +620,8 @@ pub fn render_book_list_row(
                         .child(
                             div()
                                 .id((ElementId::from("manga-cover"), book.id.as_str()))
-                                .w(px(38.))
-                                .h(px(52.))
+                                .w(px(cover_w))
+                                .h(px(cover_h))
                                 .flex_none()
                                 .rounded(px(f32::from(radius).min(4.)))
                                 .bg(with_alpha(colors.foreground, 0.04))
@@ -872,6 +902,7 @@ pub fn render_folder_list_row(
     group_name: &str,
     count: usize,
     cover_path: PathBuf,
+    thumb_size: ThumbnailSize,
     radius: Pixels,
     border_px: f32,
     selection_state: GroupSelectionState,
@@ -879,9 +910,11 @@ pub fn render_folder_list_row(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
     context_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
 ) -> AnyElement {
+    let (cover_w, cover_h) = crate::ui::components::list_thumbnail_dimensions(thumb_size);
+    let row_height = crate::ui::components::list_row_height(thumb_size);
     let is_selected = selection_state != GroupSelectionState::Unselected;
     ListItem::new((ElementId::from("folder-item"), group_key))
-        .h(px(64.))
+        .h(px(row_height))
         .px_3p5()
         .rounded(radius)
         .selected(is_selected)
@@ -949,8 +982,8 @@ pub fn render_folder_list_row(
                         })
                         .child(
                             div()
-                                .w(px(38.))
-                                .h(px(52.))
+                                .w(px(cover_w))
+                                .h(px(cover_h))
                                 .flex_none()
                                 .rounded(px(f32::from(radius).min(4.)))
                                 .bg(with_alpha(colors.foreground, 0.04))

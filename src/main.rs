@@ -438,8 +438,8 @@ impl Yomu {
             return;
         }
         self.cleanup_current_reader();
-        self.cover_cache.update(cx, |cache, _cx| {
-            cache.clear_without_window();
+        self.cover_cache.update(cx, |cache, cx| {
+            cache.clear_without_window(cx);
         });
         self.selection.clear();
         self.open_group = None;
@@ -844,34 +844,140 @@ impl Yomu {
 
     /// Book ids in the currently viewed scope (the open group, or the full library, filtered by active search query).
     pub(crate) fn current_view_order(&self) -> Vec<String> {
-        let sorted = self.get_sorted_books();
-        let query = self.search_query.trim().to_lowercase();
-        let matches_query = |b: &yomu::library::Book| {
-            query.is_empty()
-                || b.title.to_lowercase().contains(&query)
-                || b.series
-                    .as_ref()
-                    .is_some_and(|s| s.to_lowercase().contains(&query))
-                || b.path.to_string_lossy().to_lowercase().contains(&query)
-        };
-        if self.library.settings().group_series
-            && let Some(open_key) = self.open_group.as_deref()
+        self.current_view_order_shared().to_vec()
+    }
+
+    pub(crate) fn current_view_order_shared(&self) -> Rc<[String]> {
+        let mutation_seq = self.library.mutation_seq();
+        let save_seq = self.save_seq;
+        let progress_seq = self.progress_seq;
+        let books_len = self.library.books().len();
+        let query = self.search_query.trim();
+        let sort_by = self.library.settings().sort_by;
+        let sort_direction = self.library.settings().sort_direction;
+        let group_series = self.library.settings().group_series;
+        let open_group = self.open_group.as_deref();
+
+        let mut cache = self.current_view_order_cache.borrow_mut();
+        if let Some(cached) = cache.as_ref()
+            && cached.mutation_seq == mutation_seq
+            && cached.save_seq == save_seq
+            && cached.progress_seq == progress_seq
+            && cached.books_len == books_len
+            && cached.search_query == query
+            && cached.sort_by == sort_by
+            && cached.sort_direction == sort_direction
+            && cached.group_series == group_series
+            && cached.open_group.as_deref() == open_group
         {
-            let groups = directory_groups(sorted.iter().copied());
-            if let Some(group) = groups.into_iter().find(|g| g.key == open_key) {
-                return group
-                    .books
-                    .into_iter()
-                    .filter(|b| matches_query(b))
-                    .map(|book| book.id.clone())
-                    .collect();
-            }
+            return Rc::clone(&cached.ids);
         }
-        sorted
-            .into_iter()
-            .filter(|b| matches_query(b))
-            .map(|book| book.id.clone())
-            .collect()
+
+        let sorted = self.get_sorted_books();
+        let mut ids = Vec::with_capacity(sorted.len());
+        let mut group_count = sorted.len();
+        if group_series && let Some(open_key) = open_group {
+            let group_exists = sorted
+                .iter()
+                .any(|book| ui::library_view::book_belongs_to_group(book, open_key));
+            if group_exists {
+                group_count = 0;
+                for book in sorted {
+                    if ui::library_view::book_belongs_to_group(book, open_key) {
+                        group_count += 1;
+                        if yomu::search::matches(
+                            &book.title,
+                            &book.path,
+                            book.series.as_deref(),
+                            query,
+                        ) {
+                            ids.push(book.id.clone());
+                        }
+                    }
+                }
+            } else {
+                group_count = 0;
+                ids.extend(
+                    sorted
+                        .into_iter()
+                        .filter(|book| {
+                            yomu::search::matches(
+                                &book.title,
+                                &book.path,
+                                book.series.as_deref(),
+                                query,
+                            )
+                        })
+                        .map(|book| book.id.clone()),
+                );
+            }
+        } else {
+            ids.extend(
+                sorted
+                    .into_iter()
+                    .filter(|book| {
+                        yomu::search::matches(
+                            &book.title,
+                            &book.path,
+                            book.series.as_deref(),
+                            query,
+                        )
+                    })
+                    .map(|book| book.id.clone()),
+            );
+        }
+
+        let ids: Rc<[String]> = ids.into();
+        *cache = Some(app::state::CurrentViewOrderCache {
+            mutation_seq,
+            save_seq,
+            progress_seq,
+            books_len,
+            search_query: query.to_string(),
+            sort_by,
+            sort_direction,
+            group_series,
+            open_group: open_group.map(str::to_owned),
+            ids: Rc::clone(&ids),
+            group_count,
+        });
+        ids
+    }
+
+    pub(crate) fn current_view_group_count(&self) -> usize {
+        let _ = self.current_view_order_shared();
+        self.current_view_order_cache
+            .borrow()
+            .as_ref()
+            .map_or(0, |cache| cache.group_count)
+    }
+
+    pub(crate) fn continue_reading_count(&self) -> usize {
+        let mutation_seq = self.library.mutation_seq();
+        let progress_seq = self.progress_seq;
+        let books_len = self.library.books().len();
+        let mut cache = self.continue_reading_count_cache.borrow_mut();
+        if let Some(cached) = *cache
+            && cached.mutation_seq == mutation_seq
+            && cached.progress_seq == progress_seq
+            && cached.books_len == books_len
+        {
+            return cached.count;
+        }
+
+        let count = self
+            .library
+            .books()
+            .iter()
+            .filter(|book| book.has_progress())
+            .count();
+        *cache = Some(app::state::ContinueReadingCountCache {
+            mutation_seq,
+            progress_seq,
+            books_len,
+            count,
+        });
+        count
     }
 
     pub(crate) fn prune_open_group(&mut self) {
@@ -907,6 +1013,9 @@ impl Yomu {
         shift: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if !ctrl && !shift && self.selection.is_empty() {
+            return false;
+        }
         let order = self.current_view_order();
         let handled = self.selection.click(&order, id, ctrl, shift);
         if handled {

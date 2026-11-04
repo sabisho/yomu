@@ -24,12 +24,7 @@ impl Yomu {
         let is_collapsed = self.sidebar_collapsed || auto_collapse;
 
         // 1. Sidebar Props
-        let continue_reading_count = self
-            .library
-            .books()
-            .iter()
-            .filter(|b| b.has_progress())
-            .count();
+        let continue_reading_count = self.continue_reading_count();
         let all_manga_count = self.library.books().len();
 
         let sidebar_props = ui::sidebar::SidebarProps {
@@ -91,13 +86,19 @@ impl Yomu {
             match &self.active_view {
                 ui::sidebar::MainView::AllManga => {
                     if let Some(open_key) = &self.open_group {
-                        let groups = ui::library_view::directory_groups(self.library.books());
-                        let (title, count) =
-                            if let Some(g) = groups.into_iter().find(|g| g.key == *open_key) {
-                                (g.name, g.books.len())
-                            } else {
-                                (open_key.clone(), 0)
-                            };
+                        let title = self
+                            .nav_history
+                            .get(self.nav_history_idx)
+                            .and_then(|destination| match destination {
+                                crate::app::state::NavDestination::Group { key, name }
+                                    if key == open_key =>
+                                {
+                                    Some(name.clone())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| open_key.clone());
+                        let count = self.current_view_group_count();
                         (
                             Some(SharedString::from(title)),
                             Some(SharedString::from(format!(
@@ -136,8 +137,12 @@ impl Yomu {
                 ui::sidebar::MainView::Settings => (Some(SharedString::from("Settings")), None),
             };
 
-        let current_order = self.current_view_order();
-        let is_all_selected = self.selection.is_all_selected(&current_order);
+        let is_all_selected = if self.selection.is_empty() {
+            false
+        } else {
+            let current_order = self.current_view_order_shared();
+            self.selection.is_all_selected(&current_order)
+        };
 
         let search_input = self.search_input.as_ref();
         let toolbar_props = ui::toolbar::MainToolbarProps {

@@ -15,7 +15,7 @@ pub const ZOOM_MAX: f32 = 8.0;
 pub const ZOOM_STEP: f32 = 1.25;
 
 /// Gap between left and right pages in dual-page spread mode.
-pub const SPREAD_GAP: f32 = 2.0;
+pub const SPREAD_GAP: f32 = 16.0;
 
 /// Default aspect ratio threshold (width / height) to classify an image as a double-page spread.
 pub const DEFAULT_SPREAD_RATIO_THRESHOLD: f32 = 1.25;
@@ -908,9 +908,9 @@ mod tests {
 
         let (left_orig, right_orig) =
             spread_origins((0.0, 0.0), left_size, right_size, SPREAD_GAP, &vp);
-        // Total width = 600 + 2 + 600 = 1202. Centered in 1600: (1600 - 1202)/2 = 199.0
-        assert_eq!(left_orig.0, 199.0);
-        assert_eq!(right_orig.0, 199.0 + 600.0 + SPREAD_GAP);
+        let expected_left = (vp.width - (left_size.0 + SPREAD_GAP + right_size.0)) / 2.0;
+        assert_eq!(left_orig.0, expected_left);
+        assert_eq!(right_orig.0, expected_left + left_size.0 + SPREAD_GAP);
         assert_eq!(left_orig.1, 0.0);
         assert_eq!(right_orig.1, 0.0);
 

@@ -122,6 +122,7 @@ impl Yomu {
         render_book_list_row(
             book,
             cover_path,
+            thumb_size,
             radius,
             border_px,
             is_selected,
@@ -181,6 +182,7 @@ impl Yomu {
             group_name,
             count,
             cover_path,
+            self.library.settings().thumbnail_size,
             radius,
             border_px,
             selection_state,
@@ -379,7 +381,13 @@ impl Yomu {
         } else {
             grid.pad_x.max(16.0)
         };
-        let row_height = if is_grid { cover_h + 64.0 } else { 64.0 };
+        // Card metadata can include a title, series/page metadata, and progress.
+        // Reserve enough height so the next virtual row cannot overlap it.
+        let row_height = if is_grid {
+            cover_h + 80.0
+        } else {
+            ui::components::list_row_height(thumb_size)
+        };
         let row_slot_h = row_height + gap;
         let content_w = (f32::from(window.viewport_size().width)
             - if !sidebar_collapsed { 240.0 } else { 48.0 })
@@ -387,6 +395,7 @@ impl Yomu {
 
         let mutation_seq = self.library.mutation_seq();
         let save_seq = self.save_seq;
+        let progress_seq = self.progress_seq;
         let books_len = self.library.books().len();
         let sort_by = self.library.settings().sort_by;
         let sort_direction = self.library.settings().sort_direction;
@@ -397,6 +406,7 @@ impl Yomu {
         let is_cached = cache.is_valid(
             mutation_seq,
             save_seq,
+            progress_seq,
             books_len,
             query,
             sort_by,
@@ -423,17 +433,22 @@ impl Yomu {
             let sorted_books = self.get_sorted_books();
 
             let books: Vec<&Book> = if group_series && let Some(open_key) = open_group_str {
-                let groups = directory_groups(sorted_books);
-                if let Some(group) = groups.into_iter().find(|g| g.key == open_key) {
-                    group
-                        .books
-                        .into_iter()
-                        .filter(|b| matches_query(b))
-                        .collect()
+                let mut group_books = Vec::new();
+                let mut group_exists = false;
+                for book in sorted_books {
+                    if ui::library_view::book_belongs_to_group(book, open_key) {
+                        group_exists = true;
+                        if matches_query(book) {
+                            group_books.push(book);
+                        }
+                    }
+                }
+                if group_exists {
+                    group_books
                 } else {
                     self.get_sorted_books()
                         .into_iter()
-                        .filter(|b| matches_query(b))
+                        .filter(|book| matches_query(book))
                         .collect()
                 }
             } else {
@@ -447,6 +462,7 @@ impl Yomu {
                 *cache = ui::library_view::LibraryRowCache {
                     mutation_seq,
                     save_seq,
+                    progress_seq,
                     books_len,
                     search_query: query.to_string(),
                     sort_by,
@@ -534,6 +550,7 @@ impl Yomu {
             *cache = ui::library_view::LibraryRowCache {
                 mutation_seq,
                 save_seq,
+                progress_seq,
                 books_len,
                 search_query: query.to_string(),
                 sort_by,
@@ -643,8 +660,6 @@ impl Yomu {
                         div()
                             .id(("list-row", row_ix))
                             .w_full()
-                            .max_w(px(1040.))
-                            .mx_auto()
                             .px(px(pad_x))
                             .h(px(row_slot_h))
                             .pb(px(8.0))

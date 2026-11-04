@@ -39,10 +39,34 @@ use crate::ui::theme::{custom_theme_fingerprint, custom_theme_metadata};
 #[derive(Debug, Clone)]
 pub(crate) struct SortedBooksCache {
     pub(crate) save_seq: u64,
+    pub(crate) progress_seq: u64,
     pub(crate) books_len: usize,
     pub(crate) sort_by: SortBy,
     pub(crate) sort_direction: SortDirection,
     pub(crate) indices: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CurrentViewOrderCache {
+    pub(crate) mutation_seq: u64,
+    pub(crate) save_seq: u64,
+    pub(crate) progress_seq: u64,
+    pub(crate) books_len: usize,
+    pub(crate) search_query: String,
+    pub(crate) sort_by: SortBy,
+    pub(crate) sort_direction: SortDirection,
+    pub(crate) group_series: bool,
+    pub(crate) open_group: Option<String>,
+    pub(crate) ids: Rc<[String]>,
+    pub(crate) group_count: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ContinueReadingCountCache {
+    pub(crate) mutation_seq: u64,
+    pub(crate) progress_seq: u64,
+    pub(crate) books_len: usize,
+    pub(crate) count: usize,
 }
 
 /// How far `j`/`k`/`h`/`l` scroll, in logical pixels.
@@ -163,6 +187,8 @@ pub struct Yomu {
     pub(crate) details_cover_available: bool,
     pub(crate) details_cover_seq: u64,
     pub(crate) sorted_books_cache: RefCell<Option<SortedBooksCache>>,
+    pub(crate) current_view_order_cache: RefCell<Option<CurrentViewOrderCache>>,
+    pub(crate) continue_reading_count_cache: RefCell<Option<ContinueReadingCountCache>>,
     pub(crate) library_row_cache: RefCell<ui::library_view::LibraryRowCache>,
     pub(crate) last_context_menu_book: Option<String>,
     pub(crate) window_handle: gpui_kit::AnyWindowHandle,
@@ -341,6 +367,8 @@ impl Yomu {
             details_cover_available: true,
             details_cover_seq: 0,
             sorted_books_cache: RefCell::new(None),
+            current_view_order_cache: RefCell::new(None),
+            continue_reading_count_cache: RefCell::new(None),
             library_row_cache: RefCell::new(ui::library_view::LibraryRowCache::default()),
             last_context_menu_book: None,
             window_handle: window.window_handle(),
@@ -444,6 +472,7 @@ impl Yomu {
         let needs_recompute = match cache.as_ref() {
             Some(c) => {
                 c.save_seq != self.save_seq
+                    || c.progress_seq != self.progress_seq
                     || c.books_len != all_books.len()
                     || c.sort_by != sort_by
                     || c.sort_direction != sort_direction
@@ -455,6 +484,7 @@ impl Yomu {
             let indices = sort_book_indices(all_books, sort_by, sort_direction);
             *cache = Some(SortedBooksCache {
                 save_seq: self.save_seq,
+                progress_seq: self.progress_seq,
                 books_len: all_books.len(),
                 sort_by,
                 sort_direction,

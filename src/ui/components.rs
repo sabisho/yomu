@@ -181,6 +181,19 @@ pub struct ResponsiveGrid {
     pub pad_x: f32,
 }
 
+/// Compact portrait cover dimensions for library list rows.
+pub fn list_thumbnail_dimensions(thumb_size: ThumbnailSize) -> (f32, f32) {
+    match thumb_size {
+        ThumbnailSize::Small => (32.0, 48.0),
+        ThumbnailSize::Medium => (40.0, 60.0),
+        ThumbnailSize::Large => (48.0, 72.0),
+    }
+}
+
+pub fn list_row_height(thumb_size: ThumbnailSize) -> f32 {
+    list_thumbnail_dimensions(thumb_size).1 + 16.0
+}
+
 pub fn compute_responsive_grid(
     viewport_width: f32,
     sidebar_visible: bool,

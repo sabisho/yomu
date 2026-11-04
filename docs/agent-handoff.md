@@ -6,12 +6,12 @@ This document is the active operational snapshot for coding agents working on Yo
 
 ## 1. Current Implementation Status
 
-Yomu is a high-performance desktop manga and comic reader built in safe Rust 2024 using **GPUI Kit 0.8.1** (`gpui-pre = 0.3.10` runtime) under `#![forbid(unsafe_code)]`.
+Yomu is a high-performance desktop manga and comic reader built in safe Rust 2024 using **GPUI Kit 0.9.0** (`gpui-pre = 0.3.11` runtime) under `#![forbid(unsafe_code)]`.
 
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstraction layers.
 - **UI Architecture:** Modern macOS HIG two-pane design (persistent 240px sidebar, context-aware 52px toolbar, responsive content views, edge-to-edge immersive reader with native `ScrollbarMode::Scrolling` auto-hide scrollbars and boundary scroll bounce).
-- **Test Baseline:** **390 active tests** passing (171 core library unit tests in `src/lib.rs`, 219 binary-target UI tests in `src/main.rs`, plus 16 opt-in performance benchmarks; 406 total).
+- **Test Baseline:** **391 active tests** passing (171 core library unit tests in `src/lib.rs`, 220 binary-target UI tests in `src/main.rs`, plus 16 opt-in performance benchmarks; 407 total).
 - **Clean Toolchain:** Zero compiler errors, zero warnings under `devenv shell cargo check --all-targets` and `devenv shell cargo clippy --all-targets --all-features -- -D warnings`, fully formatted under `devenv shell cargo fmt --all -- --check`.
 
 ---
@@ -69,7 +69,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 - **Memory Snapshot Latency Profiling:** Measured snapshot cloning speedup across 100 to 5,000 books, demonstrating 114.9x to 153.9x lower UI-thread latency (0.55 ms vs 84.98 ms for 5,000 books) and safe copy-on-write memory reclamation.
 - **Continuous Reader Layout Invalidation & Fuzzy Verification:** Implemented 50-iteration randomized fuzzy comparison between `ContinuousLayoutCache` and naive linear accumulation, verifying 100% precision across mixed dimensions and zoom levels. Benchmarked layout queries across 100 to 10,000 pages (8.5x to 312x faster, with $O(1)$ total height taking 5.3 ns).
 - **CBR/RAR Archive Safety & Concurrency Analysis:** Investigated UnRAR C++ backend handle constraints. Confirmed `unrar::OpenArchive` contains raw pointer `NonNull<unrar_sys::Handle>` which is strictly `!Send` and `!Sync`. Documented why shared handle pools are prohibited under `#![forbid(unsafe_code)]` and validated Yomu's single-pass entry header probing architecture.
-- **Library Grid Scalability Benchmark:** Benchmarked render tree generation across 100 to 10,000 books (2.57 ms at 100 books to 388.97 ms at 10,000 books). Documented GPUI Kit 0.8.1's 1D `v_virtual_list` limitation and established architectural recommendations respecting Rule 3.
+- **Library Grid Scalability Benchmark:** Benchmarked render tree generation across 100 to 10,000 books (2.57 ms at 100 books to 388.97 ms at 10,000 books). Documented the then-current GPUI Kit 0.8.1 `v_virtual_list` limitation and recommendations for row virtualization under Rule 3.
 
 ### Phase 8: Stage 4 Library Scalability & Official GPUI Kit Row-Based Virtualization (Completed)
 - **Official GPUI Kit Virtualization (`v_virtual_list`):** Implemented row-based 2D grid virtualization using `gpui_kit::component::v_virtual_list` and `VirtualListScrollHandle` without creating a custom second UI framework. Precomputed uniform row heights and paired with native `ScrollBounce` and `Scrollbar`.
@@ -80,7 +80,7 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 ### Phase 9: Stage 5 Deep Memory Leak, Memory Management & SSD I/O Audit (Completed)
 - **Deep Memory Lifecycle & Leak Audit:** Conducted exhaustive ownership tracing, task cancellation auditing, and dynamic heap profiling using Valgrind DHAT, Valgrind Massif, and Linux `/proc/self` telemetry. Measured peak live heap during active reading of just **3.96 MB** (4,218 blocks), with scratch decode/SIMD buffers immediately deallocated upon task completion.
 - **Direct Book Switching Texture & Task Defect Isolated (Finding M1):** Identified that `open_book()` in `src/app/reader_controller.rs` dropped `self.reader` in-place without enqueuing previous `RenderImage` textures to `self.garbage` or signalling task cancellation tokens, causing GPU textures to remain allocated in the GPUI sprite atlas until application shutdown.
-- **Unbounded GPUI Cover Asset Retention Isolated (Finding M2):** Identified that cover thumbnails rendered via `img(cover_path)` route into GPUI-pre 0.3.10's asset cache without an LRU eviction policy or capacity cap, retaining ~5.4 GB of uncompressed textures across a 10,000-book library.
+- **Unbounded GPUI Cover Asset Retention Isolated (Finding M2):** Identified that cover thumbnails rendered via `img(cover_path)` route into GPUI-pre 0.3.10 (at the time) asset cache without an LRU eviction policy or capacity cap, retaining ~5.4 GB of uncompressed textures across a 10,000-book library.
 - **Autosave SSD Write Amplification Quantified (Finding S1):** Measured that updating reading progress by 8 bytes triggers full library JSON serialization, writing **16.58 MB** to disk with two `sync_all()` barriers for a 10,000-book library (**2,173,616x write amplification**; 1.66 GB written across 100 page turns).
 - **CBR/RAR Quadratic Header Read Traversal Isolated (Finding S2):** Confirmed that reading a 200-page CBR chapter triggers $\approx 20,100$ sequential entry header reads and 200 archive open/close cycles due to `unrar::OpenArchive` being `!Send`.
 - **Comprehensive Audit Deliverable Produced:** Authored [`docs/audits/MEMORY_LEAK_AND_SSD_IO_AUDIT.md`](audits/MEMORY_LEAK_AND_SSD_IO_AUDIT.md) providing full empirical findings, stress scenario tables, and a severity-ranked Stage 6 remediation roadmap.
@@ -178,8 +178,8 @@ Yomu is a high-performance desktop manga and comic reader built in safe Rust 202
 ### Phase 22: Library Selection State, Responsive Grid & Toolbar Consistency Refinement (Completed)
 - **Group-Card Selection Derived from Members:** Added `GroupSelectionState` (`Unselected`, `PartiallySelected`, `FullySelected`) and `compute_group_selection_state` in `src/ui/library_view.rs`. Added `member_ids` to `LibraryItem::Folder`. Rendered `IconName::Check` checkmark badge for full selection and `IconName::Minus` indeterminate badge for partial selection. Preserved selection across entering and exiting groups.
 - **Responsive Grid Space Utilization & Padding:** Refined `compute_responsive_grid` in `src/ui/components.rs` with rounded column sizing (`cols = ((avail_w + gap) / slot_w).round().max(1.0)`), bounded padding (`pad_x` 16–24px), restrained scaling within ±12%, and dynamic cover height strictly maintaining 1.5 aspect ratio. Eliminated dead horizontal space (116px outer margin).
-- **Consistent Segmented Toolbar Mode Control:** Replaced isolated toggle button in `src/ui/toolbar.rs` with native GPUI Kit 0.8.1 `ButtonGroup::new("grouping-mode-segmented").compact()` containing `mode-groups` (`IconName::Folder`) and `mode-volumes` (`IconName::BookOpen`) with `.selected(...)` styling and 28px height matching adjacent sort and view-mode controls.
-- **4 New/Updated Tests Added:** Added 1 core library unit test (`test_select_many_and_deselect_many` in `src/selection.rs`), 3 binary UI integration tests (`test_group_card_selection_states_and_ctrl_a`, `test_responsive_grid_space_utilization_and_padding`, `test_toolbar_grouping_segmented_control_states` in `src/tests.rs`), and updated `entering_and_exiting_group_preserves_selection`. Elevates the test baseline to 390 active tests passing.
+- **Consistent Segmented Toolbar Mode Control:** Replaced isolated toggle button in `src/ui/toolbar.rs` with native GPUI Kit 0.8.1 (at the time) `ButtonGroup::new("grouping-mode-segmented").compact()` containing `mode-groups` (`IconName::Folder`) and `mode-volumes` (`IconName::BookOpen`) with `.selected(...)` styling and 28px height matching adjacent sort and view-mode controls.
+- **4 New/Updated Tests Added:** Added 1 core library unit test (`test_select_many_and_deselect_many` in `src/selection.rs`), 3 binary UI integration tests (`test_group_card_selection_states_and_ctrl_a`, `test_responsive_grid_space_utilization_and_padding`, `test_toolbar_grouping_segmented_control_states` in `src/tests.rs`), and updated `entering_and_exiting_group_preserves_selection`. Elevated the test baseline to 390 active tests at that milestone.
 - **Wayland Visual Verification:** Captured native Wayland screenshots demonstrating Ctrl+A full selection (`library_selection_ctrl_a_groups.png`), partial selection with indeterminate minus badge (`library_selection_partial_group.png`), responsive grid spacing (`library_groups_mode.png`), and active segmented control states (`crop_toolbar_groups.png` and `crop_toolbar.png`).
 - **Comprehensive Technical Report:** Authored [`docs/audits/LIBRARY_SELECTION_GRID_AND_TOOLBAR_REFINEMENT.md`](audits/LIBRARY_SELECTION_GRID_AND_TOOLBAR_REFINEMENT.md).
 
@@ -234,5 +234,5 @@ devenv shell cargo audit
 When completing a task, provide a concise, factual report:
 1. Exact files modified, created, or deleted.
 2. Architectural responsibilities changed.
-3. Exact command exit codes and test counts (390 active tests).
+3. Exact command exit codes and test counts (391 active tests).
 4. Status of manual visual checks (explicitly report Wayland appearance as UNVERIFIED if tested headlessly).

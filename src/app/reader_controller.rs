@@ -1280,18 +1280,14 @@ impl Yomu {
                     reader.off.1 = (reader.off.1 + shift).max(0.0);
                     reader.scroll_target.1 = (reader.scroll_target.1 + shift).max(0.0);
                 }
-                let old_class = reader.classify_page(ix);
-                if let Some(size) = reader.orig_sizes.get_mut(ix) {
-                    *size = Some(orig);
-                    reader.layout_version += 1;
-                }
+                let classification_changed = reader.update_page_dimensions(ix, orig);
                 if let Some(pages) = reader.pages.as_ref()
                     && let Some(name) = pages.get(ix)
                     && let Some(book) = self.library.get_mut(&book_id)
                 {
                     book.insert_page_dimension(name.clone(), orig);
                 }
-                if reader.classify_page(ix) != old_class {
+                if classification_changed {
                     reader.rebuild_spread_plan();
                 }
                 if let Some(old) = reader.images.insert(

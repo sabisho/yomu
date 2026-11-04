@@ -6,7 +6,7 @@ This guide supplements the root [AGENTS.md](../../AGENTS.md) with specific instr
 
 ## 1. Architectural Boundary & Invariants
 
-The UI presentation layer constitutes Tier 2 of Yomu's three-tier architecture. It provides reusable visual components and presentation screens built on **GPUI Kit 0.8.1**:
+The UI presentation layer constitutes Tier 2 of Yomu's three-tier architecture. It provides reusable visual components and presentation screens built on **GPUI Kit 0.9.0**:
 
 - **Presentation Decoupling (Pure Props Pattern):** UI view functions must receive domain models and callbacks via dedicated `Props` structs (e.g., `ReaderProps`, `MangaDetailsProps`). They must not hold direct `Entity<Yomu>` references.
 - **Event Callback Architecture:** User actions emit standard callbacks (`on_click`, `on_action`, `on_change`) that accept `(&mut Window, &mut App)` or typed arguments, delegating business logic and state mutation to the application orchestration layer (`src/app/`).

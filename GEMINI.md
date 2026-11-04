@@ -14,7 +14,7 @@ All coding agents must read and strictly adhere to `AGENTS.md` before inspecting
 
 1. **Absolutely Zero Unsafe Rust:** Preserve `#![forbid(unsafe_code)]` everywhere. No exceptions.
 2. **Idiomatic Rust Everywhere:** Rust 2024 edition, explicit error handling, borrowing discipline, standard library first, zero Clippy warnings.
-3. **Official GPUI Kit APIs First:** Always prioritize native `gpui-kit` 0.8.1 components over manual `div()` constructions. Never build a second UI framework.
+3. **Official GPUI Kit APIs First:** Always prioritize native `gpui-kit` 0.9.0 components over manual `div()` constructions. Never build a second UI framework.
 4. **Maximum Practical Performance:** Zero synchronous filesystem I/O on the UI thread, background image decoding and resizing, adaptive 512 MiB–3.0 GiB memory budget, Linux GNU jemalloc global allocator (`cfg(all(target_os = "linux", target_env = "gnu"))`), no per-frame heap allocations.
 5. **Native Desktop UI Consistency:** Reusable Gruvbox semantic theme tokens (`UiColors`), consistent icon glyphs, restrained `EffectTransition` motion, permanent animation policy (`cx.set_reduce_motion(false)`).
 6. **Evaluate Real-World Use Cases:** Every change must solve a concrete manga reader problem, support reading modes (LTR/RTL, single/double spread, continuous), and handle edge cases gracefully.
@@ -50,4 +50,4 @@ devenv shell cargo clippy --all-targets --all-features -- -D warnings
 devenv shell cargo test --all-targets
 ```
 
-All 390 active tests (171 lib unit tests, 219 binary UI tests, plus 16 benchmarks; 406 total) must pass with exit code 0.
+All 391 active tests (171 lib unit tests, 220 binary UI tests, plus 16 ignored benchmarks; 407 total) must pass with exit code 0.

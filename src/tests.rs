@@ -7889,7 +7889,7 @@ fn test_bounded_cover_cache_capacity_and_lru_eviction(cx: &mut App) {
         assert_eq!(c.len(), 16, "Cache size must be bounded by capacity (16)");
 
         // Clear without window
-        c.clear_without_window();
+        c.clear_without_window(cx);
         assert!(c.is_empty());
         assert_eq!(c.len(), 0);
     });

@@ -53,20 +53,20 @@ devenv shell cargo check --all-targets
 # 3. Strict Clippy lint check with warnings as errors
 devenv shell cargo clippy --all-targets --all-features -- -D warnings
 
-# 4. Run all active tests across all targets (308 tests)
+# 4. Run all active tests across all targets (391 active tests)
 devenv shell cargo test --all-targets
 ```
 
 Target-specific test execution:
 
 ```sh
-# Run core domain unit tests (130 tests)
+# Run core domain unit tests (171 tests)
 devenv shell cargo test --lib
 
-# Run binary-target UI tests (178 tests)
+# Run binary-target UI tests (220 tests)
 devenv shell cargo test --bin yomu
 
-# Run opt-in performance benchmarks (3 benchmarks)
+# Run opt-in ignored performance benchmarks (16 benchmarks)
 devenv shell cargo test perf_ -- --ignored --nocapture
 ```
 

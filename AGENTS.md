@@ -8,7 +8,7 @@ Read [GEMINI.md](GEMINI.md) for agent discovery context, [docs/architecture.md](
 
 ## 1. Project at a Glance
 
-Yomu is a minimal, keyboard-first, high-performance desktop manga and comic reader built in safe Rust 2024 on **GPUI Kit 0.8.1** (`gpui-pre = 0.3.10` runtime) under `#![forbid(unsafe_code)]`. It imports CBZ, CBR, ZIP, and RAR archives as well as image directories, decodes and scales pages on background executors, and persists metadata and progress locally.
+Yomu is a minimal, keyboard-first, high-performance desktop manga and comic reader built in safe Rust 2024 on **GPUI Kit 0.9.0** (`gpui-pre = 0.3.11` runtime) under `#![forbid(unsafe_code)]`. It imports CBZ, CBR, ZIP, and RAR archives as well as image directories, decodes and scales pages on background executors, and persists metadata and progress locally.
 
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv runtime).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstractions.
@@ -17,7 +17,7 @@ Yomu is a minimal, keyboard-first, high-performance desktop manga and comic read
   1. *Core Domain Layer (`src/lib.rs` and `src/*.rs`):* GUI-independent Rust combining pure algorithms (layout geometry, animation physics, Vim token parsing, search filtering, selection state machines) with filesystem and persistence operations (archive unpacking, SIMD image decoding, JSON storage). See [src/AGENTS.md](src/AGENTS.md).
   2. *UI Presentation Layer (`src/ui/`):* Reusable GPUI Kit views, components, dialogs, and overlays. See [src/ui/AGENTS.md](src/ui/AGENTS.md).
   3. *Application Orchestration (`src/app/` and `src/main.rs`):* Window lifecycle, state routing, async background scheduling, input dispatch, and persistence coordination. See [src/app/AGENTS.md](src/app/AGENTS.md).
-- **Test Baseline:** **390 active tests** passing (171 core library unit tests in `src/lib.rs`, 219 binary-target UI tests in `src/main.rs`, plus 16 opt-in performance benchmarks; 406 total).
+- **Test Baseline:** **391 active tests** passing (171 core library unit tests in `src/lib.rs`, 220 binary-target UI tests in `src/main.rs`, plus 16 opt-in performance benchmarks; 407 total).
 - **User-Owned Files:** `problems.md` is user-owned. **Never edit, modify, or delete it.**
 
 ---
@@ -57,7 +57,7 @@ All Rust code must adhere to modern, idiomatic Rust 2024 practices.
 This is one of the most critical rules for Yomu.
 
 **Before Implementing or Modifying UI:**
-1. Inspect the installed toolkit versions in `Cargo.lock` (`gpui-kit = 0.8.1`, `gpui-pre = 0.3.10`).
+1. Inspect the installed toolkit versions in `Cargo.lock` (`gpui-kit = 0.9.0`, `gpui-pre = 0.3.11`).
 2. Search the existing codebase (`src/ui/`, `src/app/views/`) for established component patterns.
 3. Inspect the installed toolkit source when API availability or behavior is uncertain (`cargo check`, local definitions, or `.agents/skills/gpui-kit/`).
 4. Identify the most appropriate official component or API for the task.
@@ -153,7 +153,7 @@ Every agent must follow this exact sequence:
 ## 4. Project-Specific Technical Constraints
 
 - **Language & Edition:** Rust 2024 edition (`rust-version = "1.92"`).
-- **Core Frameworks:** GPUI Kit 0.8.1 (`gpui-kit = "=0.8.1"`, `gpui-pre = 0.3.10`).
+- **Core Frameworks:** GPUI Kit 0.9.0 (`gpui-kit = "=0.9.0"`, `gpui-pre = 0.3.11`).
 - **Development Environment:** NixOS / `devenv` development shell (`devenv.nix`, `flake.nix`).
 - **Archive Decoders:** Pure Rust for ZIP/CBZ (`zip`) and image decompression (`image`, `zune-jpeg`, `zune-core`, `fast_image_resize`). C++ library linked for RAR/CBR (`unrar`).
 - **Persistence Model:** `$XDG_DATA_HOME/yomu/library.json` (format version 3). Lenient Serde parsing with fallback defaults and automatic timestamped `.corrupt` backups.
@@ -177,7 +177,7 @@ devenv shell cargo check --all-targets
 # 3. Strict Clippy lint check with warnings as errors
 devenv shell cargo clippy --all-targets --all-features -- -D warnings
 
-# 4. Full test suite across all targets (390 active tests)
+# 4. Full test suite across all targets (391 active tests)
 devenv shell cargo test --all-targets
 ```
 

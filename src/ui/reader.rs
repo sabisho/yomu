@@ -893,6 +893,9 @@ pub struct Reader {
     /// Original dimensions are retained separately from decoded textures so continuous layout
     /// can keep stable geometry while pages are evicted from the image cache.
     pub orig_sizes: Vec<Option<(u32, u32)>>,
+    pub(crate) portrait_pages: usize,
+    pub(crate) landscape_pages: usize,
+    pub(crate) typical_portrait: bool,
     pub page: usize,
     pub total: usize,
     pub layout_version: u64,
@@ -987,6 +990,9 @@ impl Reader {
             kind: book.kind,
             pages: None,
             orig_sizes: Vec::new(),
+            portrait_pages: 0,
+            landscape_pages: 0,
+            typical_portrait: true,
             page: book.current_page.min(book.page_count.saturating_sub(1)),
             total: book.page_count,
             layout_version: 0,
@@ -1112,20 +1118,22 @@ impl Reader {
     /// and detected image aspect ratios.
     pub fn rebuild_spread_plan(&mut self) {
         let threshold = self.spread_ratio_threshold;
+        self.portrait_pages = 0;
+        self.landscape_pages = 0;
+        for orig in self.orig_sizes.iter().flatten() {
+            if orig.1 > orig.0 {
+                self.portrait_pages += 1;
+            } else if orig.0 > orig.1 {
+                self.landscape_pages += 1;
+            }
+        }
+        self.typical_portrait =
+            self.landscape_pages < 3 || self.portrait_pages >= self.landscape_pages;
+
         let orig_sizes = &self.orig_sizes;
         let overrides = &self.spread_overrides;
         let pages = self.pages.as_ref();
-
-        let mut portrait = 0;
-        let mut landscape = 0;
-        for orig in orig_sizes.iter().flatten() {
-            if orig.1 > orig.0 {
-                portrait += 1;
-            } else if orig.0 > orig.1 {
-                landscape += 1;
-            }
-        }
-        let typical_portrait = landscape < 3 || portrait >= landscape;
+        let typical_portrait = self.typical_portrait;
 
         self.spread_plan = SpreadPlan::new(
             self.total,
@@ -1164,25 +1172,48 @@ impl Reader {
             }
         }
         if let Some(Some(orig)) = self.orig_sizes.get(ix) {
-            let mut portrait = 0;
-            let mut landscape = 0;
-            for s in self.orig_sizes.iter().flatten() {
-                if s.1 > s.0 {
-                    portrait += 1;
-                } else if s.0 > s.1 {
-                    landscape += 1;
-                }
-            }
-            let typical_portrait = landscape < 3 || portrait >= landscape;
             layout::classify_image_aspect_ratio(
                 orig.0,
                 orig.1,
                 self.spread_ratio_threshold,
-                typical_portrait,
+                self.typical_portrait,
             )
         } else {
             PageClassification::Single
         }
+    }
+
+    pub(crate) fn update_page_dimensions(&mut self, ix: usize, orig: (u32, u32)) -> bool {
+        if ix >= self.orig_sizes.len() {
+            return false;
+        }
+        let old_class = self.classify_page(ix);
+        let old_typical_portrait = self.typical_portrait;
+        let previous = self.orig_sizes.get(ix).copied().flatten();
+        if previous == Some(orig) {
+            return false;
+        }
+
+        if let Some((width, height)) = previous {
+            if height > width {
+                self.portrait_pages = self.portrait_pages.saturating_sub(1);
+            } else if width > height {
+                self.landscape_pages = self.landscape_pages.saturating_sub(1);
+            }
+        }
+        if orig.1 > orig.0 {
+            self.portrait_pages += 1;
+        } else if orig.0 > orig.1 {
+            self.landscape_pages += 1;
+        }
+        if let Some(size) = self.orig_sizes.get_mut(ix) {
+            *size = Some(orig);
+        }
+        self.layout_version += 1;
+        self.typical_portrait =
+            self.landscape_pages < 3 || self.portrait_pages >= self.landscape_pages;
+
+        old_typical_portrait != self.typical_portrait || self.classify_page(ix) != old_class
     }
 
     /// Active manual override for the reader's current page.

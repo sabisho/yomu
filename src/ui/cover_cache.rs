@@ -33,11 +33,7 @@ impl BoundedCoverCache {
         });
 
         cx.observe_release(&cache, |this, cx| {
-            for (_, item) in this.items.drain() {
-                if let Some(Ok(image)) = item.get() {
-                    cx.drop_image(image, None);
-                }
-            }
+            this.clear_without_window(cx);
         })
         .detach();
 
@@ -62,15 +58,7 @@ impl BoundedCoverCache {
             return item.use_image(window);
         }
 
-        // Cache miss: evict oldest entry if at capacity
-        while self.items.len() >= self.capacity && !self.order.is_empty() {
-            if let Some(oldest_key) = self.order.pop_front()
-                && let Some(evicted) = self.items.remove(&oldest_key)
-                && let Some(Ok(image)) = evicted.get()
-            {
-                cx.drop_image(image, Some(window));
-            }
-        }
+        self.make_room(Some(window), cx);
 
         let new_item = ImageCacheItem::new(source, cx);
         let result = new_item.use_image(window);
@@ -83,16 +71,45 @@ impl BoundedCoverCache {
     /// Insert an image cache item directly without requiring a window layout/paint context.
     #[allow(dead_code)]
     pub fn insert_item(&mut self, key: u64, item: ImageCacheItem, cx: &mut App) {
-        while self.items.len() >= self.capacity && !self.order.is_empty() {
-            if let Some(oldest_key) = self.order.pop_front()
-                && let Some(evicted) = self.items.remove(&oldest_key)
-                && let Some(Ok(image)) = evicted.get()
-            {
-                cx.drop_image(image, None);
-            }
-        }
+        self.remove_key(key, None, cx);
+        self.make_room(None, cx);
         self.items.insert(key, item);
         self.order.push_back(key);
+    }
+
+    fn make_room(&mut self, window: Option<&mut Window>, cx: &mut App) {
+        let mut window = window;
+        while self.items.len() >= self.capacity {
+            let Some(oldest_key) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(item) = self.items.remove(&oldest_key) {
+                Self::drop_item(item, window.as_deref_mut(), cx);
+            }
+        }
+    }
+
+    fn remove_key(&mut self, key: u64, window: Option<&mut Window>, cx: &mut App) {
+        if let Some(position) = self.order.iter().position(|&candidate| candidate == key) {
+            self.order.remove(position);
+        }
+        if let Some(item) = self.items.remove(&key) {
+            Self::drop_item(item, window, cx);
+        }
+    }
+
+    fn drop_item(item: ImageCacheItem, window: Option<&mut Window>, cx: &mut App) {
+        if let Some(Ok(image)) = item.get() {
+            cx.drop_image(image, window);
+        }
+    }
+
+    fn clear_items(&mut self, window: Option<&mut Window>, cx: &mut App) {
+        let mut window = window;
+        for (_, item) in self.items.drain() {
+            Self::drop_item(item, window.as_deref_mut(), cx);
+        }
+        self.order.clear();
     }
 
     /// Number of items currently tracked in the cache.
@@ -116,32 +133,18 @@ impl BoundedCoverCache {
     /// Remove a specific image source from the cache if present.
     #[allow(dead_code)]
     pub fn remove(&mut self, source: &Resource, window: &mut Window, cx: &mut App) {
-        let key = hash(source);
-        if let Some(pos) = self.order.iter().position(|&k| k == key) {
-            self.order.remove(pos);
-        }
-        if let Some(item) = self.items.remove(&key)
-            && let Some(Ok(image)) = item.get()
-        {
-            cx.drop_image(image, Some(window));
-        }
+        self.remove_key(hash(source), Some(window), cx);
     }
 
     /// Clear all cached items and drop their GPU textures.
     #[allow(dead_code)]
     pub fn clear(&mut self, window: &mut Window, cx: &mut App) {
-        for (_, item) in self.items.drain() {
-            if let Some(Ok(image)) = item.get() {
-                cx.drop_image(image, Some(window));
-            }
-        }
-        self.order.clear();
+        self.clear_items(Some(window), cx);
     }
 
-    /// Clear all cached items without a window handle (e.g. during background data reset).
-    pub fn clear_without_window(&mut self) {
-        self.items.clear();
-        self.order.clear();
+    /// Clear all cached items and release their textures without a current window.
+    pub fn clear_without_window(&mut self, cx: &mut App) {
+        self.clear_items(None, cx);
     }
 }
 

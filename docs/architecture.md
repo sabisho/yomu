@@ -5,7 +5,7 @@
 Yomu is structured into three clean architectural tiers:
 
 1. **Core Domain Layer (`src/lib.rs` / `yomu` crate):** GUI-independent Rust (`#![forbid(unsafe_code)]`), decoupled from GPUI, windowing, and presentation frameworks. Combines pure algorithms (geometry calculations, cache eviction planning, Vim grammar parsing, search filtering, selection state machines) with filesystem and persistence operations (archive enumeration, SIMD image decoding and scaling, atomic JSON persistence). Fully testable without a window or graphics compositor.
-2. **UI Presentation Layer (`src/ui/`):** Built on GPUI Kit 0.8.1 (`gpui-pre = 0.3.10` runtime). Encapsulates views, components, dialogs, theme loading, and platform-adaptive momentum scrolling adapters (`ui::scroll`).
+2. **UI Presentation Layer (`src/ui/`):** Built on GPUI Kit 0.9.0 (`gpui-pre = 0.3.11` runtime). Encapsulates views, components, dialogs, theme loading, and platform-adaptive momentum scrolling adapters (`ui::scroll`).
 3. **Application Orchestration (`src/app/` & `src/main.rs`):** Manages the application window lifecycle, top-level state routing, input dispatch, background decode task scheduling, GPU texture garbage collection, and debounced persistence.
 
 ```text
@@ -72,7 +72,7 @@ GPUI Kit Window / Yomu Application (src/main.rs / src/app/)
 | `overlays.rs` | Modal dialogs, menus, help | Consolidated modal layer. Uses native GPUI Kit components; shortcuts modal. |
 | `reader.rs` | Reader viewport state, continuous strip, and visual presentation | Edge-to-edge canvas with decoded page layers (`page_layer`); autohiding header with fit mode and window controls (`reader_header`); lateral turn chevrons (`lateral_turners`); and continuous vertical scrollbar integration (`ReaderScrollHandle`). |
 | `components.rs` | Shared atomic visual primitives | Window controls, responsive grid math, status badges, and genre tags. |
-| `theme.rs` | Theme management and TOML loader | Bridges GPUI Kit themes and custom `themes.toml` files with automatic SHA-256 fingerprint reloading. |
+| `theme.rs` | Theme management and TOML loader | Bridges GPUI Kit themes and custom `themes.toml` files with automatic content-fingerprint reloading. |
 
 ### Application Orchestration (`src/app/` & `src/main.rs`)
 
@@ -157,10 +157,10 @@ Corner radii follow user preferences (`CornerRounding::None`, `Small`, `Medium`,
 
 ## Motion & Animation Architecture
 
-Yomu adheres to a restrained, desktop-native motion language built exclusively on official **GPUI Kit 0.8.1** animation APIs. Motion is applied purposefully for spatial continuity and tactile feedback, never as decorative distraction or performance overhead.
+Yomu adheres to a restrained, desktop-native motion language built exclusively on official **GPUI Kit 0.9.0** animation APIs. Motion is applied purposefully for spatial continuity and tactile feedback, never as decorative distraction or performance overhead.
 
 ### 1. Toolkit Animation Mechanisms
-Animation in Yomu leverages the native capabilities provided by the `gpui-kit` / `gpui-base` / `gpui-component` 0.8.1 ecosystem:
+Animation in Yomu leverages the native capabilities provided by the `gpui-kit` / `gpui-base` / `gpui-component` 0.9.0 ecosystem:
 - **`EffectTransition` (`gpui_kit::base::animation::EffectTransition`):** Declarative, composable transition combinator for GPUI elements. Supports `.fade(from, to)`, `.slide_y(from, to)`, `.slide_x(from, to)`, `.width(from, to)`, `.height(from, to)`, and easing curves (`ease_out_cubic`). Applied directly to elements via `.apply(element, element_id)`.
 - **Value Motion & Springs (`gpui_kit::base::motion::*`):** Pure functional interpolation primitives (`transition`, `spring`, `Presence`, `animate_keyframes`) available for scalar property changes.
 - **`with_animation` Execution Loop:** Native GPUI frame hook that automatically bypasses frames and settles instantaneously when `cx.reduce_motion()` is active or duration is zero.
