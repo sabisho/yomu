@@ -8,7 +8,7 @@ Read [GEMINI.md](GEMINI.md) for agent discovery context, [docs/architecture.md](
 
 ## 1. Project at a Glance
 
-Yomu is a minimal, keyboard-first, high-performance desktop manga and comic reader built in safe Rust 2024 on **GPUI Kit 0.9.0** (`gpui-pre = 0.3.11` runtime) under `#![forbid(unsafe_code)]`. It imports CBZ, CBR, ZIP, and RAR archives as well as image directories, decodes and scales pages on background executors, and persists metadata and progress locally.
+Yomu is a minimal, keyboard-first, high-performance desktop manga and comic reader built in safe Rust 2024 on **GPUI Kit 0.9.0** (`gpui-fast = 0.1.13` runtime, feature `"gpui-fast"`) under `#![forbid(unsafe_code)]`. It imports CBZ, CBR, ZIP, and RAR archives as well as image directories, decodes and scales pages on background executors, and persists metadata and progress locally.
 
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv runtime).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstractions.
@@ -57,7 +57,7 @@ All Rust code must adhere to modern, idiomatic Rust 2024 practices.
 This is one of the most critical rules for Yomu.
 
 **Before Implementing or Modifying UI:**
-1. Inspect the installed toolkit versions in `Cargo.lock` (`gpui-kit = 0.9.0`, `gpui-pre = 0.3.11`).
+1. Inspect the installed toolkit versions in `Cargo.lock` (`gpui-kit = 0.9.0`, `gpui-fast = 0.1.13`).
 2. Search the existing codebase (`src/ui/`, `src/app/views/`) for established component patterns.
 3. Inspect the installed toolkit source when API availability or behavior is uncertain (`cargo check`, local definitions, or `.agents/skills/gpui-kit/`).
 4. Identify the most appropriate official component or API for the task.
@@ -153,7 +153,7 @@ Every agent must follow this exact sequence:
 ## 4. Project-Specific Technical Constraints
 
 - **Language & Edition:** Rust 2024 edition (`rust-version = "1.92"`).
-- **Core Frameworks:** GPUI Kit 0.9.0 (`gpui-kit = "=0.9.0"`, `gpui-pre = 0.3.11`).
+- **Core Frameworks:** GPUI Kit 0.9.0 (`gpui-kit = "=0.9.0"`, `gpui-fast = 0.1.13` runtime via feature `gpui-fast`).
 - **Development Environment:** NixOS / `devenv` development shell (`devenv.nix`, `flake.nix`).
 - **Archive Decoders:** Pure Rust for ZIP/CBZ (`zip`) and image decompression (`image`, `zune-jpeg`, `zune-core`, `fast_image_resize`). C++ library linked for RAR/CBR (`unrar`).
 - **Persistence Model:** `$XDG_DATA_HOME/yomu/library.json` (format version 3). Lenient Serde parsing with fallback defaults and automatic timestamped `.corrupt` backups.

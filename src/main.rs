@@ -746,6 +746,7 @@ impl Yomu {
                             if this.imported_count > 0 && !this.is_quitting {
                                 this.save_library(cx);
                             }
+                            cx.notify();
                         }
                     });
                     break;
@@ -792,6 +793,8 @@ impl Yomu {
                                 }
                                 if !this.is_quitting && !cancel_ui.load(Ordering::Relaxed) {
                                     this.show_toast(report.summary(), cx);
+                                } else {
+                                    cx.notify();
                                 }
                             })
                             .ok();

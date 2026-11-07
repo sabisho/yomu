@@ -5,7 +5,7 @@
 Yomu is structured into three clean architectural tiers:
 
 1. **Core Domain Layer (`src/lib.rs` / `yomu` crate):** GUI-independent Rust (`#![forbid(unsafe_code)]`), decoupled from GPUI, windowing, and presentation frameworks. Combines pure algorithms (geometry calculations, cache eviction planning, Vim grammar parsing, search filtering, selection state machines) with filesystem and persistence operations (archive enumeration, SIMD image decoding and scaling, atomic JSON persistence). Fully testable without a window or graphics compositor.
-2. **UI Presentation Layer (`src/ui/`):** Built on GPUI Kit 0.9.0 (`gpui-pre = 0.3.11` runtime). Encapsulates views, components, dialogs, theme loading, and platform-adaptive momentum scrolling adapters (`ui::scroll`).
+2. **UI Presentation Layer (`src/ui/`):** Built on GPUI Kit 0.9.0 (`gpui-fast = 0.1.13` runtime via feature `gpui-fast`). Encapsulates views, components, dialogs, theme loading, and platform-adaptive momentum scrolling adapters (`ui::scroll`).
 3. **Application Orchestration (`src/app/` & `src/main.rs`):** Manages the application window lifecycle, top-level state routing, input dispatch, background decode task scheduling, GPU texture garbage collection, and debounced persistence.
 
 ```text

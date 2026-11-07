@@ -6,7 +6,7 @@ This document is the active operational snapshot for coding agents working on Yo
 
 ## 1. Current Implementation Status
 
-Yomu is a high-performance desktop manga and comic reader built in safe Rust 2024 using **GPUI Kit 0.9.0** (`gpui-pre = 0.3.11` runtime) under `#![forbid(unsafe_code)]`.
+Yomu is a high-performance desktop manga and comic reader built in safe Rust 2024 using **GPUI Kit 0.9.0** (`gpui-fast = 0.1.13` runtime via feature `gpui-fast`) under `#![forbid(unsafe_code)]`.
 
 - **Primary Target:** Linux (Wayland-native with X11 fallback; Nix/devenv native packaging).
 - **Secondary Targets:** macOS and Windows compatibility maintained through platform abstraction layers.
